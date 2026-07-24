@@ -73,6 +73,61 @@ test_ship_modes_generate_clean_briefs() {
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
 }
 
+# The "committed = delivered" trap fix: for every ship mode the generated
+# Definition of done must make the mode's real finish line unmissable at the
+# point of action - committing is never the finish line for no-mistakes or
+# direct-PR - and the shared status protocol must reserve `done:` for that
+# finish line so a finished implementation commit is `working:`, never `done:`.
+test_ship_dod_finish_line_is_not_commit() {
+  local home id brief
+  home="$TMP_ROOT/finish-line-home"
+  write_registry "$home"
+
+  # no-mistakes: an unregistered project defaults to no-mistakes.
+  id="brief-finish-nomistakes-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" no-registry-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "a committed implementation is not the finish line" "$brief" \
+    "no-mistakes DOD did not disclaim commit-as-finish-line"
+  assert_grep "immediately invoke /no-mistakes and drive the pipeline through to green CI" "$brief" \
+    "no-mistakes DOD did not make immediate pipeline invocation the point-of-action step"
+  # shellcheck disable=SC2016  # literal backticks/braces must stay unexpanded
+  assert_grep 'a committed change without a green PR is `working:`, never `done:`' "$brief" \
+    "no-mistakes DOD did not reserve done: for the green-PR finish line"
+
+  # direct-PR
+  id="brief-finish-directpr-e2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "the finish line is an opened pull request" "$brief" \
+    "direct-PR DOD did not name the opened-PR finish line"
+  assert_grep "immediately push your branch and open a PR" "$brief" \
+    "direct-PR DOD did not make push-and-open the point-of-action step"
+  # shellcheck disable=SC2016  # literal backticks/braces must stay unexpanded
+  assert_grep 'a committed change with no open PR is `working:`, never `done:`' "$brief" \
+    "direct-PR DOD did not reserve done: for the opened-PR finish line"
+
+  # local-only: committing IS the finish line, but it must be named as such and
+  # still reserve done: for the committed ready branch.
+  id="brief-finish-localonly-e3"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "the finish line is a clean ready branch" "$brief" \
+    "local-only DOD did not name the ready-branch finish line"
+  # shellcheck disable=SC2016  # literal backticks must stay unexpanded
+  assert_grep "is \`working:\`, never \`done:\`" "$brief" \
+    "local-only DOD did not reserve done: for the committed ready branch"
+
+  # The shared status protocol reserves done: for the finish line in every mode.
+  for id in brief-finish-nomistakes-e1 brief-finish-directpr-e2 brief-finish-localonly-e3; do
+    brief="$home/data/$id/brief.md"
+    # shellcheck disable=SC2016  # literal backticks must stay unexpanded
+    assert_grep '`done:` is reserved for the delivery-mode finish line named in Definition of done' "$brief" \
+      "$id: shared status protocol did not reserve done: for the finish line"
+  done
+  pass "fm-brief.sh: every ship mode names its finish line and reserves done: for it"
+}
+
 test_faster_paths_use_configured_authority_without_stacked_review() {
   local home id brief
   home="$TMP_ROOT/configured-authority-home"
@@ -385,6 +440,7 @@ test_scout_and_secondmate_scaffold() {
 test_script_parses
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
+test_ship_dod_finish_line_is_not_commit
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_ship_project_memory_wording
