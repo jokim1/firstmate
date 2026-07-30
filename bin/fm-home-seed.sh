@@ -12,7 +12,13 @@
 #       That project list is non-exclusive provisioning data. Pass --no-projects
 #       instead of a project list to seed a project-less home for a domain whose
 #       subject is the firstmate repo itself; it is mutually exclusive with a
-#       project list, and omitting both still fails loudly. A project-less seed
+#       project list, and omitting both still fails loudly. Each cloned project
+#       also gets a repo-level treehouse.toml pinning treehouse's pool root
+#       inside the home (seed_treehouse_pool_root), because treehouse keys pools
+#       by origin URL under one shared root and a slot binds permanently to
+#       whichever clone created it; without isolation, two homes' clones of one
+#       remote share a pool and retiring one home orphans the other's slots.
+#       A project-less seed
 #       refuses a home with project clones or project-registry entries, so it
 #       never converts populated homes in place. The charter brief
 #       is copied to data/charter.md, newly cloned no-mistakes projects are
@@ -533,6 +539,34 @@ EOF
   return 1
 }
 
+# Pin a repo-level treehouse.toml into a freshly seeded project clone so every
+# "treehouse get" from this clone resolves pools under the home instead of the
+# default shared ~/.treehouse root. treehouse keys a pool by origin URL, so two
+# homes' clones of one remote would otherwise share a pool, and each slot stays
+# bound (git worktree add) to whichever clone created it - retiring one home
+# would then orphan the other's slots and poison the shared pool. A repo-level
+# treehouse.toml wins over user config for the root field (treehouse
+# internal/config/config.go Load), so this file is the isolation mechanism.
+seed_treehouse_pool_root() {  # <project> <dst> <home>
+  local project=$1 dst=$2 home=$3 cfg marker
+  cfg="$dst/treehouse.toml"
+  marker="# firstmate: seeded by fm-home-seed.sh"
+  if git -C "$dst" ls-files --error-unmatch treehouse.toml >/dev/null 2>&1; then
+    echo "error: project $project tracks treehouse.toml; cannot pin a home-scoped pool root for $dst without diverging from the repo's own treehouse config" >&2
+    return 1
+  fi
+  if [ -f "$cfg" ] && ! grep -qF "$marker" "$cfg" 2>/dev/null; then
+    echo "error: $cfg already exists without the firstmate seed marker; refusing to overwrite an operator's treehouse config" >&2
+    return 1
+  fi
+  cat > "$cfg" <<EOF
+$marker - keep this home's treehouse pools isolated from other firstmate
+# homes' clones of the same origin. treehouse appends .treehouse/<pool> under
+# this root, so pools land in data/treehouse-pools/.treehouse/ inside the home.
+root = "$home/data/treehouse-pools"
+EOF
+}
+
 clone_project() {
   local project=$1 home=$2 src dst url dst_url mode
   src="$PROJECTS/$project"
@@ -555,10 +589,12 @@ EOF
       echo "error: seeded project $project at $dst has origin $dst_url; expected $url" >&2
       return 1
     }
+    seed_treehouse_pool_root "$project" "$dst" "$home" || return 1
     return 0
   fi
   url=$(source_origin_url "$project" "$mode" "$src") || return 1
-  git clone --quiet "$url" "$dst"
+  git clone --quiet "$url" "$dst" || return 1
+  seed_treehouse_pool_root "$project" "$dst" "$home"
 }
 
 validate_seed_project() {
