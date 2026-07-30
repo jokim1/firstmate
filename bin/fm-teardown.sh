@@ -959,9 +959,9 @@ $HOME/.treehouse"
         slot_common=$(git -C "$slot" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
         [ -n "$slot_common" ] || continue
         slot_common_real=$(cd "$slot_common" 2>/dev/null && pwd -P) || continue
-        case "$slot_common_real" in
-          "$home_real"/*) printf '%s\n' "$slot" ;;
-        esac
+        if [ "${slot_common_real#"$home_real"/}" != "$slot_common_real" ]; then
+          printf '%s\n' "$slot"
+        fi
       done
     done
   )
