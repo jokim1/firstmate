@@ -176,7 +176,7 @@ The safety check is the secondmate's own home.
 Teardown refuses while its `state/*.meta` contains in-flight work.
 When safe, teardown kills the direct tmux window, removes the `data/secondmates.md` route, clears the main home metadata, and removes the retired secondmate home.
 Removing a leased home releases its durable treehouse lease via `treehouse return`, so the pool slot is freed for reuse rather than left leased forever.
-A plain-clone home with no pool slot is simply removed.
+A plain-clone home has no home lease to return and is removed after the project-slot cleanup described below.
 If `treehouse return` fails for a leased home, teardown stops with state intact rather than raw-removing the directory and hiding a held lease.
 Before the home is removed, teardown also destroys every treehouse pool slot whose git common dir lies under the retiring home, and refuses the retirement when treehouse will not destroy one; `bin/fm-teardown.sh`'s header owns the exact scan and flag contract.
 
