@@ -46,7 +46,7 @@ EOF
 }
 
 test_seed_pins_home_scoped_pool_root() {
-  local rec cfg sm_real
+  local rec cfg sm_real status
   rec=$(make_seeded_home pin)
   read_pair "$rec"
   # fm-home-seed canonicalizes the home to its physical path before writing.
@@ -59,6 +59,8 @@ test_seed_pins_home_scoped_pool_root() {
   if git -C "$PAIR_SM/projects/alpha" ls-files --error-unmatch treehouse.toml >/dev/null 2>&1; then
     fail "seeded treehouse.toml is tracked in the clone; crewmates could commit it"
   fi
+  status=$(git -C "$PAIR_SM/projects/alpha" status --short)
+  [ -z "$status" ] || fail "seeded project clone is dirty: $status"
   pass "seed pins a home-scoped treehouse pool root into the secondmate clone only"
 }
 
@@ -124,6 +126,54 @@ test_seed_refuses_foreign_untracked_treehouse_toml() {
   grep -F 'without the firstmate seed marker' "$err" >/dev/null || fail "seed refusal did not explain the foreign treehouse.toml"
   assert_grep 'root = "/somewhere/else"' "$smhome/projects/alpha/treehouse.toml" "seed rewrote the operator's treehouse.toml"
   pass "seed refuses to overwrite an untracked treehouse.toml it did not write"
+}
+
+test_seed_rolls_back_preexisting_project_configs() {
+  local name=rollback home smhome project err rc initial_exclude
+  home="$TMP_ROOT/$name-main"
+  smhome="$TMP_ROOT/$name-sm"
+  err="$TMP_ROOT/$name.err"
+  mkdir -p "$home/projects" "$home/data" "$home/state" "$smhome/projects" "$smhome/data" "$smhome/state" "$smhome/config"
+  mark_firstmate_home "$smhome"
+  for project in alpha gamma beta; do
+    fm_git_init_commit "$home/projects/$project"
+    fm_git_add_origin "$home/projects/$project" "$TMP_ROOT/remotes/$name-$project.git"
+    git clone --quiet "file://$(cd "$TMP_ROOT/remotes/$name-$project.git" && pwd)" "$smhome/projects/$project"
+    printf -- '- %s [direct-PR] - %s project (added 2026-06-22)\n' "$project" "$project" >> "$home/data/projects.md"
+  done
+  cat > "$smhome/projects/alpha/treehouse.toml" <<'EOF'
+# firstmate: seeded by fm-home-seed.sh - previous value
+root = "/previous/root"
+EOF
+  printf '# fixture exclude without newline' > "$smhome/projects/alpha/.git/info/exclude"
+  cp "$smhome/projects/alpha/.git/info/exclude" "$TMP_ROOT/$name-alpha-exclude"
+  initial_exclude=$(cat "$smhome/projects/gamma/.git/info/exclude")
+  printf 'root = "/operator/root"\n' > "$smhome/projects/beta/treehouse.toml"
+  set +e
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='rollback domain' FM_SECONDMATE_SCOPE='rollback domain' \
+    "$ROOT/bin/fm-home-seed.sh" "sm-$name" "$smhome" alpha gamma beta >/dev/null 2>"$err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "seed succeeded despite a later foreign treehouse.toml"
+  assert_grep 'root = "/previous/root"' "$smhome/projects/alpha/treehouse.toml" "rollback did not restore the prior seed-owned config"
+  cmp -s "$TMP_ROOT/$name-alpha-exclude" "$smhome/projects/alpha/.git/info/exclude" \
+    || fail "rollback did not restore the prior alpha info/exclude"
+  assert_absent "$smhome/projects/gamma/treehouse.toml" "rollback preserved a newly created config in a preexisting clone"
+  [ "$(cat "$smhome/projects/gamma/.git/info/exclude")" = "$initial_exclude" ] \
+    || fail "rollback did not restore gamma info/exclude"
+  pass "seed rollback restores configs and exclusions in preexisting clones"
+}
+
+test_seed_escapes_pool_root_for_toml() {
+  local name='escape"slash\home' rec cfg sm_real escaped
+  rec=$(make_seeded_home "$name")
+  read_pair "$rec"
+  sm_real=$(cd "$PAIR_SM" && pwd -P)
+  cfg="$PAIR_SM/projects/alpha/treehouse.toml"
+  escaped=${sm_real//\\/\\\\}
+  escaped=${escaped//\"/\\\"}
+  assert_grep "root = \"$escaped/data/treehouse-pools\"" "$cfg" "seed did not TOML-escape the home-scoped pool root"
+  pass "seed TOML-escapes quotes and backslashes in the pool root"
 }
 
 # With the seeded pin, two clones of one remote must acquire slots from
@@ -444,6 +494,8 @@ test_seed_pins_home_scoped_pool_root
 test_seed_pins_pool_root_for_preexisting_clone
 test_seed_refuses_project_that_tracks_treehouse_toml
 test_seed_refuses_foreign_untracked_treehouse_toml
+test_seed_rolls_back_preexisting_project_configs
+test_seed_escapes_pool_root_for_toml
 test_seeded_clones_do_not_share_pool_dirs
 test_spawn_accepts_slot_bound_to_own_clone
 test_spawn_refuses_slot_bound_to_foreign_clone

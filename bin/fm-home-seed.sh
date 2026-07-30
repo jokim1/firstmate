@@ -547,24 +547,49 @@ EOF
 # would then orphan the other's slots and poison the shared pool. A repo-level
 # treehouse.toml wins over user config for the root field (treehouse
 # internal/config/config.go Load), so this file is the isolation mechanism.
+toml_basic_string_escape() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\t'/\\t}
+  value=${value//$'\r'/\\r}
+  printf '%s\n' "$value"
+}
+
 seed_treehouse_pool_root() {  # <project> <dst> <home>
-  local project=$1 dst=$2 home=$3 cfg marker
+  local project=$1 dst=$2 home=$3 cfg marker exclude escaped_home
   cfg="$dst/treehouse.toml"
   marker="# firstmate: seeded by fm-home-seed.sh"
   if git -C "$dst" ls-files --error-unmatch treehouse.toml >/dev/null 2>&1; then
     echo "error: project $project tracks treehouse.toml; cannot pin a home-scoped pool root for $dst without diverging from the repo's own treehouse config" >&2
     return 1
   fi
+  if [ -L "$cfg" ]; then
+    echo "error: $cfg is a symlink; refusing to overwrite it" >&2
+    return 1
+  fi
   if [ -f "$cfg" ] && ! grep -qF "$marker" "$cfg" 2>/dev/null; then
     echo "error: $cfg already exists without the firstmate seed marker; refusing to overwrite an operator's treehouse config" >&2
     return 1
   fi
+  exclude=$(git -C "$dst" rev-parse --path-format=absolute --git-path info/exclude) || return 1
+  if ! seed_project_was_created "$dst"; then
+    seed_backup_project_file "$cfg" || return 1
+    seed_backup_project_file "$exclude" || return 1
+  fi
+  escaped_home=$(toml_basic_string_escape "$home")
   cat > "$cfg" <<EOF
 $marker - keep this home's treehouse pools isolated from other firstmate
 # homes' clones of the same origin. treehouse appends .treehouse/<pool> under
 # this root, so pools land in data/treehouse-pools/.treehouse/ inside the home.
-root = "$home/data/treehouse-pools"
+root = "$escaped_home/data/treehouse-pools"
 EOF
+  if ! grep -Fx '/treehouse.toml' "$exclude" >/dev/null 2>&1; then
+    if [ -s "$exclude" ] && [ "$(tail -c 1 "$exclude" 2>/dev/null || true)" != "" ]; then
+      printf '\n' >> "$exclude"
+    fi
+    printf '/treehouse.toml\n' >> "$exclude"
+  fi
 }
 
 clone_project() {
@@ -621,6 +646,8 @@ SEED_HOME_CREATED=0
 SEED_HOME_BACKED_UP=0
 SEED_BACKUP_DIR=
 SEED_CREATED_PROJECTS_FILE=
+SEED_PROJECT_FILES_BACKUP_DIR=
+SEED_PROJECT_FILES_BACKUP_COUNT=0
 SEED_PARENT_REG_EXISTED=0
 SEED_PARENT_BRIEF=
 SEED_PARENT_BRIEF_CREATED=0
@@ -721,6 +748,32 @@ seed_project_was_created() {
   grep -Fx -- "$project_path" "$SEED_CREATED_PROJECTS_FILE" >/dev/null 2>&1
 }
 
+seed_backup_project_file() {
+  local path=$1 record
+  SEED_PROJECT_FILES_BACKUP_COUNT=$((SEED_PROJECT_FILES_BACKUP_COUNT + 1))
+  record="$SEED_PROJECT_FILES_BACKUP_DIR/$SEED_PROJECT_FILES_BACKUP_COUNT"
+  mkdir -p "$record"
+  printf '%s\n' "$path" > "$record/path"
+  if [ -e "$path" ]; then
+    printf '1\n' > "$record/existed"
+    cp "$path" "$record/content"
+  else
+    printf '0\n' > "$record/existed"
+  fi
+}
+
+seed_restore_project_files() {
+  local record path existed
+  [ -n "${SEED_PROJECT_FILES_BACKUP_DIR:-}" ] || return 0
+  [ -d "$SEED_PROJECT_FILES_BACKUP_DIR" ] || return 0
+  for record in "$SEED_PROJECT_FILES_BACKUP_DIR"/*; do
+    [ -d "$record" ] || continue
+    path=$(cat "$record/path")
+    existed=$(cat "$record/existed")
+    restore_seed_file "$existed" "$record/content" "$path"
+  done
+}
+
 seed_rollback() {
   local project_path
   [ "${SEED_ROLLBACK_ACTIVE:-0}" = 1 ] || return 0
@@ -745,6 +798,7 @@ seed_rollback() {
           seed_remove_created_project "$project_path"
         done < "$SEED_CREATED_PROJECTS_FILE"
       fi
+      seed_restore_project_files
       if [ -n "${SEED_BACKUP_DIR:-}" ] && [ "${SEED_HOME_BACKED_UP:-0}" = 1 ]; then
         restore_seed_file "$SEED_MARKER_EXISTED" "$SEED_BACKUP_DIR/marker" "$SEED_HOME/$SUB_HOME_MARKER"
         restore_seed_file "$SEED_CHARTER_EXISTED" "$SEED_BACKUP_DIR/charter.md" "$SEED_HOME/data/charter.md"
@@ -935,6 +989,9 @@ seed_home() {
   SEED_BACKUP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-home-seed.XXXXXX")
   SEED_CREATED_PROJECTS_FILE="$SEED_BACKUP_DIR/created-projects"
   : > "$SEED_CREATED_PROJECTS_FILE"
+  SEED_PROJECT_FILES_BACKUP_DIR="$SEED_BACKUP_DIR/project-files"
+  SEED_PROJECT_FILES_BACKUP_COUNT=0
+  mkdir -p "$SEED_PROJECT_FILES_BACKUP_DIR"
   SEED_PARENT_REG_EXISTED=0
   SEED_PARENT_BRIEF="$DATA/$id/brief.md"
   SEED_PARENT_BRIEF_CREATED=0
