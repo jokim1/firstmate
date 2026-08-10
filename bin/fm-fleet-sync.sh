@@ -12,7 +12,10 @@
 # ... - needs attention" warning rather than a quiet drift. Nothing is ever forced,
 # stashed, or discarded.
 # Still skips (benignly) local-only/no-origin projects, missing remotes/branches,
-# and fetch failures.
+# and fetch failures. A plain directory under projects/ with no own .git entry
+# (dir or gitfile) is skipped before any git command runs, so git never walks up
+# into the firstmate home checkout; the skip names whether the label is a
+# registered project.
 # Pruning never deletes the checked-out branch or a branch that still has a
 # worktree, so it cannot discard unlanded work; set FM_FLEET_PRUNE=0 to disable it.
 # When the fetch fails on an orphaned .git/packed-refs.lock (left by a ref rewrite
@@ -292,12 +295,38 @@ report_stuck() {
   echo "$label: STUCK: on $state, $behind commits behind $BASE - needs attention"
 }
 
+# True when $1 is itself a repository root: it has its own .git entry (a directory
+# for a normal clone, or a gitfile for a linked worktree). A plain container under
+# projects/ fails this check so later git -C never walks up into a parent checkout.
+is_repo_root() {
+  [ -e "$1/.git" ]
+}
+
+# True when $1 is a name listed in this home's data/projects.md registry.
+project_registered() {
+  local name=$1 reg
+  reg="${FM_DATA_OVERRIDE:-$FM_HOME/data}/projects.md"
+  [ -f "$reg" ] || return 1
+  awk -v n="$name" 'BEGIN { f = 0 } $1 == "-" && $2 == n { f = 1; exit } END { exit !f }' "$reg"
+}
+
 sync_project() {
   PROJ=$1
   label=$(project_label)
 
   if [ ! -d "$PROJ" ]; then
     echo "$label: skipped: not a directory"
+    return 0
+  fi
+  # Require an own .git before any git command. Without this, git -C on a plain
+  # projects/<name> container discovers the firstmate home checkout above it and
+  # can emit a false STUCK: for the home, not the candidate.
+  if ! is_repo_root "$PROJ"; then
+    if project_registered "$label"; then
+      echo "$label: skipped: not a git clone (no .git); registered project"
+    else
+      echo "$label: skipped: not a git clone (no .git); not a registered project"
+    fi
     return 0
   fi
   if ! git -C "$PROJ" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

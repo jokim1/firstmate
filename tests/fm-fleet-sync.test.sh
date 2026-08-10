@@ -21,6 +21,9 @@
 # worktree dir as its cwd also blocks removal (the clone-dir liveness check); a
 # transient lock that self-clears is retried without a force-remove; and any
 # non-packed-refs.lock fetch failure keeps today's behavior with no retry.
+#
+# Plain non-git directories under projects/ must skip before any git command so
+# discovery never walks into a parent checkout (the firstmate home itself).
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -434,6 +437,107 @@ test_single_project_unresolvable_name_still_skips() {
   pass "single-project form leaves a genuinely bad name unresolved"
 }
 
+# plant_parent_checkout <home>: make $home itself a dirty, origin-backed git
+# checkout on main (projects/ already exists and is preserved). Models the real
+# firstmate home so a plain projects/<name> without its own .git would otherwise
+# make git walk up and report the home as STUCK. Idempotent when home is already
+# that checkout (new_home reuses home-1 across tests in this suite).
+plant_parent_checkout() {
+  local home=$1 work remote remote_abs
+  work="$home/parent-work"
+  remote="$home/remotes/parent-home.git"
+  mkdir -p "$home/remotes"
+  if [ ! -e "$home/.git" ]; then
+    git init -q "$work"
+    git -C "$work" symbolic-ref HEAD refs/heads/main
+    commit_file "$work" home.txt v0 C0
+    git clone --quiet --bare "$work" "$remote"
+    remote_abs=$(cd "$remote" && pwd)
+    git -C "$work" remote add origin "file://$remote_abs"
+    git -C "$work" push -q -u origin main
+    # Init home in place so projects/ stays put.
+    git -C "$home" init -q
+    git -C "$home" symbolic-ref HEAD refs/heads/main
+    git -C "$home" remote add origin "file://$remote_abs"
+    git -C "$home" fetch -q origin
+    git -C "$home" checkout -q -B main origin/main
+    # Advance origin and leave home dirty so a walk-up false positive is STUCK.
+    commit_file "$work" home.txt v1 C1
+    git -C "$work" push -q origin main
+    printf 'dirty-home\n' > "$home/uncommitted.txt"
+  fi
+  git -C "$home" rev-parse --is-inside-work-tree >/dev/null
+}
+
+test_plain_nongit_dir_skips_without_parent_walkup() {
+  local home plain name out parent_head line
+  home=$(new_home)
+  plant_parent_checkout "$home"
+  parent_head=$(head_sha "$home")
+  name=nongit-plain
+  plain="$home/projects/$name"
+  mkdir -p "$plain"
+  # Sanity: git discovery from the plain dir WOULD see the parent checkout.
+  [ "$(git -C "$plain" rev-parse --show-toplevel 2>/dev/null)" = "$(git -C "$home" rev-parse --show-toplevel)" ] \
+    || fail "fixture: git -C on plain dir should discover the parent home checkout"
+
+  out=$(run_sync "$home")
+  line=$(printf '%s\n' "$out" | grep -E "^${name}:" || true)
+
+  assert_contains "$line" "${name}: skipped: not a git clone (no .git); not a registered project" \
+    "plain projects/ dir must skip as a non-clone"
+  assert_not_contains "$line" "STUCK" "plain projects/ dir must never be reported as STUCK"
+  # Without the .git gate, git would report the parent home as STUCK (dirty, behind).
+  assert_not_contains "$out" "${name}: STUCK" "plain dir must not emit a walk-up STUCK for the home"
+  [ "$(head_sha "$home")" = "$parent_head" ] || fail "parent home checkout was mutated by fleet-sync"
+  pass "plain non-git projects/ dir skips without git walk-up into the home"
+}
+
+test_plain_nongit_dir_registered_still_reports_skip() {
+  local home plain name out line
+  home=$(new_home)
+  plant_parent_checkout "$home"
+  name=nongit-registered
+  plain="$home/projects/$name"
+  mkdir -p "$plain"
+  mkdir -p "$home/data"
+  # Append so earlier local-only registry rows (iota) stay intact.
+  if [ -f "$home/data/projects.md" ]; then
+    printf -- '- %s [no-mistakes] - plain container (added 2026-08-09)\n' "$name" \
+      >> "$home/data/projects.md"
+  else
+    printf -- '- %s [no-mistakes] - plain container (added 2026-08-09)\n' "$name" \
+      > "$home/data/projects.md"
+  fi
+
+  out=$(run_sync "$home")
+  line=$(printf '%s\n' "$out" | grep -E "^${name}:" || true)
+
+  assert_contains "$line" "${name}: skipped: not a git clone (no .git); registered project" \
+    "registered name without .git must still report a skip (not silent)"
+  assert_not_contains "$line" "STUCK" "registered non-clone must not be STUCK"
+  pass "registered plain projects/ dir reports a non-silent skip"
+}
+
+test_symlinked_clone_still_syncs() {
+  local home real_clone link_name out line
+  home=$(new_home)
+  real_clone=$(build_pair "$home" link-real)
+  advance_origin "$home" link-real C1
+  # Relocate the clone out of projects/ and put a symlink back under the name
+  # the fleet sweep iterates (e.g. projects/mother-clucker -> real path).
+  link_name="$home/projects/mother-clucker"
+  mv "$real_clone" "$home/real-mother-clucker"
+  ln -s "$home/real-mother-clucker" "$link_name"
+
+  out=$(run_sync "$home")
+  line=$(printf '%s\n' "$out" | grep -E '^mother-clucker:' || true)
+
+  assert_contains "$line" "mother-clucker: synced" "symlinked clone under projects/ must still sync"
+  assert_not_contains "$line" "not a git clone" "symlinked clone must not be treated as non-git"
+  pass "symlinked project clone keeps working"
+}
+
 test_whole_fleet_form() {
   local home behind current out
   home=$(new_home)
@@ -618,6 +722,9 @@ test_single_project_by_bare_name_ignores_cwd_shadow
 test_single_project_by_projects_relative_name_resolves
 test_single_project_by_projects_relative_name_ignores_cwd_shadow
 test_single_project_unresolvable_name_still_skips
+test_plain_nongit_dir_skips_without_parent_walkup
+test_plain_nongit_dir_registered_still_reports_skip
+test_symlinked_clone_still_syncs
 test_whole_fleet_form
 test_bootstrap_relays_recovered_and_stuck
 test_orphaned_stale_packed_refs_lock_recovers
