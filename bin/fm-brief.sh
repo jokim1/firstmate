@@ -359,8 +359,10 @@ case "$MODE" in
 # Definition of done
 Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
-The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
+A committed implementation is not the finish line; the finish line is an opened pull request.
+The moment your change is implemented and committed, immediately push your branch and open a PR with \`gh-axi\`.
+Do not stop or idle at the commit, and never report \`done:\` for a commit with no PR: a committed change with no open PR is \`working:\`, never \`done:\`.
+When the PR is open, append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
     ;;
@@ -371,9 +373,9 @@ EOF
 # Definition of done
 Delivery contract: mode=local-only
 This task ships **local-only**: no remote, no PR, no pipeline.
-The task is complete only when committed on your branch \`fm/$ID\`. Do NOT push, do NOT open a PR, do NOT merge.
+For this mode the finish line is a clean ready branch: the task is complete only when your change is implemented and committed on branch \`fm/$ID\`. Do NOT push, do NOT open a PR, do NOT merge.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
-When it is implemented and committed, append \`done: ready in branch fm/$ID\` to the status file and stop.
+When it is implemented and committed, append \`done: ready in branch fm/$ID\` to the status file and stop; a change not yet committed on \`fm/$ID\` is \`working:\`, never \`done:\`.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
 EOF
     ;;
@@ -384,9 +386,10 @@ EOF
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
 Delivery contract: mode=no-mistakes
-The task is complete only when committed on your branch.
-When you believe it is complete, append \`done: {summary}\` to the status file and stop.
-Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
+This task ships **no-mistakes**: a committed implementation is not the finish line.
+The finish line is a pushed pull request with green CI checks, produced by the no-mistakes pipeline.
+The moment your change is implemented and committed on your branch, immediately invoke /no-mistakes and drive the pipeline through to green CI.
+Do not stop or idle at the commit, and never report \`done:\` for a commit that has not reached a green PR: a committed change without a green PR is \`working:\`, never \`done:\`.
 
 You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
@@ -439,6 +442,8 @@ $RULE1
    firstmate reads your pane for that.
    A mid-task \`working:\` line (including setup complete) is nonterminal: do not end the
    turn after it; continue the same stage until a defined \`done:\` gate under Definition of done.
+   \`done:\` is reserved for the delivery-mode finish line named in Definition of done; a finished
+   implementation commit that has not reached that finish line is \`working:\`, never \`done:\`.
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset,
    a scheduled window): firstmate then leaves your idle pane alone and rechecks it on a long
