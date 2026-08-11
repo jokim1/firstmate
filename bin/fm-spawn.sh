@@ -2217,6 +2217,28 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
+
+  # Cross-home pool-binding guard: treehouse keys a pool by origin URL under one
+  # root, so a reused slot may be permanently bound (git worktree add) to a
+  # different home's clone of the same remote. Working from such a slot means
+  # this task's object store, refs, and tool trust root live in another home
+  # that can be retired out from under it, so fail closed and hand the slot
+  # back. Equality of git common dirs is the exact test: a slot created from
+  # this home's project clone shares its object store; anything else is foreign.
+  # (Secondmate homes' clones pin a home-scoped pool root via treehouse.toml at
+  # seed time, so a healthy fleet never reaches this refusal.)
+  WT_COMMON_DIR=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  PROJ_COMMON_DIR=$(git -C "$PROJ_ABS" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  WT_COMMON_DIR_REAL=$(real_path_or_raw "$WT_COMMON_DIR")
+  PROJ_COMMON_DIR_REAL=$(real_path_or_raw "$PROJ_COMMON_DIR")
+  if [ -z "$WT_COMMON_DIR" ] || [ -z "$PROJ_COMMON_DIR" ] || [ "$WT_COMMON_DIR_REAL" != "$PROJ_COMMON_DIR_REAL" ]; then
+    ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 \
+      || echo "warning: could not return foreign-bound pool slot $WT from $PROJ_ABS; destroy it with: treehouse destroy $WT --yes" >&2
+    echo "error: treehouse get acquired pool slot $WT bound to a different clone (git common dir ${WT_COMMON_DIR_REAL:-unknown}, expected $PROJ_COMMON_DIR_REAL)." >&2
+    echo "That slot's object store belongs to another home's clone of the same origin; continuing would tangle this task with that home and break when it retires." >&2
+    echo "Destroy the foreign-bound slot with: treehouse destroy $WT --yes  (then respawn). Inspect window $T" >&2
+    exit 1
+  fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
