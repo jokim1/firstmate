@@ -21,6 +21,8 @@
 #      message crosses the stubbed ssh transport while the close is the same
 #      local ledger append; a failed transport closes nothing.
 #   7. Flag misuse (--key, empty message, explicit backend target) refuses.
+#   8. A reserved key that rejects the generic closing note fails loudly after
+#      delivery and stays open, while an ordinary key still closes normally.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -160,6 +162,32 @@ test_colon_first_key_position_is_answerable() {
   fi
   pass "fm-send --resolve-key: a colon-first stated key is open under that key and answerable"
 }
+
+test_rejected_close_fails_after_delivery() {
+  local dir fb log home err rc out
+  dir="$TMP_ROOT/rejected-close"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"; err="$dir/send.err"
+  home=$(setup_home rejected-close)
+  fm_write_meta "$home/state/t1-rejected.meta" "window=sess:fm-t1-rejected" "kind=ship"
+  printf 'blocked [key=pending-reply-abc]: pending-reply-abc: delivery missed\n' \
+    > "$home/state/t1-rejected.status"
+
+  : > "$log"
+  env PATH="$fb:$PATH" \
+    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" t1-rejected --resolve-key pending-reply-abc "done" >/dev/null 2>"$err"; rc=$?
+  [ "$rc" -ne 0 ] || fail "a reserved key whose close is rejected should exit nonzero"
+  assert_contains "$(cat "$log")" "done" "the answer should be delivered before close verification fails"
+  assert_contains "$(cat "$err")" "answer was delivered" "the error should confirm delivery"
+  assert_contains "$(cat "$err")" "could not be closed" "the error should name the close failure"
+  assert_contains "$(cat "$err")" "do not resend the answer" "the error should prevent duplicate delivery"
+
+  out=$(drain_out "$home")
+  printf '%s' "$out" | grep -F '[key=pending-reply-abc]' >/dev/null \
+    || fail "the rejected reserved-key close disappeared from OPEN DECISIONS: $out"
+  pass "fm-send --resolve-key: a fold-rejected close fails after delivery and stays open"
+}
+
 
 test_answer_starts_work_never_orphans() {
   local dir fb log home rc out
@@ -426,6 +454,7 @@ test_flag_misuse_refuses() {
 
 test_answer_send_closes_open_decision
 test_colon_first_key_position_is_answerable
+test_rejected_close_fails_after_delivery
 test_answer_starts_work_never_orphans
 test_routine_steer_never_closes
 test_not_open_key_refuses_before_send
