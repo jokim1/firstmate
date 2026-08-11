@@ -159,12 +159,12 @@
 # a still-open captain-held task resolved as above. A key in neither is refused
 # before sending, so a mistyped key cannot deliver an answer while silently
 # orphaning the decision. A failed or unconfirmed send never closes a key; a
-# delivered answer whose closing append fails exits nonzero with the exact
-# manual close command, leaving the decision open to re-surface (the safe
-# direction). A send without the flag never closes anything: a routine steer,
-# working:, or done: event still cannot clear a captain decision. The flag is
-# refused with --key, with an explicit backend target (no task ledger in this
-# home), and with an empty message.
+# delivered answer whose closing append fails or does not close the folded key
+# exits nonzero with the manual or owner close path, leaving the decision open
+# to re-surface (the safe direction). A send without the flag never closes
+# anything: a routine steer, working:, or done: event still cannot clear a
+# captain decision. The flag is refused with --key, with an explicit backend
+# target (no task ledger in this home), and with an empty message.
 #
 # After a successful TYPED-plane submit fm-send pauses FM_SEND_SETTLE seconds
 # (default 1, 0 disables) before returning: submit confirmation only proves the
@@ -552,14 +552,16 @@ fi
 
 # Close each answered decision in this home's ledger, only after the answer is
 # durably sent: enqueued on the inbox plane, submit-confirmed on the typed
-# plane. An append failure exits nonzero with the manual close
-# command; the decision then stays open and re-surfaces, never silently lost.
-# The close is this home's own bookkeeping, written by the very turn that
-# answered the decision, so it goes through the guarded self-announced append
-# (bin/fm-wake-lib.sh) and does not wake this same session again; any
-# concurrent foreign status bytes leave the watcher's wake path untouched.
+# plane. An append or folded-close failure exits nonzero with the manual or
+# owner close path; the decision then stays open and re-surfaces, never
+# silently lost. The close is this home's own bookkeeping, written by the very
+# turn that answered the decision, so it goes through the guarded
+# self-announced append (bin/fm-wake-lib.sh) and does not wake this same
+# session again; any concurrent foreign status bytes leave the watcher's wake
+# path untouched. After the append, the fold is re-read to verify the key
+# actually left the open set.
 fm_send_close_resolved_keys() {  # <answer-text>
-  local note=$1 k line append_rc
+  local note=$1 k line append_rc resolve_open_set
   note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
   for k in $RESOLVE_STATUS_KEYS; do
     line="resolved [key=$k]: answered: $note"
@@ -570,6 +572,13 @@ fm_send_close_resolved_keys() {  # <answer-text>
       echo "error: the answer was delivered to $T, but decision key '$k' could not be closed in $RESOLVE_STATUS_FILE. Close it manually with: echo 'resolved [key=$k]: <how it was answered>' >> $RESOLVE_STATUS_FILE - do not resend the answer." >&2
       return 1
     fi
+    resolve_open_set=$(status_open_decisions "$RESOLVE_STATUS_FILE")
+    case "$resolve_open_set" in
+      "$k"$'\t'*|*$'\n'"$k"$'\t'*)
+        echo "error: the answer was delivered to $T, but decision key '$k' could not be closed in $RESOLVE_STATUS_FILE. Close it through its owning workflow or manually with a fold-valid 'resolved [key=$k]: ...' line in $RESOLVE_STATUS_FILE - do not resend the answer." >&2
+        return 1
+        ;;
+    esac
   done
 }
 
