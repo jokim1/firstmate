@@ -7,7 +7,7 @@
 # and GitHub reports a PR head that contains the current local work, or its content
 # is already in the up-to-date default branch.
 #
-# Covers three fixes:
+# Covers four fixes:
 #   - local-only fork-remote: a fork IS a remote, so fork-pushed upstream-
 #     contribution PRs are teardown-eligible (the pre-fix code false-refused them).
 #   - squash-merge-then-delete-branch: the branch's own commits live nowhere on a
@@ -15,6 +15,10 @@
 #     main. Reachability alone false-refused this common GitHub flow; the check now
 #     recognizes a merged PR head containing the local work (or the content already
 #     in main) as landed.
+#   - open-PR veto: content-in-default is provenance-blind, so a SIBLING PR that
+#     landed the same change makes an unmerged task's content look "landed" and the
+#     old check reaped its still-open PR's state. A recorded-but-open PR now vetoes
+#     the content fallback: the task's own work has not landed until its own PR merges.
 #   - teardown-lock-race: a killed crew process can leave a transient worktree
 #     git index.lock that blocks teardown. The return path retries on the lock
 #     error signature (even if the lock self-clears mid-check), then only removes a
@@ -38,6 +42,8 @@
 #   (o) fm-pr-check rerun after HEAD moved                      -> no stale pr_head
 #   (p) fm-pr-check when local HEAD lags                        -> record remote PR head
 #   (q) no-mistakes + NO pr= recorded, PR discovered by branch  -> ALLOW  (yolo/no-CI merge)
+#  (za) no-mistakes + recorded pr= OPEN + sibling content in default -> REFUSE (open-PR veto)
+#  (zb) no-mistakes + recorded pr= MERGED + sibling content in default -> ALLOW (own PR landed)
 #
 # Also covers backlog teardown-lock-race: a git index.lock left in the worktree by a
 # killed crew process (bin/fm-teardown.sh's teardown_treehouse_return).
@@ -262,6 +268,37 @@ case "\${1:-} \${2:-}" in
     case " \$* " in
       *"state,headRefOid,url"*) printf '%s\t%s\t%s\n' 'MERGED' '$head' 'https://github.com/example/repo/pull/7' ; exit 0 ;;
       *"headRefOid"*) printf '%s\n' '$head' ; exit 0 ;;
+    esac
+    ;;
+esac
+echo "error: pull request not found" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
+}
+
+# Override GitHub lookups to report PR 7 as OPEN (not merged). pr_is_merged sees a
+# non-MERGED state and gives up; recorded_pr_is_open sees OPEN and vetoes the content
+# fallback. The head is irrelevant because neither path reaches a containment check.
+add_gh_pr_open() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr list")
+    printf '%s\n' "count: 1 (showing first 1)" "pull_requests[1]{number,state}:" "  7,open" ; exit 0 ;;
+  "pr view")
+    printf '%s\n' "pull_request:" "  number: 7" "  state: open" ; exit 0 ;;
+esac
+exit 0
+SH
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr view")
+    case " $* " in
+      *"state,headRefOid"*) printf '%s\t%s\n' 'OPEN' '0000000000000000000000000000000000000000' ; exit 0 ;;
+      *"state"*) printf '%s\n' 'OPEN' ; exit 0 ;;
     esac
     ;;
 esac
@@ -926,6 +963,54 @@ test_content_in_default_fallback_allows() {
   expect_code 0 "$rc" "content-landed: teardown should succeed when content is already in the default branch"
   ! grep -q REFUSED "$case_dir/stderr" || fail "content-landed: teardown printed a REFUSED line"
   pass "worktree whose content already landed in the default branch is torn down (content fallback)"
+}
+
+test_open_pr_with_sibling_content_in_default_refuses() {
+  local case_dir rc
+  case_dir=$(make_case open-pr-sibling-content)
+  write_meta "$case_dir" no-mistakes ship
+  append_pr_meta_url "$case_dir"
+  # The task branch adds feature.txt, and the identical net change has independently
+  # landed on origin/main via a SIBLING PR - so content_in_default alone would call it
+  # "landed". But this task's OWN recorded PR is still open, which is positive proof
+  # the work has not landed for this task. Teardown must refuse rather than reap the
+  # state of a live, unmerged PR.
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  add_gh_pr_open "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "open-pr-sibling-content: teardown must refuse while the task's own PR is still open"
+  grep -q REFUSED "$case_dir/stderr" || fail "open-pr-sibling-content: no REFUSED line in stderr"
+  grep -q "still open" "$case_dir/stderr" || fail "open-pr-sibling-content: refusal did not tell the operator the PR is still open"
+  pass "open PR whose content is in default via a sibling is refused, not reaped"
+}
+
+test_merged_pr_with_sibling_content_allows() {
+  local case_dir rc pr_head
+  case_dir=$(make_case merged-pr-sibling-content)
+  write_meta "$case_dir" no-mistakes ship
+  append_pr_meta_url "$case_dir"
+  # Same shared-surface shape as the refuse case, but this task's OWN recorded PR is
+  # MERGED with a head that contains the local work. That is genuine landing, so the
+  # open-PR veto must not fire and teardown proceeds.
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "merged-pr-sibling-content: teardown should proceed when the task's own PR is merged"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "merged-pr-sibling-content: teardown printed a REFUSED line"
+  pass "task whose own PR is merged is torn down even when a sibling shares its content"
 }
 
 test_content_fallback_refreshes_stale_origin_ref() {
@@ -3229,6 +3314,8 @@ test_merged_pr_with_later_local_commit_refuses
 test_pr_check_does_not_refresh_stale_pr_head
 test_pr_check_records_remote_head_when_local_lags
 test_content_in_default_fallback_allows
+test_open_pr_with_sibling_content_in_default_refuses
+test_merged_pr_with_sibling_content_allows
 test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
 test_gh_error_and_content_absent_refuses
