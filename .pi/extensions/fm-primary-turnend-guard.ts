@@ -482,6 +482,21 @@ function runCdCheck(command: string): Promise<{ code: number; stderr: string }> 
   return runChecker("fm-cd-pretool-check.sh", command);
 }
 
+// Phase 0 primary-focus lifecycle: durable suspend-before-switch on captain
+// prompts. Always fail-open (never block the prompt). bin/fm-focus.sh owns the
+// snapshot; bin/fm-focus-prompt-hook.sh owns adapter fail-open semantics.
+function runFocusPromptHook(prompt: string): Promise<void> {
+  return new Promise((resolveResult) => {
+    const child = spawn(root + "/bin/fm-focus-prompt-hook.sh", ["--pi"], {
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    child.on("error", () => resolveResult());
+    child.on("close", () => resolveResult());
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify({ prompt }));
+  });
+}
+
 export default function (pi: ExtensionAPI) {
   let sessionstartGeneration: SessionstartGeneration | null = null;
   let sessionstartExitListenerRegistered = false;
@@ -559,6 +574,29 @@ export default function (pi: ExtensionAPI) {
       if (sessionstartGeneration === generation) sessionstartGeneration = null;
       removeSessionstartExitListener();
     }
+  });
+
+  // Pre-agent captain input (interactive and rpc), including mid-stream steer.
+  // Skip extension-sourced operational messages; the hook itself also skips
+  // marked operational inputs. Always continue (fail-open).
+  pi.on?.("input", async (event) => {
+    try {
+      const ev = event as {
+        text?: unknown;
+        input?: unknown;
+        source?: unknown;
+        streamingBehavior?: unknown;
+      };
+      const source = String(ev.source ?? "");
+      if (source === "extension") return {};
+      const text = String(ev.text ?? ev.input ?? "");
+      if (!text) return {};
+      if (classifyFirstmateCurrentOperationalText(text)) return {};
+      await runFocusPromptHook(text);
+    } catch {
+      // Fail-open: never block the captain prompt.
+    }
+    return {};
   });
 
   pi.on("tool_call", async (event) => {

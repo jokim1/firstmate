@@ -1491,8 +1491,8 @@ fm_wake_clean_field() {
   LC_ALL=C tr '\t\r\n' '   '
 }
 
-fm_wake_append() {
-  local kind=$1 key=$2 payload=$3 clean_key clean_payload epoch seq seq_file status
+_fm_wake_append() {
+  local acquire=$1 kind=$2 key=$3 payload=$4 clean_key clean_payload epoch seq seq_file status
   local recovery_marker
   case "$kind" in
     signal|stale|check|heartbeat|refill) ;;
@@ -1506,7 +1506,7 @@ fm_wake_append() {
   recovery_marker="$STATE/.watcher-down"
   status=0
 
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  "$acquire" "$FM_WAKE_QUEUE_LOCK" || return 1
   _fm_recovery_marker_publish "$recovery_marker" downtime || status=$?
   if [ "$status" -eq 0 ]; then
     seq=$(cat "$seq_file" 2>/dev/null || echo 0)
@@ -1521,6 +1521,14 @@ fm_wake_append() {
   fi
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   return "$status"
+}
+
+fm_wake_append() {
+  _fm_wake_append fm_lock_acquire_wait "$@"
+}
+
+fm_wake_append_try() {
+  _fm_wake_append fm_lock_try_acquire "$@"
 }
 
 # fm_wake_enqueue_refill
