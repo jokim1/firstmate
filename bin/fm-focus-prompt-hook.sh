@@ -154,6 +154,8 @@ if [ -z "$RESUME_KIND" ] && [ -n "$HARNESS" ]; then
   args+=(--resume-kind "harness-session" --resume-pointer "$HARNESS")
 fi
 
-# NEVER let a focus failure affect the harness exit path.
-"$SCRIPT_DIR/fm-focus.sh" "${args[@]}" >/dev/null 2>&1 || true
+# NEVER let a focus failure affect the harness exit path. Bound contention at
+# this adapter boundary while leaving explicit operator calls free to wait.
+FM_FOCUS_LOCK_TRIES=3 \
+  "$SCRIPT_DIR/fm-focus.sh" "${args[@]}" >/dev/null 2>&1 || true
 exit 0

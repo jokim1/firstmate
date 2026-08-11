@@ -316,6 +316,40 @@ test_hook_skips_operational_input() {
   pass "prompt hook skips operational Firstmate inputs and stays fail-open"
 }
 
+test_primary_prompt_hooks_bound_live_lock_contention() {
+  local fake_root state lock harness start elapsed status file
+  fake_root="$TMP_ROOT/hook-contention-root"
+  state="$fake_root/state"
+  lock="$state/.focus.json.lock"
+  mkdir -p "$fake_root/bin" "$lock"
+  printf 'primary-test\n' > "$fake_root/.fm-secondmate-home"
+  printf '# test primary root\n' > "$fake_root/AGENTS.md"
+  for file in fm-focus-prompt-hook.sh fm-focus.sh fm-primary-scope-lib.sh \
+    fm-operational-input.sh fm-wake-lib.sh; do
+    ln -s "$ROOT/bin/$file" "$fake_root/bin/$file"
+  done
+
+  printf '%s\n' "$$" > "$lock/pid"
+  : > "$lock/pid-identity"
+
+  for harness in claude codex grok; do
+    status=0
+    start=$SECONDS
+    printf '%s' '{"prompt":"captain prompt under contention"}' \
+      | FM_ROOT_OVERRIDE="$fake_root" FM_STATE_OVERRIDE="$state" \
+        "$fake_root/bin/fm-focus-prompt-hook.sh" "--$harness" \
+        >/dev/null 2>&1 || status=$?
+    elapsed=$((SECONDS - start))
+    if [ "$status" -ne 0 ] || [ "$elapsed" -gt 2 ]; then
+      fail "$harness prompt hook blocked on a live focus lock (${elapsed}s, status=$status)"
+    fi
+  done
+
+  [ ! -e "$state/.focus.json" ] \
+    || fail "contended prompt hooks must not mutate focus without the lock"
+  pass "Claude, Codex, and Grok prompt hooks bound live lock contention"
+}
+
 test_playbot_owner_kind_recorded() {
   local state
   state=$(new_state playbot)
@@ -436,6 +470,7 @@ test_busy_wake_queue_does_not_block_owner
 test_fail_open_unwritable_state_via_owner
 test_hook_fail_open_unwritable
 test_hook_skips_operational_input
+test_primary_prompt_hooks_bound_live_lock_contention
 test_playbot_owner_kind_recorded
 test_tracked_claude_userprompt_wires_focus_hook
 test_tracked_codex_userprompt_wires_focus_hook
