@@ -1696,6 +1696,18 @@ fm_wake_append() {
   return "$status"
 }
 
+# fm_wake_append_try <kind> <key> <payload>
+# Non-blocking sibling of fm_wake_append: enqueue only if the queue lock is free
+# right now, else return 1 without waiting. Used by paths that must not block a
+# captain turn on a contended queue (see bin/fm-focus.sh).
+fm_wake_append_try() {
+  local status=0
+  fm_lock_try_acquire "$FM_WAKE_QUEUE_LOCK" || return 1
+  fm_wake_append_locked "$@" || status=$?
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  return "$status"
+}
+
 # fm_wake_append_locked <kind> <key> <payload>
 # Locked core of fm_wake_append: appends the wake row under an already-held
 # FM_WAKE_QUEUE_LOCK. Callers that must commit another durable record atomically
