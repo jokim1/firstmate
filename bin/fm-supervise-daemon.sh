@@ -1303,7 +1303,7 @@ handle_durable_wakes() {  # <watcher-reason> <state>
   while IFS="$tab" read -r epoch sequence kind key payload rest; do
     case "$epoch" in ''|*[!0-9]*) continue ;; esac
     case "$sequence" in ''|*[!0-9]*) continue ;; esac
-    case "$kind" in signal|stale|check|heartbeat) ;; *) continue ;; esac
+    case "$kind" in signal|stale|check|heartbeat|refill) ;; *) continue ;; esac
     handle_wake "$payload" "$state"
     handled=$((handled + 1))
   done < "$out"

@@ -237,10 +237,11 @@ test_drain_dedupes_obvious_duplicates() {
 # Phase 2 refill: N capacity-freeing transitions before drain collapse to ONE
 # refill record; drain clears it; refill never replaces or reorders other kinds.
 test_drain_dedupes_refill_by_kind() {
-  local dir state out count refill_count leftover
+  local dir state out err count refill_count leftover sequence generation
   dir=$(make_case refill-dedupe)
   state="$dir/state"
   out="$dir/drain.out"
+  err="$dir/drain.err"
   append_wake "$state" refill refill "refill: re-evaluate ready work against free capacity" \
     || fail "first refill append failed"
   append_wake "$state" signal task.status "signal: $state/task.status" \
@@ -251,7 +252,7 @@ test_drain_dedupes_refill_by_kind() {
     || fail "third refill append failed"
   append_wake "$state" stale 's:fm-task' 'stale: s:fm-task' \
     || fail "stale append failed"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "refill dedupe drain failed"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || fail "refill dedupe drain failed"
   count=$(awk -F '\t' 'NF == 5 { count++ } END { print count + 0 }' "$out")
   [ "$count" -eq 3 ] || fail "expected 3 records (signal, one refill, stale), got $count"
   refill_count=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$out")
@@ -269,6 +270,11 @@ test_drain_dedupes_refill_by_kind() {
       if (order[1] != "refill" || order[2] != "signal" || order[3] != "stale") exit 2
     }
   ' "$out" || fail "refill reordered or replaced other wake kinds: $(cat "$out")"
+  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
+  [ -n "$sequence" ] && [ -n "$generation" ] || fail "refill drain omitted its acknowledgement boundary"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through "$sequence" --recovery-generation "$generation" \
+    || fail "refill records could not be acknowledged"
   leftover=$(FM_STATE_OVERRIDE="$state" "$DRAIN" | awk -F '\t' 'NF == 5 { count++ } END { print count + 0 }')
   [ "$leftover" -eq 0 ] || fail "queue was not empty after draining refill"
   pass "drain collapses N refill records to one and preserves other kinds"

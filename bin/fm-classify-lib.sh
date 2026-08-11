@@ -104,11 +104,13 @@ status_is_terminal_verb() {
 # Distinct from status_is_captain_relevant: paused and resolved free capacity
 # without being captain-relevant signal verbs.
 status_frees_capacity() {
-  local line=$1 verb
+  local line=$1 verb pause resolve
   [ -n "$line" ] || return 1
   verb=$(status_line_verb "$line")
+  pause=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   case "$verb" in
-    done|failed|blocked|paused|needs-decision|resolved) return 0 ;;
+    done|failed|blocked|needs-decision|"$pause"|"$resolve") return 0 ;;
     *) return 1 ;;
   esac
 }

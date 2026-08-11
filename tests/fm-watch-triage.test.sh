@@ -196,6 +196,14 @@ test_classifier_primitives() {
   status_frees_capacity "paused: rate limit" || fail "paused: does not free capacity"
   status_frees_capacity "needs-decision: pick A" || fail "needs-decision: does not free capacity"
   status_frees_capacity "resolved [key=q1]: answered: use A" || fail "resolved: does not free capacity"
+  FM_CLASSIFY_PAUSED_VERB=awaiting status_frees_capacity "awaiting: rate limit" \
+    || fail "custom pause verb does not free capacity"
+  FM_CLASSIFY_RESOLVE_VERB=answered status_frees_capacity "answered [key=q1]: use A" \
+    || fail "custom resolution verb does not free capacity"
+  FM_CLASSIFY_PAUSED_VERB=awaiting status_frees_capacity "paused: rate limit" \
+    && fail "default pause verb frees capacity despite override"
+  FM_CLASSIFY_RESOLVE_VERB=answered status_frees_capacity "resolved [key=q1]: use A" \
+    && fail "default resolution verb frees capacity despite override"
   status_frees_capacity "working: implementing" && fail "working: wrongly frees capacity"
   status_frees_capacity "captain-held [key=q1]: parked" && fail "captain-held: wrongly frees capacity"
   status_is_captain_relevant "merged" || fail "legacy bare merged free-text not captain-relevant"
