@@ -879,14 +879,37 @@ content_in_default() {
   [ "$merged_tree" = "$default_tree" ]
 }
 
+# Is this task's own recorded PR (pr= in meta) still open? An open PR is
+# affirmative proof the task's own work has not landed, even when its content
+# already matches the default branch because a sibling PR carried the same
+# change first. Returns success only when a pr= is recorded and GitHub reports
+# its state as OPEN; returns non-zero for no recorded PR, any other state, or a
+# gh error, so the caller keeps its content fallback for those cases.
+recorded_pr_is_open() {
+  local state
+  [ -n "$PR_URL" ] || return 1
+  state=$(cd "$WT" && gh pr view "$PR_URL" --json state -q '.state' 2>/dev/null) || return 1
+  case "$state" in
+    OPEN|open) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Has the worktree's committed work actually LANDED, though its commits are not
 # reachable from any remote-tracking branch? True when a merged PR proves the
-# current local work is contained in the PR head, OR the content is already in the
-# default branch (fallback, which also covers the no-PR and gh-error paths). False
-# only for genuinely unlanded work.
+# current local work is contained in the PR head. A recorded-but-open PR is
+# positive proof the work is NOT landed, so it refuses without consulting the
+# provenance-blind content check - otherwise a sibling PR's identical content in
+# the default branch would falsely green-light teardown of the still-open task.
+# Otherwise falls back to the content check, which covers the no-PR, gh-error,
+# and squash-merge-then-delete paths. False only for genuinely unlanded work.
 work_is_landed() {
   local branch=$1
   pr_is_merged "$branch" && return 0
+  if recorded_pr_is_open; then
+    WORK_UNLANDED_PR_OPEN=1
+    return 1
+  fi
   content_in_default
 }
 
@@ -1191,6 +1214,9 @@ validate_worktree_teardown_safety() {
     fi
     if ! work_is_landed "$branch"; then
       echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
+      if [ -n "${WORK_UNLANDED_PR_OPEN:-}" ]; then
+        echo "PR $PR_URL is still open (not merged); its content may already be in the default branch via a sibling PR, but this task's own PR has not landed." >&2
+      fi
       printf 'unpushed commits:\n%s\n' "$unpushed" >&2
       echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
       return 1
