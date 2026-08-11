@@ -201,11 +201,13 @@ function runCdCheck(command: string): Promise<{ code: number; stderr: string }> 
 // snapshot; bin/fm-focus-prompt-hook.sh owns adapter fail-open semantics.
 function runFocusPromptHook(prompt: string): Promise<void> {
   return new Promise((resolveResult) => {
-    const child = spawn(`${root}/bin/fm-focus-prompt-hook.sh`, ["--pi", "--prompt", prompt], {
-      stdio: ["ignore", "ignore", "ignore"],
+    const child = spawn(root + "/bin/fm-focus-prompt-hook.sh", ["--pi"], {
+      stdio: ["pipe", "ignore", "ignore"],
     });
     child.on("error", () => resolveResult());
     child.on("close", () => resolveResult());
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify({ prompt }));
   });
 }
 

@@ -51,11 +51,12 @@
 #   - Never event-source; the snapshot is the whole truth.
 #
 # Wake emission:
-#   On suspend, resume, complete, and switch transitions, enqueue one durable
-#   wake so supervision re-evaluates. Phase 0 uses kind=signal key=focus with
-#   payload "focus: <transition>". When the Phase 2 advisory refill kind is
-#   present on the base, prefer that instead (or in addition via a one-line
-#   follow-up); this branch deliberately does not stack on fm/fm-refill-wake-phase2.
+#   After publishing suspend, resume, complete, and switch transitions, attempt
+#   one durable wake asynchronously so supervision re-evaluates without delaying
+#   the owner command. Phase 0 uses kind=signal key=focus with payload
+#   "focus: <transition>". When the Phase 2 advisory refill kind is present on
+#   the base, prefer that instead; this branch deliberately does not stack on
+#   fm/fm-refill-wake-phase2. Wake failure never changes mutation success.
 #
 # Exit codes:
 #   0 success (including idempotent no-op)
@@ -218,14 +219,16 @@ write_snapshot() {  # <path> <json-string>
 # multi-home processes never write the wrong home's queue.
 emit_focus_wake() {  # <transition>
   local transition=$1
-  mkdir -p "$STATE" 2>/dev/null || true
-  FM_WAKE_QUEUE="$STATE/.wake-queue"
-  FM_WAKE_QUEUE_LOCK="$STATE/.wake-queue.lock"
-  export FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
-  if fm_wake_append refill focus "focus: $transition" 2>/dev/null; then
-    return 0
-  fi
-  fm_wake_append signal focus "focus: $transition" 2>/dev/null || true
+  (
+    mkdir -p "$STATE" 2>/dev/null || exit 0
+    FM_WAKE_QUEUE="$STATE/.wake-queue"
+    FM_WAKE_QUEUE_LOCK="$STATE/.wake-queue.lock"
+    export FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+    if fm_wake_append_try refill focus "focus: $transition"; then
+      exit 0
+    fi
+    fm_wake_append_try signal focus "focus: $transition" || true
+  ) </dev/null >/dev/null 2>&1 &
   return 0
 }
 
@@ -451,7 +454,7 @@ cmd_switch() {
   fi
   lock_release "$lock"
 
-  # Wake outside the lock so queue wait cannot stall the focus lock.
+  # Wake outside the lock after the durable snapshot is visible.
   emit_focus_wake switched
   printf '%s\n' "$next" | jq -c .
   exit 0

@@ -4,10 +4,10 @@
 #
 # Covers Phase 0 invariants: one atomic snapshot, suspend-before-switch
 # ordering, compare-and-swap refusal, concurrent writers, wake emission on
-# transitions, and fail-open on an unwritable state dir. No harness process is
-# required for the core; tracked hook registration is asserted as portable
-# wiring regression. Live harness fire is env-gated in the live-harness-optin
-# family (see tests/fm-focus-hook-live-e2e.test.sh).
+# transitions, and fail-open on an unwritable state dir or busy wake queue. No
+# harness process is required for the core; tracked hook registration is
+# asserted as a portable wiring regression. The opt-in smoke only checks the
+# shared hook and owner paths; it does not exercise harness callbacks.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -166,9 +166,13 @@ test_idempotent_fingerprint() {
 }
 
 test_wake_on_transition() {
-  local state line kind
+  local state line kind tries=0
   state=$(new_state wake)
   "$FOCUS" switch --state-dir "$state" --summary "A" >/dev/null
+  while [ ! -s "$state/.wake-queue" ] && [ "$tries" -lt 50 ]; do
+    sleep 0.02
+    tries=$((tries + 1))
+  done
   [ -f "$state/.wake-queue" ] || fail "switch must enqueue a wake"
   line=$(tail -n 1 "$state/.wake-queue")
   kind=$(printf '%s' "$line" | awk -F '\t' '{print $3}')
@@ -180,6 +184,43 @@ test_wake_on_transition() {
     || fail "wake key must be focus"
   printf '%s' "$line" | grep -F 'focus:' >/dev/null || fail "wake payload must carry focus: prefix"
   pass "focus transitions emit one durable wake (signal, or refill when present)"
+}
+
+test_busy_wake_queue_does_not_block_owner() {
+  local state ready holder owner tries=0
+  state=$(new_state busy-wake-lock)
+  ready="$state/lock-ready"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_try_acquire "$STATE/.wake-queue.lock" || exit 1
+    : > "$2"
+    sleep 5
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$ready" &
+  holder=$!
+  while [ ! -f "$ready" ] && [ "$tries" -lt 50 ]; do
+    sleep 0.02
+    tries=$((tries + 1))
+  done
+  [ -f "$ready" ] || fail "wake lock holder did not start"
+
+  "$FOCUS" switch --state-dir "$state" --summary "lock-independent" >/dev/null &
+  owner=$!
+  tries=0
+  while kill -0 "$owner" 2>/dev/null && [ "$tries" -lt 50 ]; do
+    sleep 0.02
+    tries=$((tries + 1))
+  done
+  if kill -0 "$owner" 2>/dev/null; then
+    kill "$owner" 2>/dev/null || true
+    kill "$holder" 2>/dev/null || true
+    fail "focus owner blocked on the busy wake queue"
+  fi
+  wait "$owner" || fail "focus owner failed when wake queue was busy"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ "$(active_summary "$state")" = "lock-independent" ] \
+    || fail "focus snapshot was not durable before wake discard"
+  pass "busy wake queue never blocks a durable focus mutation"
 }
 
 test_fail_open_unwritable_state_via_owner() {
@@ -220,13 +261,13 @@ test_hook_skips_operational_input() {
   # real scripts and mark a plain git root is hard; instead call the owner path
   # through the hook's --prompt after we only assert the operational skip by
   # invoking the hook with a non-primary home (scope fails open with no write).
-  before=$(ls -A "$state" 2>/dev/null | wc -l | tr -d ' ')
+  before=$(find "$state" -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l | tr -d ' ')
   status=0
   printf '%s' '{"prompt":"'"$("$ROOT/bin/fm-operational-input.sh" encode session-start <<<"digest")"'"}}' \
     | FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
       "$HOOK" --claude >/dev/null 2>&1 || status=$?
   [ "$status" -eq 0 ] || fail "hook must exit 0 on operational input"
-  after=$(ls -A "$state" 2>/dev/null | wc -l | tr -d ' ')
+  after=$(find "$state" -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l | tr -d ' ')
   [ "$before" = "$after" ] || fail "operational input must not create focus artifacts"
   pass "prompt hook skips operational Firstmate inputs and stays fail-open"
 }
@@ -305,6 +346,7 @@ test_cas_refusal
 test_concurrent_writers
 test_idempotent_fingerprint
 test_wake_on_transition
+test_busy_wake_queue_does_not_block_owner
 test_fail_open_unwritable_state_via_owner
 test_hook_fail_open_unwritable
 test_hook_skips_operational_input

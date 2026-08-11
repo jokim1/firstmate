@@ -18,6 +18,9 @@
 # Prompt extraction (stdin JSON):
 #   .prompt // .user_prompt // .content // .message.content // .text
 # Operational Firstmate-injected inputs are skipped (no focus mutation).
+# Phase 0 has no verified pre-submit gate for OpenCode or Kimi. OpenCode uses a
+# best-effort post-message plugin; --kimi is label-only for external callers and
+# has no tracked Kimi hook installer in this slice.
 set -u
 
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || exit 0
@@ -83,8 +86,9 @@ while [ $# -gt 0 ]; do
       ;;
     -h|--help)
       cat <<'EOF'
-Usage: fm-focus-prompt-hook.sh [--claude|--codex|--grok|--kimi] [options]
+Usage: fm-focus-prompt-hook.sh [--claude|--codex|--grok|--pi|--opencode|--kimi] [options]
 Fail-open primary pre-prompt adapter for bin/fm-focus.sh switch.
+OpenCode and Kimi have no verified pre-submit gate in Phase 0.
 Always exits 0. See the script header for the full contract.
 EOF
       exit 0
@@ -117,6 +121,7 @@ fi
 
 # Skip Firstmate operational / injected inputs so adapters never recurse into
 # their own session-start, turn-end, or away-mode messages.
+# shellcheck disable=SC2034 # Set by the shared classifier through its output-name argument.
 op_kind=
 if fm_operational_input_kind "$PROMPT" op_kind 2>/dev/null || \
    fm_operational_input_classify "$PROMPT" op_kind 2>/dev/null; then
