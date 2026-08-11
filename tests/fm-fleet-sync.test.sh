@@ -538,6 +538,28 @@ test_symlinked_clone_still_syncs() {
   pass "symlinked project clone keeps working"
 }
 
+test_linked_worktree_gitfile_still_syncs() {
+  local home source linked out line
+  home=$(new_home)
+  source=$(build_pair "$home" gitfile-source)
+  mv "$source" "$home/gitfile-source"
+  source="$home/gitfile-source"
+  git -C "$source" checkout --detach --quiet
+  linked="$home/projects/linked-gitfile"
+  git -C "$source" worktree add --quiet "$linked" main
+  [ -f "$linked/.git" ] || fail "fixture: linked worktree must have a .git file"
+  advance_origin "$home" gitfile-source C1
+
+  out=$(run_sync "$home")
+  line=$(printf '%s\n' "$out" | grep -E '^linked-gitfile:' || true)
+
+  assert_contains "$line" "linked-gitfile: synced" "linked worktree with .git file must sync"
+  assert_not_contains "$line" "not a git clone" "linked worktree must not be treated as non-git"
+  [ "$(head_sha "$linked")" = "$(git -C "$linked" rev-parse origin/main)" ] \
+    || fail "linked worktree was not fast-forwarded"
+  pass "linked worktree with a .git file keeps working"
+}
+
 test_whole_fleet_form() {
   local home behind current out
   home=$(new_home)
@@ -725,6 +747,7 @@ test_single_project_unresolvable_name_still_skips
 test_plain_nongit_dir_skips_without_parent_walkup
 test_plain_nongit_dir_registered_still_reports_skip
 test_symlinked_clone_still_syncs
+test_linked_worktree_gitfile_still_syncs
 test_whole_fleet_form
 test_bootstrap_relays_recovered_and_stuck
 test_orphaned_stale_packed_refs_lock_recovers
