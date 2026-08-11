@@ -263,7 +263,12 @@ It cannot be combined with a project list, and omitting both still fails loudly.
 A project-less seed requires no existing project clones or `data/projects.md` entries in the home, so it refuses a populated-home conversion without changing that home.
 A preexisting project-bearing charter is also refused until it is re-scaffolded with `--no-projects` or removed.
 The lease is held under the secondmate id until explicit retirement or seed rollback returns it, so normal restarts do not free or recycle the home.
-Teardown of a leased home fails closed if `treehouse return` cannot release the lease; plain-clone homes with no treehouse pool slot are removed directly.
+Teardown of a leased home fails closed if `treehouse return` cannot release the lease; a plain-clone home has no home lease to return and is removed after its bound project pool slots are destroyed.
+Each seeded project clone carries a repo-level `treehouse.toml` pinning treehouse's pool root inside the home under `data/treehouse-pools/`, because treehouse keys pools by origin URL under one shared root and each pool slot binds permanently to the clone that created it.
+The main home's project clones keep treehouse's default `~/.treehouse` root, while seeding a secondmate refuses rather than overwrite either a project's tracked `treehouse.toml` or an operator's untracked one.
+Without that pin, the main home and a secondmate cloning the same remote share one pool, a spawn can receive a worktree whose object store belongs to another home, and retiring that home orphans those slots.
+`fm-spawn.sh` fail-closed refuses an acquired slot whose git common dir is not the spawning home's project clone, and `fm-teardown.sh` destroys every pool slot bound to a retiring secondmate home before removing the home.
+Homes seeded before this isolation may still hold slots in the shared `~/.treehouse` root; the spawn refusal and the retirement scan cover those legacy slots until they are destroyed.
 Secondmate routes cover `no-mistakes` and `direct-PR` projects; `local-only` projects remain main-firstmate work.
 For `no-mistakes` projects, seeding initializes only projects newly cloned into a secondmate home and refuses to mutate a preexisting clone that is not already initialized.
 After creating a secondmate, move existing main-backlog queued items that you have judged in-scope with `fm-backlog-handoff.sh <secondmate-id> <item-key>...`; it refuses In flight, Done, or non-secondmate homes, and a new move succeeds only after waking the recorded receiver.
