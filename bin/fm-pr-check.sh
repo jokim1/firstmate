@@ -67,7 +67,7 @@ fi
 # output, which would need a JSON processor firstmate does not require, so a
 # GitLab task records no pr_head. Both consumers already treat it as optional:
 # bin/fm-teardown.sh reads the head from the forge at teardown rather than from
-# metadata and falls back to its provider-agnostic content check, and
+# metadata (its header owns the landed-work proof when no head is available), and
 # bin/fm-review-diff.sh resolves the head from the remote when none is recorded.
 # bin/fm-pr-merge.sh reads a GitLab head live at merge time for the same reason,
 # and treats a recorded value that disagrees as stale rather than authoritative.

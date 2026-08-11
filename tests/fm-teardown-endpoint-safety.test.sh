@@ -1039,11 +1039,16 @@ SH
 # write_endpoint_close_meta: a task record whose worktree and project do not
 # exist, which keeps the cases below on the endpoint close itself - the pool
 # return and its own refusals are covered elsewhere in this file.
-write_endpoint_close_meta() {  # <case-dir> <id> <window>
+# These cases default to mode=local-only because the fork's positive land-proof
+# gate refuses a no-mistakes ship task whose worktree is missing BEFORE the
+# endpoint close; the local-only carve-out (a local-only task lands on local
+# main with no remote to strand, so a gone worktree leaves nothing to inspect)
+# lets teardown proceed to the endpoint so the close itself is exercised.
+write_endpoint_close_meta() {  # <case-dir> <id> <window> [<mode>]
   fm_write_meta "$1/home/state/$2.meta" \
     "window=$3" "endpoint_task_id=$2" \
     "worktree=$1/nonexistent-worktree" "project=$1/nonexistent-project" \
-    "kind=ship" "mode=no-mistakes"
+    "kind=ship" "mode=${4:-local-only}"
 }
 
 test_failed_endpoint_close_refuses_before_removing_the_record() {
