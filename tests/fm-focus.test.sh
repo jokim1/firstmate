@@ -319,11 +319,30 @@ test_tracked_grok_userprompt_wires_focus_hook() {
 }
 
 test_tracked_opencode_plugin_present() {
-  [ -f "$ROOT/.opencode/plugins/fm-primary-focus-lifecycle.js" ] \
+  local plugin
+  plugin="$ROOT/.opencode/plugins/fm-primary-focus-lifecycle.js"
+  [ -f "$plugin" ] \
     || fail "missing OpenCode focus lifecycle plugin"
-  grep -F 'fm-focus-prompt-hook.sh' "$ROOT/.opencode/plugins/fm-primary-focus-lifecycle.js" >/dev/null \
+  grep -F 'fm-focus-prompt-hook.sh' "$plugin" >/dev/null \
     || fail "OpenCode plugin must invoke the focus prompt hook"
-  pass "tracked OpenCode focus lifecycle plugin is present"
+  grep -F '"chat.message"' "$plugin" >/dev/null \
+    || fail "OpenCode plugin must record focus before prompt dispatch"
+  if grep -E 'message\.(updated|completed)' "$plugin" >/dev/null; then
+    fail "OpenCode plugin must not defer focus recording to post-prompt events"
+  fi
+  pass "tracked OpenCode plugin records focus before prompt dispatch"
+}
+
+test_help_owns_schema_and_mutation_contract() {
+  local out
+  out=$("$FOCUS" --help)
+  assert_contains "$out" 'Schema (v1):' "focus help must own the v1 schema"
+  assert_contains "$out" '"active": null | FocusEntry' "focus help omitted active schema"
+  assert_contains "$out" '"suspended": [ FocusEntry, ... ]' "focus help omitted suspended schema"
+  assert_contains "$out" 'Mutation contract:' "focus help must own the mutation contract"
+  assert_contains "$out" 'write-temp then rename' "focus help omitted atomic publish"
+  assert_contains "$out" 'suspended before' "focus help omitted suspend-before-switch"
+  pass "fm-focus help owns the v1 schema and mutation contract"
 }
 
 test_tracked_pi_input_wires_focus_hook() {
@@ -356,5 +375,6 @@ test_tracked_codex_userprompt_wires_focus_hook
 test_tracked_grok_userprompt_wires_focus_hook
 test_tracked_opencode_plugin_present
 test_tracked_pi_input_wires_focus_hook
+test_help_owns_schema_and_mutation_contract
 
 printf 'ok - fm-focus phase0 suite\n'

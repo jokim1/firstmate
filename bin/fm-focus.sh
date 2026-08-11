@@ -99,7 +99,43 @@ Usage:
                              --checkpoint C
 
 Owner of state/.focus.json (atomic snapshot, CAS revision, suspend-before-switch).
-See the script header for the full schema and mutation contract.
+
+Schema (v1):
+  {
+    "v": 1,
+    "revision": <non-negative integer>,
+    "active": null | FocusEntry,
+    "suspended": [ FocusEntry, ... ]
+  }
+
+FocusEntry:
+  {
+    "focus_id": string,
+    "task_id": string,
+    "project": string,
+    "owner_kind": "primary-direct" | "playbot" | "crew" | "secondmate",
+    "state": "active" | "suspended" | "paused_explicit" | "blocked"
+             | "completed" | "failed",
+    "resume_kind": string,
+    "resume_pointer": string,
+    "checkpoint": string,
+    "summary": string,
+    "fingerprint": string,
+    "created_at": <epoch seconds>,
+    "updated_at": <epoch seconds>
+  }
+
+Mutation contract:
+  - Exactly one writer holds the mkdir lock for a read-modify-write.
+  - Publish is always write-temp then rename; never in-place rewrite.
+  - --expected-revision N refuses with exit 1 unless the on-disk revision is N.
+    Without it, the command advances the revision while holding the lock.
+  - switch records the previous nonterminal active focus as suspended before
+    making the new focus active.
+  - The atomic snapshot is the whole truth; this owner never event-sources.
+  - Wake delivery is best effort after publish and never changes mutation success.
+
+Exit codes: 0 success or idempotent no-op; 1 refusal; 2 usage.
 EOF
 }
 
