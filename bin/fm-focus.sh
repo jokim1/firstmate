@@ -185,9 +185,9 @@ nonterminal_state() {
   esac
 }
 
-# Acquire the writer lock. Breaks a stale lock after FOCUS_LOCK_STALE_SECS.
+# Acquire the writer lock. Breaks a stale lock only when its owner is gone.
 lock_acquire() {  # <lock-path>
-  local lock=$1 tries=0 now mtime age
+  local lock=$1 tries=0 now mtime age pid identity current_identity
   while ! mkdir "$lock" 2>/dev/null; do
     tries=$((tries + 1))
     if [ "$tries" -ge "$FOCUS_LOCK_TRIES" ]; then
@@ -195,19 +195,48 @@ lock_acquire() {  # <lock-path>
       mtime=$(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || echo "$now")
       age=$((now - mtime))
       if [ "$age" -ge "$FOCUS_LOCK_STALE_SECS" ]; then
-        rmdir "$lock" 2>/dev/null || rm -rf "$lock" 2>/dev/null || true
-        mkdir "$lock" 2>/dev/null && return 0
+        pid=$(cat "$lock/pid" 2>/dev/null || true)
+        identity=$(cat "$lock/pid-identity" 2>/dev/null || true)
+        current_identity=
+        if fm_pid_alive "$pid"; then
+          current_identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+          if [ -z "$identity" ] || [ -z "$current_identity" ] || [ "$identity" = "$current_identity" ]; then
+            printf 'fm-focus: lock timeout\n' >&2
+            return 1
+          fi
+        fi
+        if [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$pid" ] \
+          && [ "$(cat "$lock/pid-identity" 2>/dev/null || true)" = "$identity" ]; then
+          rm -f "$lock/pid" "$lock/pid-identity" 2>/dev/null || true
+          rmdir "$lock" 2>/dev/null || true
+        fi
+        if mkdir "$lock" 2>/dev/null; then
+          break
+        fi
       fi
       printf 'fm-focus: lock timeout\n' >&2
       return 1
     fi
     sleep 0.05
   done
+  pid=${BASHPID:-$$}
+  identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+  if ! printf '%s\n' "$pid" > "$lock/pid" 2>/dev/null \
+    || ! printf '%s\n' "$identity" > "$lock/pid-identity" 2>/dev/null; then
+    rm -f "$lock/pid" "$lock/pid-identity" 2>/dev/null || true
+    rmdir "$lock" 2>/dev/null || true
+    return 1
+  fi
   return 0
 }
 
 lock_release() {  # <lock-path>
-  rmdir "$1" 2>/dev/null || true
+  local lock=$1 pid current
+  pid=$(cat "$lock/pid" 2>/dev/null || true)
+  current=${BASHPID:-$$}
+  [ "$pid" = "$current" ] || return 0
+  rm -f "$lock/pid" "$lock/pid-identity" 2>/dev/null || true
+  rmdir "$lock" 2>/dev/null || true
 }
 
 # Read the snapshot under the lock (caller holds lock). Missing file -> empty.

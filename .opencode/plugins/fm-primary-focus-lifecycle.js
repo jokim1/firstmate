@@ -2,17 +2,30 @@ import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 
+const focusPromptTimeoutMs = 1000;
+
 // OpenCode's chat.message hook runs before the model dispatches the prompt.
 // Await the durable switch there while swallowing every adapter failure.
 // See bin/fm-focus.sh and bin/fm-focus-prompt-hook.sh for the owner contract.
 
 function runProcess(command, args, input = "") {
   return new Promise((resolveResult) => {
+    let settled = false;
     const child = spawn(command, args, {
       stdio: ["pipe", "ignore", "ignore"],
     });
-    child.on("error", () => resolveResult(0));
-    child.on("close", (code) => resolveResult(code ?? 0));
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult(code);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(0);
+    }, focusPromptTimeoutMs);
+    child.on("error", () => finish(0));
+    child.on("close", (code) => finish(code ?? 0));
     child.stdin.on("error", () => {});
     child.stdin.end(input);
   });

@@ -196,16 +196,29 @@ function runCdCheck(command: string): Promise<{ code: number; stderr: string }> 
   return runChecker("fm-cd-pretool-check.sh", command);
 }
 
+const focusPromptTimeoutMs = 1000;
+
 // Phase 0 primary-focus lifecycle: durable suspend-before-switch on captain
 // prompts. Always fail-open (never block the prompt). bin/fm-focus.sh owns the
 // snapshot; bin/fm-focus-prompt-hook.sh owns adapter fail-open semantics.
 function runFocusPromptHook(prompt: string): Promise<void> {
   return new Promise((resolveResult) => {
+    let settled = false;
     const child = spawn(root + "/bin/fm-focus-prompt-hook.sh", ["--pi"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
-    child.on("error", () => resolveResult());
-    child.on("close", () => resolveResult());
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult();
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish();
+    }, focusPromptTimeoutMs);
+    child.on("error", finish);
+    child.on("close", finish);
     child.stdin.on("error", () => {});
     child.stdin.end(JSON.stringify({ prompt }));
   });

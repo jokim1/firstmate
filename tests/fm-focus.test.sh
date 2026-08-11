@@ -152,6 +152,50 @@ test_concurrent_writers() {
   pass "concurrent switch writers serialize under the lock into one coherent snapshot"
 }
 
+test_live_stale_lock_owner_is_preserved() {
+  local state lock owner status
+  state=$(new_state live-stale-lock)
+  lock="$state/.focus.json.lock"
+  mkdir "$lock"
+  sleep 30 &
+  owner=$!
+  printf '%s\n' "$owner" > "$lock/pid"
+  : > "$lock/pid-identity"
+  touch -t 200001010000 "$lock" 2>/dev/null || true
+  if FM_FOCUS_LOCK_TRIES=1 FM_FOCUS_LOCK_STALE_SECS=0 \
+    "$FOCUS" switch --state-dir "$state" --summary contender >/dev/null 2>&1; then
+    kill "$owner" 2>/dev/null || true
+    wait "$owner" 2>/dev/null || true
+    fail "aged lock held by a live owner must not be evicted"
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || fail "live lock contention must exit 1, got $status"
+  [ -d "$lock" ] || fail "live owner's lock directory was removed"
+  [ ! -e "$state/.focus.json" ] || fail "contender mutated focus under a live owner's lock"
+  kill "$owner" 2>/dev/null || true
+  wait "$owner" 2>/dev/null || true
+  rm -f "$lock/pid" "$lock/pid-identity"
+  rmdir "$lock"
+  pass "aged writer lock is preserved while its recorded owner is alive"
+}
+
+test_dead_stale_lock_owner_is_recovered() {
+  local state lock
+  state=$(new_state dead-stale-lock)
+  lock="$state/.focus.json.lock"
+  mkdir "$lock"
+  printf '99999999\n' > "$lock/pid"
+  printf 'dead-owner\n' > "$lock/pid-identity"
+  touch -t 200001010000 "$lock" 2>/dev/null || true
+  FM_FOCUS_LOCK_TRIES=1 FM_FOCUS_LOCK_STALE_SECS=0 \
+    "$FOCUS" switch --state-dir "$state" --summary recovered >/dev/null \
+    || fail "dead stale lock was not recovered"
+  [ "$(active_summary "$state")" = "recovered" ] || fail "recovered writer did not publish focus"
+  [ ! -e "$lock" ] || fail "recovered writer left its lock behind"
+  pass "aged writer lock is recovered after its recorded owner exits"
+}
+
 test_idempotent_fingerprint() {
   local state rev1 rev2
   state=$(new_state idem)
@@ -333,6 +377,25 @@ test_tracked_opencode_plugin_present() {
   pass "tracked OpenCode plugin records focus before prompt dispatch"
 }
 
+test_opencode_plugin_times_out_hung_focus_hook() {
+  local project status
+  project="$TMP_ROOT/opencode-timeout-project"
+  mkdir -p "$project/bin"
+  printf '#!/usr/bin/env bash\nexec sleep 30\n' > "$project/bin/fm-focus-prompt-hook.sh"
+  chmod +x "$project/bin/fm-focus-prompt-hook.sh"
+  node --input-type=module - "$ROOT/.opencode/plugins/fm-primary-focus-lifecycle.js" "$project" <<'NODE' &
+const [pluginPath, root] = process.argv.slice(2);
+const { FmPrimaryFocusLifecycle } = await import(`file://${pluginPath}`);
+const hooks = await FmPrimaryFocusLifecycle({ worktree: root });
+await hooks["chat.message"]({}, { parts: [{ text: "captain prompt" }] });
+NODE
+  status=$!
+  if ! wait "$status"; then
+    fail "OpenCode focus adapter failed while timing out a hung hook"
+  fi
+  pass "OpenCode focus adapter bounds a hung pre-prompt hook"
+}
+
 test_help_owns_schema_and_mutation_contract() {
   local out
   out=$("$FOCUS" --help)
@@ -352,6 +415,8 @@ test_tracked_pi_input_wires_focus_hook() {
     || fail "Pi extension must invoke the focus prompt hook"
   grep -F 'on?.("input"' "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" >/dev/null \
     || fail "Pi extension must register an input handler"
+  grep -F 'child.kill("SIGTERM")' "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" >/dev/null \
+    || fail "Pi focus adapter must terminate a timed-out hook"
   pass "tracked Pi extension registers fail-open input focus recording"
 }
 
@@ -363,6 +428,8 @@ test_suspend_before_switch_ordering
 test_resume_and_complete
 test_cas_refusal
 test_concurrent_writers
+test_live_stale_lock_owner_is_preserved
+test_dead_stale_lock_owner_is_recovered
 test_idempotent_fingerprint
 test_wake_on_transition
 test_busy_wake_queue_does_not_block_owner
@@ -374,6 +441,7 @@ test_tracked_claude_userprompt_wires_focus_hook
 test_tracked_codex_userprompt_wires_focus_hook
 test_tracked_grok_userprompt_wires_focus_hook
 test_tracked_opencode_plugin_present
+test_opencode_plugin_times_out_hung_focus_hook
 test_tracked_pi_input_wires_focus_hook
 test_help_owns_schema_and_mutation_contract
 
