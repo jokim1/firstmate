@@ -260,7 +260,7 @@ test_ship_mode_is_explicit_not_registry() {
   brief="$home/data/brief-explicit-a5/brief.md"
   grep -qx "Delivery contract: mode=no-mistakes" "$brief" \
     || fail "registered direct-PR posture overrode the explicit --mode"
-  assert_grep "Firstmate will then instruct you to run /no-mistakes" "$brief" \
+  assert_grep "immediately invoke /no-mistakes and drive the pipeline through to green CI" "$brief" \
     "explicit no-mistakes brief did not render the pipeline definition of done"
 
   # An unregistered project is not a blocker either, because nothing is looked up.
@@ -292,6 +292,56 @@ mode on a scout brief|brief-refused-b3 some-proj --scout --mode direct-PR|--mode
 mode on a secondmate charter|brief-refused-b4 --secondmate --no-projects --mode no-mistakes|--mode applies only to ship briefs
 ROWS
   pass "fm-brief.sh: --yolo and scout/secondmate --mode are refused, never silently dropped"
+}
+
+# The "committed = delivered" trap fix: for every ship mode the generated
+# Definition of done must make the mode's real finish line unmissable at the
+# point of action - committing is never the finish line for no-mistakes or
+# direct-PR - and the shared status protocol must reserve `done:` for that
+# finish line so a finished implementation commit is `working:`, never `done:`.
+test_ship_dod_finish_line_is_not_commit() {
+  local home id brief
+  home="$TMP_ROOT/finish-line-home"
+  write_registry "$home"
+
+  id="brief-finish-nomistakes-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" no-registry-proj --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "a committed implementation is not the finish line" "$brief" \
+    "no-mistakes DOD did not disclaim commit-as-finish-line"
+  assert_grep "immediately invoke /no-mistakes and drive the pipeline through to green CI" "$brief" \
+    "no-mistakes DOD did not make immediate pipeline invocation the point-of-action step"
+  # shellcheck disable=SC2016  # literal backticks/braces must stay unexpanded
+  assert_grep 'a committed change without a green PR is `working:`, never `done:`' "$brief" \
+    "no-mistakes DOD did not reserve done: for the green-PR finish line"
+
+  id="brief-finish-directpr-e2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj --mode direct-PR >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "the finish line is an opened pull request" "$brief" \
+    "direct-PR DOD did not name the opened-PR finish line"
+  assert_grep "immediately push your branch and open a PR" "$brief" \
+    "direct-PR DOD did not make push-and-open the point-of-action step"
+  # shellcheck disable=SC2016  # literal backticks/braces must stay unexpanded
+  assert_grep 'a committed change with no open PR is `working:`, never `done:`' "$brief" \
+    "direct-PR DOD did not reserve done: for the opened-PR finish line"
+
+  id="brief-finish-localonly-e3"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --mode local-only >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "the finish line is a clean ready branch" "$brief" \
+    "local-only DOD did not name the ready-branch finish line"
+  # shellcheck disable=SC2016  # literal backticks must stay unexpanded
+  assert_grep "is \`working:\`, never \`done:\`" "$brief" \
+    "local-only DOD did not reserve done: for the committed ready branch"
+
+  for id in brief-finish-nomistakes-e1 brief-finish-directpr-e2 brief-finish-localonly-e3; do
+    brief="$home/data/$id/brief.md"
+    # shellcheck disable=SC2016  # literal backticks must stay unexpanded
+    assert_grep '`done:` is reserved for the delivery-mode finish line named in Definition of done' "$brief" \
+      "$id: shared status protocol did not reserve done: for the finish line"
+  done
+  pass "fm-brief.sh: every ship mode names its finish line and reserves done: for it"
 }
 
 test_faster_paths_use_configured_authority_without_stacked_review() {
@@ -853,6 +903,7 @@ test_ship_modes_generate_clean_briefs
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
+test_ship_dod_finish_line_is_not_commit
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_ask_user_escalation_format
