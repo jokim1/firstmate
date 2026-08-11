@@ -54,8 +54,15 @@
 # that mate's backlog-handoff lock under the registry lock. Pending handoff wake
 # state is retired with the home, and local removal failure restores that state
 # before preserving the route for retry. Teardown then discards child work, kills
-# child runtime endpoints, and removes the retired home. Removing a leased home
-# releases its durable treehouse lease so the pool slot is freed,
+# child runtime endpoints, and removes the retired home. Before the home is
+# removed, teardown destroys every treehouse pool slot whose git common dir lies
+# under that home (destroy_home_bound_pool_slots), while the home's project
+# clones still exist: treehouse keys pools by origin URL under a shared root, so
+# slots created from the home's clones can live in pools other homes use, and
+# deleting the clones first would orphan those slots and poison the pool. A slot
+# treehouse will not destroy bare (in use, or unlanded without --force) refuses
+# the retirement loudly. Removing a leased home releases its durable treehouse
+# lease so the pool slot is freed,
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force]
@@ -1993,6 +2000,72 @@ EOF
   printf '%s\n' "$abs_home_path"
 }
 
+# Destroy every treehouse pool slot whose git common dir lies under the given
+# secondmate home, while the home's project clones still exist. treehouse keys
+# pools by origin URL under one root, so spawns from this home's clones can
+# leave slots in the shared default root (and, for homes seeded before
+# home-scoped pool roots were pinned, in roots other homes still use); deleting
+# the home without destroying those slots orphans them (broken gitdir pointers)
+# and poisons the pool toward its max_trees cap. Bare `treehouse destroy`
+# removes only genuinely disposable slots, so an in-use slot - possibly another
+# home's live task that acquired a slot created from this home's clone -
+# refuses the retirement instead of being torn down. --force adds
+# --include-unlanded because that flag is the captain's discard authority for
+# this home's own unlanded work; it never adds --include-in-use or
+# --include-leased, which could kill another home's live task or home lease.
+# FM_TEARDOWN_POOL_SCAN_ROOTS (newline-separated) overrides the scanned pool
+# roots for tests; the default scans the home-scoped root written by
+# fm-home-seed.sh and treehouse's default shared root.
+destroy_home_bound_pool_slots() {  # <home-abs-real>
+  local home_real=$1 roots root slot_git slot slot_common slot_common_real bound_slots
+  if [ -n "${FM_TEARDOWN_POOL_SCAN_ROOTS:-}" ]; then
+    roots=$FM_TEARDOWN_POOL_SCAN_ROOTS
+  else
+    roots="$home_real/data/treehouse-pools/.treehouse
+$HOME/.treehouse"
+  fi
+  bound_slots=$(
+    printf '%s\n' "$roots" | while IFS= read -r root; do
+      [ -d "$root" ] || continue
+      for slot_git in "$root"/*/*/*/.git; do
+        [ -f "$slot_git" ] || continue
+        slot=${slot_git%/.git}
+        slot_common=$(git -C "$slot" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+        [ -n "$slot_common" ] || continue
+        slot_common_real=$(cd "$slot_common" 2>/dev/null && pwd -P) || continue
+        if [ "${slot_common_real#"$home_real"/}" != "$slot_common_real" ]; then
+          printf '%s\n' "$slot"
+        fi
+      done
+    done
+  )
+  [ -n "$bound_slots" ] || return 0
+  command -v treehouse >/dev/null 2>&1 || {
+    echo "error: treehouse command not found; cannot destroy pool slots bound to $home_real before removing the home" >&2
+    return 1
+  }
+  while IFS= read -r slot; do
+    [ -n "$slot" ] || continue
+    echo "teardown: destroying pool slot $slot bound to retiring home $home_real" >&2
+    if [ "$FORCE" = "--force" ]; then
+      treehouse destroy "$slot" --yes --include-unlanded || {
+        echo "error: treehouse refused to destroy pool slot $slot bound to retiring home $home_real; refusing to remove the home" >&2
+        echo "Destroy the slot manually with: treehouse destroy $slot --yes  (then rerun teardown)" >&2
+        return 1
+      }
+    else
+      treehouse destroy "$slot" --yes || {
+        echo "error: treehouse refused to destroy pool slot $slot bound to retiring home $home_real; refusing to remove the home" >&2
+        echo "The slot is in use or holds unverified work - possibly another home's live task that acquired a slot created from this home's clone." >&2
+        echo "Drain that work, destroy the slot with: treehouse destroy $slot --yes  (then rerun teardown)" >&2
+        return 1
+      }
+    fi
+  done <<EOF
+$bound_slots
+EOF
+}
+
 remove_firstmate_home() {
   local home=$1 label=$2 expected_id=${3:-} abs_home_path process_event_backup
   [ -n "$home" ] || return 0
@@ -2817,6 +2890,17 @@ if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
   handoff_wake_retire_stage \
     || { echo "error: receiver wake cleanup could not be staged; preserving the secondmate home and route" >&2; exit 1; }
+  HOME_PATH_REAL=$(cd "$HOME_PATH" 2>/dev/null && pwd -P) || {
+    echo "error: secondmate home $HOME_PATH does not exist; cannot scan for bound pool slots" >&2
+    handoff_wake_retire_stage_restore \
+      || echo "error: receiver wake restoration failed; recovery state remains at $HANDOFF_WAKE_RETIRE_STAGE" >&2
+    exit 1
+  }
+  if ! destroy_home_bound_pool_slots "$HOME_PATH_REAL"; then
+    handoff_wake_retire_stage_restore \
+      || echo "error: receiver wake restoration failed; recovery state remains at $HANDOFF_WAKE_RETIRE_STAGE" >&2
+    exit 1
+  fi
   if remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID"; then
     :
   else
