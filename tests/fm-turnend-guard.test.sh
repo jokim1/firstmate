@@ -74,7 +74,9 @@ test_predicate_queue_pending_flag() {
   printf 'record\n' > "$state/.wake-queue"
   fm_supervision_status "$state" 300
   [ "$FM_SUP_QUEUE_PENDING" = true ] || fail "a non-empty wake queue must read as pending"
-  pass "fm_supervision_status: FM_SUP_QUEUE_PENDING tracks state/.wake-queue"
+  [ "$FM_SUP_NEEDED" = true ] || fail "a non-empty wake queue must require supervision"
+  fm_supervision_needed "$state" 300 || fail "queue-only home did not register as needing supervision"
+  pass "fm_supervision_status: a pending wake queue requires supervision"
 }
 
 test_predicate_x_mode_needs_supervision() {
