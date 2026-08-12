@@ -8,11 +8,12 @@
 #
 # ALWAYS fail-open: this script exits 0 on every path. A focus-record failure,
 # missing jq, unwritable state, non-primary scope, or operational/injected input
-# must never block or delay the captain's prompt. The owner script
-# (bin/fm-focus.sh) remains the hard-refusal surface for operators and tests.
+# must never prevent the captain's prompt. Adapter waits are bounded.
+# The owner script (bin/fm-focus.sh) remains the hard-refusal surface for
+# operators and tests.
 #
 # Usage:
-#   <hook JSON on stdin> | bin/fm-focus-prompt-hook.sh [--claude|--codex|--grok|--kimi]
+#   <hook JSON on stdin> | bin/fm-focus-prompt-hook.sh [--claude|--codex|--grok|--pi|--opencode|--kimi]
 #   bin/fm-focus-prompt-hook.sh --prompt '<text>' [--summary S] ...
 #
 # Prompt extraction (stdin JSON):
