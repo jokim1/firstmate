@@ -105,15 +105,15 @@ wait_poll_cycle() {  # <state> <pid> [limit-ticks]
 # generous budget can only remove that false negative - a watcher that never
 # exits still fails the assertion when the budget runs out.
 wait_numeric_file() {
-  local file=$1 limit=${2:-30} i=0 value
-  while [ "$i" -lt "$limit" ]; do
+  local file=$1 seconds=${2:-30} deadline value
+  deadline=$((SECONDS + seconds))
+  while [ "$SECONDS" -lt "$deadline" ]; do
     value=$(cat "$file" 2>/dev/null || true)
     case "$value" in
       ''|*[!0-9]*) ;;
       *) return 0 ;;
     esac
     sleep 0.1
-    i=$((i + 1))
   done
   return 1
 }
@@ -174,7 +174,45 @@ record_pi_busy() {  # <state-dir> <id>
     --source pi-ext --event agent-start
 }
 
-reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
+reap() {
+  local pid=$1
+  kill -TERM "$pid" 2>/dev/null || true
+  # EXIT cleanup can block on recovery-marker locks. Keep intentional fixture
+  # shutdown bounded, matching the shared helper used by watch-arm tests.
+  wait_for_exit "$pid" 10 || true
+}
+
+reap_for_ack() {  # <pid> <state>
+  local pid=$1 state=$2 i=0
+  # Freeze the watcher at a lock-free boundary before TERM. Otherwise the test
+  # can interrupt it while it owns a recovery lock, forcing bounded cleanup to
+  # escalate before the acknowledgement marker can be published.
+  while [ "$i" -lt 120 ] && is_live_non_zombie "$pid"; do
+    kill -STOP "$pid" 2>/dev/null || break
+    if [ ! -e "$state/.watcher-down.lock" ] && [ ! -L "$state/.watcher-down.lock" ] \
+      && [ ! -e "$state/.wake-queue.lock" ] && [ ! -L "$state/.wake-queue.lock" ]; then
+      break
+    fi
+    kill -CONT "$pid" 2>/dev/null || true
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -TERM "$pid" 2>/dev/null || true
+  kill -CONT "$pid" 2>/dev/null || true
+  # These cases assert the recovery acknowledgement contract, so wait for the
+  # EXIT trap's durable boundary before bounded cleanup may escalate to KILL.
+  i=0
+  while [ "$i" -lt 120 ] && is_live_non_zombie "$pid" \
+    && [ ! -s "$state/.watcher-down" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ ! -s "$state/.watcher-down" ]; then
+    wait_for_exit "$pid" 10 || true
+    return 1
+  fi
+  wait_for_exit "$pid" 10 || true
+}
 
 # --- pure classifier predicates (fm-classify-lib.sh) ------------------------
 
@@ -307,7 +345,7 @@ test_stale_is_terminal_classifier() {
 }
 
 test_classifier_primitives() {
-  local dir state open activity
+  local dir state open activity start endpoint ident
   dir=$(make_case classify-primitives); state="$dir/state"
   printf 'working: a\n\ndone: b\n\n' > "$state/x.status"
   [ "$(last_status_line "$state/x.status")" = "done: b" ] || fail "last_status_line did not return the last non-blank line"
@@ -329,6 +367,61 @@ test_classifier_primitives() {
     || fail "done: not a terminal verb"
   status_is_terminal_verb "working: rebased onto merged #76" \
     && fail "working: wrongly classed as terminal verb"
+  # Capacity-freeing verbs for the Phase 2 refill wake: terminal + paused + resolved.
+  status_frees_capacity "done: ready in branch" || fail "done: does not free capacity"
+  status_frees_capacity "failed: tests red" || fail "failed: does not free capacity"
+  status_frees_capacity "blocked: needs credential" || fail "blocked: does not free capacity"
+  status_frees_capacity "paused: rate limit" || fail "paused: does not free capacity"
+  status_frees_capacity "needs-decision: pick A" || fail "needs-decision: does not free capacity"
+  status_frees_capacity "resolved [key=q1]: answered: use A" || fail "resolved: does not free capacity"
+  FM_CLASSIFY_PAUSED_VERB=awaiting status_frees_capacity "awaiting: rate limit" \
+    || fail "custom pause verb does not free capacity"
+  FM_CLASSIFY_RESOLVE_VERB=answered status_frees_capacity "answered [key=q1]: use A" \
+    || fail "custom resolution verb does not free capacity"
+  FM_CLASSIFY_PAUSED_VERB=awaiting status_frees_capacity "paused: rate limit" \
+    && fail "default pause verb frees capacity despite override"
+  FM_CLASSIFY_RESOLVE_VERB=answered status_frees_capacity "resolved [key=q1]: use A" \
+    && fail "default resolution verb frees capacity despite override"
+  status_frees_capacity "working: implementing" && fail "working: wrongly frees capacity"
+  status_frees_capacity "captain-held [key=q1]: parked" && fail "captain-held: wrongly frees capacity"
+  # Span-keyed refill: only newly appended freeing lines count, not a stale tail.
+  printf 'working: a\nresolved [key=q1]: answered: use A\n' > "$state/span.status"
+  endpoint=$(wc -c < "$state/span.status" | tr -d ' ')
+  ident=$(_fm_open_decisions_file_ident "$state/span.status")
+  status_span_frees_capacity "$state/span.status" 0 "$endpoint" "$ident" \
+    || fail "unclassified span with resolved: does not free capacity"
+  start=$endpoint
+  status_span_frees_capacity "$state/span.status" "$start" "$endpoint" "$ident" \
+    && fail "empty span after classified resolved: wrongly frees capacity"
+  printf 'working: still going\n' >> "$state/span.status"
+  endpoint=$(wc -c < "$state/span.status" | tr -d ' ')
+  status_span_frees_capacity "$state/span.status" "$start" "$endpoint" "$ident" \
+    && fail "working: append after classified resolved: wrongly frees capacity"
+  printf 'done: ready\n' >> "$state/span.status"
+  status_span_frees_capacity "$state/span.status" "$start" "$endpoint" "$ident" \
+    && fail "done: append after captured endpoint wrongly frees capacity"
+  endpoint=$(wc -c < "$state/span.status" | tr -d ' ')
+  status_span_frees_capacity "$state/span.status" "$start" "$endpoint" "$ident" \
+    || fail "new done: append in span does not free capacity"
+  # Identity flip mid-read (FM_STATUS_IDENTITY_READER) must refuse the span
+  # rather than classify a mixed-identity freeing line as a refill. The counter
+  # path is fixed under $state so successive reader subprocesses share it
+  # (a $$ path would reset per invocation and never flip).
+  # shellcheck disable=SC2016 # single quotes are deliberate: variables expand when the generated reader runs
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' "count_file='$state/ident-flip.count'"
+    printf '%s\n' 'n=0'
+    printf '%s\n' '[ -f "$count_file" ] && n=$(cat "$count_file")'
+    printf '%s\n' 'n=$((n + 1))'
+    printf '%s\n' 'printf %s "$n" > "$count_file"'
+    printf '%s\n' 'if [ "$n" -eq 1 ]; then printf "strong:1:1:before"; else printf "strong:2:2:after"; fi'
+  } > "$state/ident-flip.sh"
+  chmod +x "$state/ident-flip.sh"
+  rm -f "$state/ident-flip.count"
+  FM_STATUS_IDENTITY_READER="$state/ident-flip.sh" \
+    status_span_frees_capacity "$state/span.status" 0 "$endpoint" "strong:1:1:before" \
+    && fail "identity mismatch mid-read wrongly freed capacity"
   status_is_captain_relevant "merged" || fail "legacy bare merged free-text not captain-relevant"
   status_is_captain_relevant "PR ready https://x/pull/2" \
     || fail "legacy bare PR ready free-text not captain-relevant"
@@ -1519,6 +1612,9 @@ test_actionable_signal_surfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the actionable signal failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null || fail "actionable signal was not queued"
   [ -s "$state/.hb-surfaced-task" ] || fail "actionable signal did not record the surfaced marker"
+  # Capacity-freeing needs-decision also enqueues a refill wake.
+  refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+  [ "$refill_n" -eq 1 ] || fail "needs-decision signal should enqueue exactly one refill, got $refill_n"
   pass "captain-relevant signal is surfaced (queue + exit) and marked surfaced"
 }
 
@@ -1792,6 +1888,361 @@ test_permission_recovery_surfaces_preserved_status() {
   pass "permission recovery surfaces content from the unadvanced position"
 }
 
+# Phase 2: newly classified capacity-freeing statuses enqueue refill; working does not.
+test_capacity_freeing_status_enqueues_refill() {
+  local dir state fakebin out drain_out status_file pid verb refill_n
+  # paused: is not captain-relevant; force not-provably-working so the path surfaces.
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · fake default'
+  for verb in 'done: ready' 'failed: boom' 'blocked: wait' 'paused: external'; do
+    dir=$(make_case "refill-${verb%%:*}"); state="$dir/state"; fakebin="$dir/fakebin"
+    out="$dir/watch.out"; drain_out="$dir/drain.out"
+    status_file="$state/task.status"
+    printf '%s\n' "$verb" > "$status_file"
+    watch_bg "$state" "$fakebin" "$out"
+    pid=$!
+    wait_for_exit "$pid" 120 || fail "watcher did not exit for capacity-freeing status: $verb"
+    FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+      || fail "drain failed after capacity-freeing status: $verb"
+    refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+    [ "$refill_n" -eq 1 ] || fail "expected one refill for '$verb', got $refill_n: $(cat "$drain_out")"
+    grep -F 'refill: re-evaluate ready work against free capacity' "$drain_out" >/dev/null \
+      || fail "refill payload missing for '$verb'"
+  done
+  unset FM_FAKE_CREW_STATE
+  pass "newly classified capacity-freeing status verbs enqueue a refill"
+}
+
+test_working_status_does_not_enqueue_refill() {
+  local dir state fakebin out drain_out status_file pid
+  dir=$(make_case refill-working); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+  printf 'working: implementing the fix\n' > "$status_file"
+  # Not provably working so the signal surfaces (not absorbed) - still no refill.
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · fake default'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for non-working working: note"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after working: note failed"
+  if awk -F '\t' '$3 == "refill" { found=1 } END { exit found ? 0 : 1 }' "$drain_out"; then
+    fail "working: status must not enqueue a refill: $(cat "$drain_out")"
+  fi
+  unset FM_FAKE_CREW_STATE
+  pass "working status does not enqueue a refill wake"
+}
+
+test_resolved_while_working_enqueues_refill_only() {
+  local dir state fakebin out drain_out status_file pid refill_n signal_n
+  dir=$(make_case refill-resolved); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+  printf 'needs-decision [key=q1]: pick A\nresolved [key=q1]: answered: use A\n' > "$status_file"
+  # Crew is still working after the decision was closed - signal is absorbed,
+  # but refill must still surface so firstmate re-evaluates capacity.
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for resolved-while-working refill"
+  grep -F 'refill: re-evaluate ready work against free capacity' "$out" >/dev/null \
+    || fail "watcher did not print the refill reason for resolved-while-working"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after resolved-while-working failed"
+  refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+  [ "$refill_n" -eq 1 ] || fail "expected one refill for resolved-while-working, got $refill_n"
+  signal_n=$(awk -F '\t' '$3 == "signal" { n++ } END { print n + 0 }' "$drain_out")
+  [ "$signal_n" -eq 0 ] || fail "resolved-while-working should absorb signal and surface refill only, got $signal_n signals"
+  unset FM_FAKE_CREW_STATE
+  pass "resolved while working enqueues refill without a signal wake"
+}
+
+test_refill_waits_for_marker_commit() {
+  local variant dir state fakebin out drain_out status_file marker pid i refill_n signal_n queue_n queue_after retry_started retry_elapsed
+  for variant in refill-only actionable; do
+    dir=$(make_case "refill-marker-$variant"); state="$dir/state"; fakebin="$dir/fakebin"
+    out="$dir/watch.out"; drain_out="$dir/drain.out"
+    status_file="$state/task.status"; marker="$state/.seen-task_status"
+    case "$variant" in
+      refill-only)
+        printf 'needs-decision [key=q1]: pick A\nresolved [key=q1]: answered: use A\n' > "$status_file"
+        export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
+        ;;
+      actionable)
+        printf 'done: ready in branch\n' > "$status_file"
+        export FM_FAKE_CREW_STATE='state: unknown · source: none · fake default'
+        ;;
+    esac
+    mkdir "$marker"
+    watch_bg "$state" "$fakebin" "$out"
+    pid=$!
+    i=0
+    while [ "$i" -lt 120 ] && { [ ! -s "$state/.wake-queue" ] \
+      || [ -e "$state/.wake-queue.lock" ] || [ -L "$state/.wake-queue.lock" ]; } \
+      && is_live_non_zombie "$pid"; do
+      sleep 0.1
+      i=$((i + 1))
+    done
+    [ -s "$state/.wake-queue" ] \
+      || { reap "$pid"; fail "$variant marker failure never reached refill enqueue"; }
+    is_live_non_zombie "$pid" \
+      || fail "$variant marker failure delivered the wake before committing its endpoint"
+    [ ! -s "$out" ] \
+      || { reap "$pid"; fail "$variant marker failure printed a wake: $(cat "$out")"; }
+    queue_n=$(awk 'END { print NR + 0 }' "$state/.wake-queue")
+    retry_started=$(date +%s)
+    wait_poll_cycle "$state" "$pid" \
+      || { reap "$pid"; fail "$variant marker failure did not retry its endpoint"; }
+    retry_elapsed=$(( $(date +%s) - retry_started ))
+    [ "$retry_elapsed" -ge 1 ] \
+      || { reap "$pid"; fail "$variant marker failure retried without the poll delay"; }
+    queue_after=$(awk 'END { print NR + 0 }' "$state/.wake-queue")
+    [ "$queue_after" -eq "$queue_n" ] \
+      || { reap "$pid"; fail "$variant marker retry grew the queue from $queue_n to $queue_after rows"; }
+    signal_n=$(awk -F '\t' '$3 == "signal" { n++ } END { print n + 0 }' "$state/.wake-queue")
+    case "$variant:$signal_n" in
+      refill-only:0|actionable:[1-9]*) ;;
+      *) { reap "$pid"; fail "$variant marker failure queued $signal_n signal wakes"; } ;;
+    esac
+
+    rmdir "$marker"
+    wait_for_exit "$pid" 120 \
+      || { reap "$pid"; fail "$variant did not retry after marker recovery"; }
+    FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+      || fail "$variant drain after marker recovery failed"
+    refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+    [ "$refill_n" -eq 1 ] \
+      || fail "$variant marker retry queued $refill_n refills: $(cat "$drain_out")"
+    signal_n=$(awk -F '\t' '$3 == "signal" { n++ } END { print n + 0 }' "$drain_out")
+    case "$variant:$signal_n" in
+      refill-only:0|actionable:1) ;;
+      *) fail "$variant marker retry drained $signal_n signal wakes: $(cat "$drain_out")" ;;
+    esac
+  done
+  unset FM_FAKE_CREW_STATE
+  pass "refill wakes wait for classified marker commits and retry failures"
+}
+
+test_refill_retry_surfaces_other_signals() {
+  local dir state fakebin out status_file marker pid i
+  dir=$(make_case refill-retry-other-signal); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; status_file="$state/task.status"; marker="$state/.seen-task_status"
+  printf 'resolved: frees capacity\n' > "$status_file"
+  mkdir "$marker"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  i=0
+  while [ "$i" -lt 120 ] && { [ ! -s "$state/.wake-queue" ] \
+    || [ -e "$state/.wake-queue.lock" ] || [ -L "$state/.wake-queue.lock" ]; } \
+    && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$state/.wake-queue" ] \
+    || { reap "$pid"; fail "marker failure never reached refill enqueue before other signal"; }
+  printf 'blocked: unrelated supervision\n' > "$state/other.status"
+  wait_for_exit "$pid" 120 \
+    || { reap "$pid"; fail "marker retry starved an unrelated signal"; }
+  grep -F "$state/other.status" "$out" >/dev/null \
+    || fail "unrelated signal did not surface during marker retry: $(cat "$out")"
+  unset FM_FAKE_CREW_STATE
+  pass "refill marker retries do not starve unrelated signals"
+}
+
+test_refill_retry_abandons_stale_endpoint() {
+  local dir state fakebin out status_file marker pid i rc
+  dir=$(make_case refill-retry-stale); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; status_file="$state/task.status"; marker="$state/.seen-task_status"
+  printf 'resolved: frees capacity\n' > "$status_file"
+  mkdir "$marker"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  i=0
+  while [ "$i" -lt 120 ] && { [ ! -s "$state/.wake-queue" ] \
+    || [ -e "$state/.wake-queue.lock" ] || [ -L "$state/.wake-queue.lock" ]; } \
+    && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$state/.wake-queue" ] \
+    || { reap "$pid"; fail "marker failure never reached refill enqueue before stale capture"; }
+  rmdir "$marker"
+  rm -f "$status_file"
+  i=0
+  while [ "$i" -lt 50 ] && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  is_live_non_zombie "$pid" \
+    && { reap "$pid"; fail "stale refill endpoint remained in retry forever"; }
+  wait "$pid"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "stale refill endpoint did not exit fail-awake"
+  unset FM_FAKE_CREW_STATE
+  pass "stale refill endpoints exit fail-awake"
+}
+
+test_refill_retry_preserves_successful_endpoints() {
+  local dir state fakebin out a_status b_status b_marker pid i new_end marked_end
+  dir=$(make_case refill-retry-partial); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; a_status="$state/a.status"; b_status="$state/b.status"
+  b_marker="$state/.seen-b_status"
+  printf 'done: first\n' > "$a_status"
+  printf 'done: second\n' > "$b_status"
+  mkdir "$b_marker"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · fake default'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  i=0
+  while [ "$i" -lt 120 ] && { [ ! -s "$state/.wake-queue" ] \
+    || [ -e "$state/.wake-queue.lock" ] || [ -L "$state/.wake-queue.lock" ]; } \
+    && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$state/.wake-queue" ] \
+    || { reap "$pid"; fail "partial marker failure never reached refill enqueue"; }
+  printf 'resolved: later transition\n' >> "$a_status"
+  prime_status_seen "$state" "$a_status" \
+    || { reap "$pid"; fail "could not advance successful endpoint during partial retry"; }
+  new_end=$(size_of "$a_status")
+  wait_poll_cycle "$state" "$pid" \
+    || { reap "$pid"; fail "partial marker failure did not complete another cycle"; }
+  marked_end=$(status_presentation_marker_offset "$state/.seen-a_status" "$a_status")
+  [ "$marked_end" -eq "$new_end" ] \
+    || { reap "$pid"; fail "partial retry regressed successful endpoint from $new_end to $marked_end"; }
+  rmdir "$b_marker"
+  wait_for_exit "$pid" 120 \
+    || { reap "$pid"; fail "partial marker retry did not finish after recovery"; }
+  unset FM_FAKE_CREW_STATE
+  pass "partial refill retries preserve successful endpoints"
+}
+
+test_refill_mixed_batch_records_unclassified_status() {
+  local dir state fakebin out good_status unreadable_status pid
+  dir=$(make_case refill-mixed-unreadable); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; good_status="$state/good.status"
+  unreadable_status="$state/unreadable.status"
+  printf 'done: ready in branch\n' > "$good_status"
+  ln -s "$dir/missing-status-target" "$unreadable_status"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · fake default'
+
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 120 \
+    || { reap "$pid"; fail "mixed refill batch did not surface"; }
+  ack_stopped_cycle "$state" || fail "could not acknowledge mixed refill batch"
+  touch "$state/.last-check" "$state/.last-heartbeat"
+
+  : > "$out"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_poll_cycle "$state" "$pid" \
+    || { reap "$pid"; fail "unchanged unclassified status repeated after mixed refill batch: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] \
+    || { reap "$pid"; fail "unchanged unclassified status queued another wake after mixed refill batch"; }
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  pass "mixed refill batches record unclassified status signatures"
+}
+
+test_n_capacity_transitions_collapse_to_one_refill() {
+  local dir state fakebin out drain_out pid refill_n i
+  dir=$(make_case refill-collapse); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  # Three tasks free capacity before any drain: watcher exits on the first, but
+  # append three refills directly then drain to pin the queue-side collapse.
+  # Behavioral watcher path: first done: wakes with signal+refill; remaining
+  # transitions are simulated via the production enqueue helper while the first
+  # refill is still queued.
+  printf 'done: first\n' > "$state/a.status"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for first capacity-freeing transition"
+  # Two more capacity-freeing transitions land before firstmate drains.
+  i=0
+  while [ "$i" -lt 2 ]; do
+    FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_wake_enqueue_refill' _ "$ROOT/bin/fm-wake-lib.sh" \
+      || fail "extra refill enqueue failed"
+    i=$((i + 1))
+  done
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after N capacity transitions failed"
+  refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+  [ "$refill_n" -eq 1 ] || fail "N transitions before drain must collapse to one refill, got $refill_n"
+  pass "N capacity-freeing transitions before drain collapse to one refill"
+}
+
+# Normal-path regression for the advisory-refill guarantee at the watcher
+# publication boundary: a later turn-end and working: append do not replay the
+# resolved: or done: transitions exercised here.
+test_refill_stale_tail_does_not_reenqueue() {
+  local dir state fakebin out drain_out status_file turn_ended pid refill_n
+  dir=$(make_case refill-transition); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+  turn_ended="$state/task.turn-ended"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
+
+  # 1) New resolved: append -> exactly one refill (signal absorbed while working).
+  printf 'needs-decision [key=q1]: pick A\nresolved [key=q1]: answered: use A\n' > "$status_file"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for new resolved: refill"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after resolved: transition failed"
+  refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+  [ "$refill_n" -eq 1 ] || fail "new resolved: should enqueue one refill, got $refill_n"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the resolved: refill wake"
+
+  # 2) Later turn-end while the tail is still resolved: -> no refill.
+  : > "$out"
+  : > "$turn_ended"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"
+    fail "turn-end after classified resolved: woke the watcher: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "turn-end after classified resolved: enqueued a wake: $(cat "$state/.wake-queue")"
+  # Stop at a lock-free boundary and ack recovery so the next cycle is not a
+  # rearm-resurface of this intentional absorb stop.
+  reap_for_ack "$pid" "$state" || fail "turn-end absorb stop did not publish recovery state"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the turn-end absorb stop"
+
+  # 3) New done: append -> one refill again (also surfaces as captain-relevant).
+  : > "$out"
+  printf 'done: ready in branch\n' >> "$status_file"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for new done: transition"
+  grep -F "signal: $status_file" "$out" >/dev/null \
+    || fail "new done: did not surface as a signal: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after done: transition failed"
+  refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+  [ "$refill_n" -eq 1 ] || fail "new done: should enqueue one refill, got $refill_n: $(cat "$drain_out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the done: refill wake"
+
+  # 4) working: append after that -> no refill.
+  : > "$out"
+  printf 'working: still polishing\n' >> "$status_file"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"
+    fail "working: append after classified done: woke the watcher: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "working: append enqueued a wake: $(cat "$state/.wake-queue")"
+  reap "$pid"
+
+  unset FM_FAKE_CREW_STATE
+  pass "later turn-end and working: append do not re-enqueue stale refill tails"
+}
+
 test_terminal_stale_surfaced() {
   local dir state fakebin out drain_out capture_file window key pane_hash sig pid
   dir=$(make_case terminal-stale); state="$dir/state"; fakebin="$dir/fakebin"
@@ -1857,7 +2308,7 @@ test_stale_terminal_status_overridden_by_active_run() {
   [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on absorb"
   [ -s "$state/.stale-since-$key" ] || fail "stale-since escalation timer was not recorded on absorb"
   [ ! -e "$state/.hb-surfaced-validating" ] || fail "an absorbed wake must not mark the status line as surfaced"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional phase-A watcher stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A watcher stop"
 
   # Phase B: backdate the idle timer past the threshold; the run genuinely
@@ -1910,7 +2361,7 @@ test_nonterminal_stale_provably_working_absorbed_then_escalated() {
   [ ! -s "$state/.wake-queue" ] || fail "fresh provably-working stale enqueued a wake during absorb"
   [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on absorb"
   [ -s "$state/.stale-since-$key" ] || fail "stale-since escalation timer was not recorded on absorb"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional phase-A watcher stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A watcher stop"
 
   # Phase B: backdate the idle timer past the threshold; the next run escalates.
@@ -1978,7 +2429,7 @@ test_nonterminal_stale_not_working_surfaced() {
 # the pause's own status-file age, so a churny idle pane cannot reset the cadence)
 # for a recheck, so a forgotten pause cannot rot invisibly.
 test_nonterminal_stale_paused_absorbed_then_resurfaced() {
-  local dir state fakebin out drain_out capture_file window key pane_hash sig pid back statusf
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid back statusf i
   dir=$(make_case nonterminal-stale-paused); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
   window="test:fm-held"
@@ -2011,7 +2462,7 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on paused absorb"
   [ -e "$state/.paused-$key" ] || fail "paused flag not recorded on absorb"
   [ ! -e "$state/.stale-since-$key" ] || fail "a paused absorb must not start the wedge timer"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional paused phase-A stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional paused phase-A stop"
 
   # Phase B: age the pause past the (now normal) threshold by backdating its
@@ -2811,7 +3262,7 @@ test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash() {
   [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "unchanged stale hash did not enter paused mode"; }
   [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "pause transition retained its wedge timer"; }
   wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "a stale hash that entered pause was wedge-escalated: $(cat "$out")"; }
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional entered-pause stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional entered-pause watcher stop"
 
   printf 'working: upstream landed, resuming\n' > "$state/transition.status"
@@ -2892,7 +3343,7 @@ test_paused_authoritative_working_preserves_wedge_timer() {
   sleep 2
   [ "$(cat "$state/.stale-since-$key" 2>/dev/null || true)" = "$since" ] \
     || { reap "$pid"; fail "repeat authoritative working recheck reset the wedge timer"; }
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional authoritative-working stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional authoritative-working stop"
 
   echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
@@ -2945,7 +3396,7 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold() {
   if ! wait_poll_cycle "$state" "$pid"; then
     reap "$pid"; fail "watcher exited on the priming round (should absorb): $(cat "$out")"
   fi
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional wedge priming stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional wedge priming stop"
 
   n=1
@@ -3072,7 +3523,7 @@ test_busy_pane_stable_hash_escalates_past_turn_age_bound() {
     reap "$pid"; fail "a stable-hash busy pane past the turn-age bound escalated before the wedge threshold: $(cat "$out")"
   fi
   [ -s "$state/.stale-since-$key" ] || fail "a stable-hash busy pane past the turn-age bound did not start a wedge timer"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional stable-hash phase-A stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional stable-hash phase-A stop"
 
   # Phase B: backdate the wedge timer past the threshold; the next poll escalates.
@@ -3115,7 +3566,7 @@ test_busy_pane_changing_hash_escalates_past_turn_age_bound() {
     reap "$pid"; fail "a changing-hash busy pane past the turn-age bound escalated before the wedge threshold: $(cat "$out")"
   fi
   [ -s "$state/.stale-since-$key" ] || fail "a changing-hash busy pane past the turn-age bound did not start a wedge timer"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional changing-hash phase-A stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional changing-hash phase-A stop"
 
   # Phase B: another tick (still a fresh, never-before-seen hash) plus a
@@ -3228,7 +3679,7 @@ test_busy_pane_repeated_escalation_reaches_demand_deep_inspection() {
   if ! wait_poll_cycle "$state" "$pid"; then
     reap "$pid"; fail "priming round for busy turn-age escalation was not absorbed: $(cat "$out")"
   fi
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional busy-wedge priming stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional busy-wedge priming stop"
 
   n=1
@@ -3584,7 +4035,7 @@ test_busy_pane_default_turn_age_bound_is_3600s() {
     reap "$pid"; fail "a 5-minute-old completed turn tripped the default busy-turn-age bound: $(cat "$out")"
   fi
   [ ! -e "$state/.stale-since-$key" ] || fail "a 5-minute-old completed turn started a wedge timer under the default bound"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional five-minute-bound stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional five-minute-bound stop"
 
   set_mtime $(( $(date +%s) - 4000 )) "$state/busy-default.turn-ended"
@@ -3627,7 +4078,7 @@ test_nonterminal_stale_repairs_missing_or_corrupt_timer() {
     fail "watcher exited while repairing a missing stale-since timer: $(cat "$out")"
   fi
   [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "missing stale-since repair enqueued a wake"; }
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional missing-timer repair stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional missing-timer repair stop"
 
   printf 'corrupt\n' > "$state/.stale-since-$key"
@@ -4726,6 +5177,16 @@ test_release_completion_survives_a_later_routine_append
 test_routine_appends_after_a_classified_event_stay_absorbed
 test_unreadable_status_reports_once_per_file_state
 test_permission_recovery_surfaces_preserved_status
+test_capacity_freeing_status_enqueues_refill
+test_working_status_does_not_enqueue_refill
+test_resolved_while_working_enqueues_refill_only
+test_refill_waits_for_marker_commit
+test_refill_retry_surfaces_other_signals
+test_refill_retry_abandons_stale_endpoint
+test_refill_retry_preserves_successful_endpoints
+test_refill_mixed_batch_records_unclassified_status
+test_n_capacity_transitions_collapse_to_one_refill
+test_refill_stale_tail_does_not_reenqueue
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated

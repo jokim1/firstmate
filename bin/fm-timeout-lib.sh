@@ -87,7 +87,7 @@ fm_run_bash_timeout() {
 }
 
 fm_run_external_timeout() {
-  local runner=$1 seconds=$2 status_file runner_pid runner_rc command_rc
+  local runner=$1 seconds=$2 status_file runner_pid runner_rc command_rc cleanup_wait=0
   shift 2
   status_file=$(mktemp "${TMPDIR:-/tmp}/fm-timeout-status.XXXXXX" 2>/dev/null) || return 124
   # Run timeout asynchronously so its pid - also the process-group id created
@@ -118,6 +118,10 @@ fm_run_external_timeout() {
   esac
   case "$runner_rc" in
     124|137)
+      while [ "$cleanup_wait" -lt 10 ] && kill -0 -- "-$runner_pid" 2>/dev/null; do
+        sleep 0.1
+        cleanup_wait=$((cleanup_wait + 1))
+      done
       kill -KILL -- "-$runner_pid" 2>/dev/null || true
       return 124
       ;;

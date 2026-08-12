@@ -38,12 +38,67 @@ test_signal_passes_through_and_exits_zero() {
     printf 'done: synthetic wake\n' > "$home/state/demo.status"
   ) &
   status=0
-  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 8 >"$out" 2>"$err" || status=$?
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 30 >"$out" 2>"$err" || status=$?
   expect_code 0 "$status" "signal checkpoint exit"
   assert_contains "$(cat "$out")" "signal:" "signal wake was not passed through"
   drained=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh")
   assert_contains "$drained" $'\tsignal\tdemo.status\t' "signal wake was not queued durably"
   pass "checkpoint passes through a real watcher wake and leaves the queue for drain"
+}
+
+test_refill_passes_through_and_exits_zero() {
+  local home fixture out err status
+  home=$(make_home refill)
+  fixture="$home/fixture"
+  out="$home/out.txt"
+  err="$home/err.txt"
+  mkdir -p "$fixture/bin"
+  cp "$CHECKPOINT" "$ROOT/bin/fm-timeout-lib.sh" "$fixture/bin/"
+  cat > "$fixture/bin/fm-watch.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'refill: re-evaluate ready work against free capacity\n'
+SH
+  chmod +x "$fixture/bin/fm-watch-checkpoint.sh" "$fixture/bin/fm-watch.sh"
+  status=0
+  FM_HOME="$home" "$fixture/bin/fm-watch-checkpoint.sh" --seconds 2 >"$out" 2>"$err" || status=$?
+  expect_code 0 "$status" "refill checkpoint exit"
+  assert_contains "$(cat "$out")" "refill: re-evaluate ready work against free capacity" \
+    "refill wake was not passed through"
+  pass "checkpoint passes through refill-only wakes"
+}
+
+test_term_resistant_watcher_is_force_killed_at_deadline() {
+  local home fixture out err pid_file watcher_pid status
+  home=$(make_home term-resistant)
+  fixture="$home/fixture"
+  out="$home/out.txt"
+  err="$home/err.txt"
+  pid_file="$home/watcher.pid"
+  mkdir -p "$fixture/bin"
+  cp "$CHECKPOINT" "$ROOT/bin/fm-timeout-lib.sh" "$fixture/bin/"
+  cat > "$fixture/bin/fm-watch.sh" <<'SH'
+#!/usr/bin/env bash
+exec perl -e '
+  $SIG{TERM} = "IGNORE";
+  open my $fh, ">", $ENV{FM_TERM_RESISTANT_PID_FILE} or die $!;
+  print {$fh} "$$\n";
+  close $fh;
+  alarm 5;
+  $SIG{ALRM} = sub { kill "KILL", $$ };
+  sleep 600;
+'
+SH
+  chmod +x "$fixture/bin/fm-watch-checkpoint.sh" "$fixture/bin/fm-watch.sh"
+  status=0
+  FM_HOME="$home" FM_TERM_RESISTANT_PID_FILE="$pid_file" \
+    "$fixture/bin/fm-watch-checkpoint.sh" --seconds 1 >"$out" 2>"$err" || status=$?
+  expect_code 124 "$status" "TERM-resistant checkpoint exit"
+  assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 1s" \
+    "TERM-resistant checkpoint did not report its quiet deadline"
+  watcher_pid=$(cat "$pid_file")
+  ! kill -0 "$watcher_pid" 2>/dev/null \
+    || fail "TERM-resistant watcher survived the checkpoint's hard deadline"
+  pass "checkpoint force-kills a TERM-resistant watcher at its deadline"
 }
 
 test_registered_check_uses_preserved_watcher_environment() {
@@ -59,7 +114,7 @@ SH
   FM_HOME="$home" "$ROOT/bin/fm-check-register.sh" env-check >/dev/null \
     || fail "could not register checkpoint custom check"
   status=0
-  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 30 >"$out" 2>"$err" || status=$?
   expect_code 0 "$status" "check checkpoint exit"
   assert_contains "$(cat "$out")" "check:" "check wake was not passed through"
   assert_contains "$(cat "$out")" "FM_CHECK_INTERVAL=1" "watcher environment was not preserved"
@@ -83,5 +138,7 @@ test_existing_singleton_watcher_is_not_success() {
 
 test_quiet_checkpoint_exits_124_cleanly
 test_signal_passes_through_and_exits_zero
+test_refill_passes_through_and_exits_zero
+test_term_resistant_watcher_is_force_killed_at_deadline
 test_registered_check_uses_preserved_watcher_environment
 test_existing_singleton_watcher_is_not_success

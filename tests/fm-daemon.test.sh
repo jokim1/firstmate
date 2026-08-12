@@ -1619,6 +1619,62 @@ test_is_wake_reason_distinguishes_status_stdout() {
   pass "is_wake_reason distinguishes watcher wake reasons from singleton-status stdout"
 }
 
+test_durable_wake_batch_handles_refill_before_acknowledgement() {
+  local dir state
+  dir=$(make_supercase durable-refill)
+  state="$dir/state"
+  printf 'working: implementing\n' > "$state/task.status"
+  append_wake "$state" signal task.status "signal: $state/task.status" \
+    || fail "durable refill: signal append failed"
+  append_wake "$state" refill refill "refill: re-evaluate ready work against free capacity" \
+    || fail "durable refill: refill append failed"
+
+  FM_STATE_OVERRIDE="$state" handle_durable_wakes "signal: $state/task.status" "$state" \
+    || fail "durable refill: batch handling failed"
+
+  grep -F 'refill: re-evaluate ready work against free capacity' "$state/.subsuper-escalations" >/dev/null \
+    || fail "durable refill: mixed batch dropped refill before acknowledgement"
+  [ ! -s "$state/.wake-queue" ] || fail "durable refill: handled batch remained queued"
+  pass "durable mixed wake batches handle refill before acknowledgement"
+}
+
+# cf26324 / #2051 regression: a capacity-freeing captain-relevant status (done:)
+# already forces firstmate to re-evaluate capacity. A same-window refill wake
+# must self-handle so away-mode does not inject a second U+2063 digest.
+test_capacity_freeing_captain_status_covers_same_window_refill() {
+  local dir state decision
+  dir=$(make_supercase refill-covered)
+  state="$dir/state"
+  printf 'done: PR https://example.test/pr/42\n' > "$state/task.status"
+
+  append_wake "$state" refill refill "refill: re-evaluate ready work against free capacity" \
+    || fail "covered refill: refill append failed"
+  append_wake "$state" signal task.status "signal: $state/task.status" \
+    || fail "covered refill: signal append failed"
+
+  FM_STATE_OVERRIDE="$state" handle_durable_wakes "signal: $state/task.status" "$state" \
+    || fail "covered refill: batch handling failed"
+
+  grep -F 'task.status: done: PR https://example.test/pr/42' "$state/.subsuper-escalations" >/dev/null \
+    || fail "covered refill: done status was not escalated"
+  if grep -F 'refill: re-evaluate ready work against free capacity' "$state/.subsuper-escalations" >/dev/null 2>&1; then
+    fail "covered refill: same-window refill still escalated (would double-inject)"
+  fi
+  [ ! -e "$state/.subsuper-refill-covered" ] \
+    || fail "covered refill: one-shot marker was not consumed"
+  [ ! -s "$state/.wake-queue" ] || fail "covered refill: handled batch remained queued"
+
+  # After the window is consumed, a later refill-only wake must still escalate.
+  append_wake "$state" refill refill "refill: re-evaluate ready work against free capacity" \
+    || fail "covered refill: second refill append failed"
+  decision=$(classify_refill "$state")
+  case "$decision" in
+    escalate\|refill:*) ;;
+    *) fail "covered refill: later refill-only wake did not escalate (got: $decision)" ;;
+  esac
+  pass "capacity-freeing captain status covers same-window refill without dropping later refill-only wakes"
+}
+
 test_terminal_stale_escalate_leaves_no_marker() {
   local dir state win key
   dir=$(make_supercase stale-terminal-nomarker)
@@ -2825,6 +2881,8 @@ test_needs_decision_queued_row_escalates_once_as_the_decision
 test_captain_held_decision_owned_row_is_self_handled
 test_inject_skip_forces_self
 test_is_wake_reason_distinguishes_status_stdout
+test_durable_wake_batch_handles_refill_before_acknowledgement
+test_capacity_freeing_captain_status_covers_same_window_refill
 test_terminal_stale_escalate_leaves_no_marker
 test_signal_escalate_marks_seen_no_catchall_refire
 test_collapse_newlines_pure
