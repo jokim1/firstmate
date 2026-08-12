@@ -133,6 +133,18 @@ test_x_mode_without_live_watcher_stays_alarm() {
   pass "fm-guard stale banner: X-mode polling without a live watcher remains unhealthy"
 }
 
+test_queue_only_without_live_watcher_names_queue() {
+  local dir home out
+  dir=$(make_guard_case queue-only-no-live)
+  home=$(case_home "$dir")
+  rm -f "$home/state/task.meta"
+  printf 'queued wake\n' > "$home/state/.wake-queue"
+  out=$(run_guard_case "$dir")
+  assert_contains "$out" "Queued wakes need handling" "queue-only need must identify queued wakes"
+  assert_not_contains "$out" "X-mode relay polling" "queue-only need must not claim X-mode polling"
+  pass "fm-guard stale banner: queue-only supervision names queued wakes"
+}
+
 test_healthy_recovery_rearms_next_stale_episode() {
   local dir home out1 healthy out2 pid
   dir=$(make_guard_case healthy-recovery)
@@ -382,6 +394,7 @@ test_persistent_no_watcher_banner_names_missing_process
 test_persistent_no_watcher_episode_survives_beacon_touch
 test_fresh_beacon_without_live_watcher_stays_alarm
 test_x_mode_without_live_watcher_stays_alarm
+test_queue_only_without_live_watcher_names_queue
 test_healthy_recovery_rearms_next_stale_episode
 test_concurrent_same_episode_prints_one_full_banner
 test_home_isolation

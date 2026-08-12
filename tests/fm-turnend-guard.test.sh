@@ -251,6 +251,17 @@ test_hook_blocks_source_only_home() {
   pass "fm-turnend-guard: non-Claude path blocks a source-only home"
 }
 
+test_hook_blocks_queue_only_home_with_queue_reason() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-queue-only")
+  printf 'queued wake\n' > "$dir/state/.wake-queue"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "non-Claude hook must block when a queue-only home has no watcher"
+  assert_contains "$out" "Queued wakes need handling" "block reason must identify the queue-only supervision need"
+  assert_not_contains "$out" "X-mode relay polling" "queue-only block must not claim X-mode polling"
+  pass "fm-turnend-guard: queue-only homes report queued wake supervision"
+}
+
 test_hook_blocks_when_dead_lock_has_fresh_beacon() {
   local dir dead out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-dead-lock-fresh")
@@ -1497,6 +1508,19 @@ test_hook_claude_mode_verified_failure_alarm_is_loud_and_once() {
   pass "fm-turnend-guard --claude: verified fail-open is loud, bounded, attended, and non-repeating"
 }
 
+test_hook_claude_mode_queue_only_fail_open_names_queue() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-queue-only-alarm")
+  printf 'queued wake\n' > "$dir/state/.wake-queue"
+  seed_claude_failure "$dir"
+  seed_claude_budget "$dir" 3
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" true); status=$?
+  expect_code 0 "$status" "verified queue-only failure must take the bounded attended fail-open"
+  assert_contains "$out" "queued wakes pending handling" "queue-only fail-open must identify queued wakes"
+  assert_not_contains "$out" "X-mode relay polling active" "queue-only fail-open must not claim X-mode polling"
+  pass "fm-turnend-guard --claude: queue-only fail-open identifies queued wakes"
+}
+
 test_hook_claude_mode_fail_open_requires_notice_and_failure_epoch() {
   local no_notice notice_only out status
   no_notice=$(make_primary_dir "$TMP_ROOT/hook-claude-alarm-no-notice")
@@ -1610,6 +1634,7 @@ test_predicate_source_needs_supervision
 test_hook_silent_when_no_work_in_flight
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_source_only_home
+test_hook_blocks_queue_only_home_with_queue_reason
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
 test_hook_non_claude_health_ignores_claude_budget_contention
@@ -1659,6 +1684,7 @@ test_hook_claude_mode_concurrent_recovery_resets_are_idempotent
 test_hook_claude_mode_stale_rewake_epoch_blocks
 test_hook_claude_mode_budget_without_verified_failure_keeps_blocking
 test_hook_claude_mode_verified_failure_alarm_is_loud_and_once
+test_hook_claude_mode_queue_only_fail_open_names_queue
 test_hook_claude_mode_fail_open_requires_notice_and_failure_epoch
 test_hook_claude_mode_away_mode_never_uses_stop_autoarm_fail_open
 test_hook_claude_mode_allow_resets_budget
