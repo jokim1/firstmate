@@ -977,6 +977,9 @@ remote_secondmate_teardown() {
   fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE" || return 1
   rm -f -- "$STATE/$ID.turn-ended" "$STATE/$ID.progress"
   printf 'teardown %s complete (remote %s:%s)\n' "$ID" "$remote_host" "$remote_home"
+  # Capacity free: advisory refill so firstmate re-evaluates ready work.
+  fm_wake_enqueue_refill || \
+    echo "warning: could not enqueue fleet refill after remote teardown of $ID" >&2
   return 0
 }
 
@@ -4464,4 +4467,8 @@ elif teardown_owns_worktree; then
 else
   echo "teardown $ID complete (window $T; pool slot $WT left to task $TEARDOWN_SLOT_REASSIGNED_TO${TEARDOWN_SLOT_REASSIGNED_HOME:+ (home $TEARDOWN_SLOT_REASSIGNED_HOME)}, which it was reassigned to)"
 fi
+# Capacity free: advisory refill so firstmate re-evaluates ready work.
+# Multiple teardowns before drain collapse to one refill record (dedupe by kind).
+fm_wake_enqueue_refill || \
+  echo "warning: could not enqueue fleet refill after teardown of $ID" >&2
 backlog_refresh_reminder

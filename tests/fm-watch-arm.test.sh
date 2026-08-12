@@ -31,7 +31,8 @@ ARM_PID=
 # Start the real watcher as the singleton holder.
 start_seed_watcher() {  # <state> <fakebin> <watch-out>
   local state=$1 fakebin=$2 out=$3 i
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 \
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_POLL=5 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   SEED_PID=$!
   i=0
@@ -164,22 +165,22 @@ test_attached_arm_reports_the_delivered_wake() {
   fakebin="$dir/fakebin"
   out="$dir/watch.out"
   armout="$dir/arm.out"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
   start_seed_watcher "$state" "$fakebin" "$out"
   start_attached_arm "$state" "$fakebin" "$armout" 1
 
-  # A real captain-relevant status change: the watcher records it in the durable
-  # queue, prints its one reason line to its own stdout, and exits.
-  printf 'done: fixture finished\n' > "$state/demo.status"
+  printf 'resolved [key=fixture]: capacity freed\n' > "$state/demo.status"
   wait_for_exit "$SEED_PID" 120
-  grep -q '^signal:' "$out" || fail "seed watcher did not surface the signal wake: $(cat "$out")"
+  unset FM_FAKE_CREW_STATE
+  grep -q '^refill:' "$out" || fail "seed watcher did not surface the refill wake: $(cat "$out")"
 
   wait_for_exit "$ARM_PID" 120
   status=$?
-  grep -q 'demo.status' "$state/.wake-queue" \
+  grep -q $'\trefill\trefill\t' "$state/.wake-queue" \
     || fail "the wake was not durably recorded, so this case proves nothing"
   ! grep -qF 'watcher: FAILED' "$armout" \
     || fail "attached arm reported a delivered wake as a failed cycle: $(cat "$armout")"
-  grep -q '^signal:' "$armout" \
+  grep -q '^refill:' "$armout" \
     || fail "attached arm did not report the durably recorded wake reason: $(cat "$armout")"
   expect_code 0 "$status" "an attached arm whose cycle delivered a wake must close successfully"
   grep -q 'reason=attached-delivered-wake' "$state/.watch-cycle-exits.log" \
