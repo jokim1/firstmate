@@ -424,6 +424,13 @@ classify_heartbeat() {
   printf 'self|heartbeat (catch-all scan runs in housekeeping)'
 }
 
+# Advisory fleet refill: firstmate (or the away-mode primary injection) must
+# re-evaluate ready work against free capacity. The daemon never selects or
+# spawns from this wake itself.
+classify_refill() {
+  printf 'escalate|refill: re-evaluate ready work against free capacity'
+}
+
 # Anything unrecognized is escalated (fail-safe).
 classify_unknown() {  # <reason>
   printf 'escalate|unknown wake: %s' "$1"
@@ -1207,7 +1214,7 @@ should_force_self() {  # <reason>
 is_wake_reason() {  # <reason>
   local reason=$1
   case "$reason" in
-    signal:*|stale:*|check:*|heartbeat|heartbeat:*) return 0 ;;
+    signal:*|stale:*|check:*|heartbeat|heartbeat:*|refill|refill:*) return 0 ;;
   esac
   return 1
 }
@@ -1233,6 +1240,7 @@ handle_wake() {  # <reason> <state>
               esac ;;
     check:*)  decision=$(classify_check "$reason") ;;
     heartbeat|heartbeat:*) decision=$(classify_heartbeat) ;;
+    refill|refill:*) decision=$(classify_refill) ;;
     *)        decision=$(classify_unknown "$reason") ;;
   esac
   action=${decision%%|*}
@@ -1308,7 +1316,7 @@ handle_durable_wakes() {  # <watcher-reason> <state>
   while IFS="$tab" read -r epoch sequence kind key payload rest; do
     case "$epoch" in ''|*[!0-9]*) continue ;; esac
     case "$sequence" in ''|*[!0-9]*) continue ;; esac
-    case "$kind" in signal|stale|check|heartbeat) ;; *) continue ;; esac
+    case "$kind" in signal|stale|check|heartbeat|refill) ;; *) continue ;; esac
     handle_wake "$payload" "$state"
     handled=$((handled + 1))
   done < "$out"
