@@ -94,6 +94,13 @@
 #                          external-wait pause rows do not feed this escalation,
 #                          observation is read-only, and one parent notification
 #                          covers each no-progress episode
+#   refill: ...            advisory fleet refill after a capacity-freeing lifecycle
+#                          transition (status done/failed/blocked/paused/
+#                          needs-decision/resolved, merged PR poll, or teardown);
+#                          enqueued as kind=refill and drained for firstmate to
+#                          re-evaluate ready work against free capacity. Never
+#                          selects or spawns tasks itself. Multiple transitions
+#                          collapse to one queued refill record (dedupe by kind).
 # For normal supervision, resume the session-start primary-harness protocol
 # after each printed reason. Direct duplicate invocations of this script still
 # no-op through the watcher singleton lock.
@@ -1986,6 +1993,10 @@ while :; do
             triage_log "absorbed duplicate merged PR poll result for $id"
             continue
           fi
+          # Capacity freed on the FIRST merged-PR notification: one advisory
+          # refill wake (deduped by kind at drain). Duplicate already-recorded
+          # merges are absorbed above and never enqueue again.
+          fm_wake_enqueue_refill || exit 1
           wake "$reason"
         fi
         fm_wake_append check "$c" "$reason" || exit 1
@@ -2025,6 +2036,24 @@ while :; do
 $pending
 EOF
     reason="signal:$files"
+    # Capacity-freeing status transitions enqueue ONE advisory refill wake
+    # (deduped by kind at drain). Paused and resolved free capacity without
+    # being captain-relevant, so detect them here before the absorb decision.
+    # Working notes never free capacity and never enqueue refill.
+    need_refill=0
+    while IFS=$(printf '\t') read -r sf sig f; do
+      [ -n "$sf" ] || continue
+      case "$f" in *.status) ;; *) continue ;; esac
+      if status_frees_capacity "$(last_status_line "$f")"; then
+        need_refill=1
+        break
+      fi
+    done <<EOF
+$pending
+EOF
+    if [ "$need_refill" -eq 1 ]; then
+      fm_wake_enqueue_refill || exit 1
+    fi
     # Triage: a signal is ACTIONABLE when any of these holds (cheapest first):
     #   - the away-mode daemon owns triage (afk) and wants every wake;
     #   - any status file gained a captain-relevant event since it was last
@@ -2048,6 +2077,9 @@ EOF
     # checks are costly (a bounded no-mistakes call, then a pane capture), so the ||
     # ordering evaluates them ONLY for a non-afk signal with no captain-relevant
     # status span, and the capture only once the authoritative verdict comes up short.
+    # A refill-only signal (a capacity-freeing resolved:/paused: while the crew is
+    # still working) already enqueued its advisory refill wake above; it advances
+    # markers here without being treated as a spawn recommendation.
     FM_SIGNAL_SURFACE_ENDPOINTS=''
     FM_SIGNAL_NEEDS_DECISION_FILES=''
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
@@ -2098,6 +2130,14 @@ EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
       wake "$reason"
+    elif [ "$need_refill" -eq 1 ]; then
+      while IFS=$(printf '\t') read -r sf sig f; do
+        [ -n "$sf" ] || continue
+        printf '%s' "$sig" > "$sf"
+      done <<EOF
+$pending
+EOF
+      wake "$FM_WAKE_REFILL_PAYLOAD"
     else
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue

@@ -140,6 +140,9 @@
 #   an abandoned attempt left behind never counts as a published incarnation:
 #   the record still reads as a legacy record, so the endpoint gate runs again
 #   and the retry still needs --legacy-record.
+# After a successful teardown (local or remote), enqueue one advisory fleet
+# refill wake (bin/fm-wake-lib.sh's fm_wake_enqueue_refill) so firstmate
+# re-evaluates ready work against free capacity. Refill never selects or spawns.
 #
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
 # killed mid-git-operation can leave a .git/worktrees/<wt>/index.lock (or, for a
@@ -871,6 +874,9 @@ remote_secondmate_teardown() {
   fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE" || return 1
   rm -f -- "$STATE/$ID.turn-ended" "$STATE/$ID.progress"
   printf 'teardown %s complete (remote %s:%s)\n' "$ID" "$remote_host" "$remote_home"
+  # Capacity free: advisory refill so firstmate re-evaluates ready work.
+  fm_wake_enqueue_refill || \
+    echo "warning: could not enqueue fleet refill after remote teardown of $ID" >&2
   return 0
 }
 
@@ -3505,4 +3511,8 @@ if [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
 else
   echo "teardown $ID complete (window $T, worktree $WT)"
 fi
+# Capacity free: advisory refill so firstmate re-evaluates ready work.
+# Multiple teardowns before drain collapse to one refill record (dedupe by kind).
+fm_wake_enqueue_refill || \
+  echo "warning: could not enqueue fleet refill after teardown of $ID" >&2
 backlog_refresh_reminder
