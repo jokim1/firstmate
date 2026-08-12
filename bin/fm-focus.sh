@@ -336,7 +336,7 @@ cas_check() {  # <snap-json> <expected-or-empty> -> sets NEXT_REV
   cur=$(printf '%s' "$snap" | jq -r '.revision // 0')
   case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
   if [ -n "$expected" ]; then
-    case "$expected" in *[!0-9]*) 
+    case "$expected" in *[!0-9]*)
       printf 'fm-focus: invalid --expected-revision\n' >&2
       return 1
       ;;
