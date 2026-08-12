@@ -271,11 +271,12 @@ test_lock_stale_steal_single_winner_under_concurrency() {
 }
 
 test_lock_live_steal_mutex_is_not_reclaimed() {
-  local dir state lockdir dead holder_file holder out i lockpid stealpid
+  local dir state lockdir dead holder_file release_file holder out i lockpid stealpid
   dir=$(make_case lock-live-stealer)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   holder_file="$dir/holder"
+  release_file="$dir/release"
   dead=$(dead_pid)
   mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
@@ -283,9 +284,9 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
     . "$1"
     fm_lock_try_acquire "$2.steal" || exit 7
     printf "%s\n" "${BASHPID:-$$}" > "$3"
-    sleep 2
+    while [ ! -e "$4" ]; do sleep 0.05; done
     fm_lock_release "$2.steal"
-  ' _ "$LIB" "$lockdir" "$holder_file" &
+  ' _ "$LIB" "$lockdir" "$holder_file" "$release_file" &
   holder=$!
   i=0
   while [ "$i" -lt 50 ] && [ ! -s "$holder_file" ]; do
@@ -298,6 +299,7 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
     if fm_lock_try_acquire "$2"; then rc=0; else rc=1; fi
     printf "rc=%s held=%s lockpid=%s stealpid=%s\n" "$rc" "${FM_LOCK_HELD_PID:-}" "$(cat "$2/pid" 2>/dev/null || true)" "$(cat "$2.steal/pid" 2>/dev/null || true)"
   ' _ "$LIB" "$lockdir")
+  : > "$release_file"
   wait "$holder" || fail "live steal mutex holder failed"
   case "$out" in
     *"rc=1"*) ;;
@@ -308,6 +310,23 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
   [ "$lockpid" = "$dead" ] || fail "primary lock changed while live steal mutex was held: $out"
   [ "$stealpid" = "$(cat "$holder_file")" ] || fail "live steal mutex owner changed: $out"
   pass "live steal mutex is not reclaimed"
+}
+
+stop_ledger_arm() {
+  local pid=$1 i=0
+  while is_live_non_zombie "$pid" && [ "$i" -lt 80 ]; do
+    if [ "$i" -eq 0 ] || [ "$i" -eq 60 ]; then
+      kill -HUP "$pid" 2>/dev/null || true
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if is_live_non_zombie "$pid"; then
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 1
+  fi
+  wait "$pid" 2>/dev/null || true
 }
 
 test_lock_does_not_steal_live_lock() {
@@ -867,8 +886,8 @@ SH
   grep -qF "watcher: started pid=$successor_pid" "$armout" || fail "successor ledger cycle did not start"
   grep -q "arm_pid=$first_arm.*successor=started:$successor_pid" "$state/.watch-cycle-exits.log" \
     || fail "predecessor ledger record was not linked to its verified successor"
-  kill -HUP "$successor_arm" 2>/dev/null || true
-  wait "$successor_arm" 2>/dev/null || true
+  stop_ledger_arm "$successor_arm" \
+    || fail "successor ledger arm ignored repeated bounded HUP cleanup"
   # The forced interruption is a watcher-down interval. Consume the prior
   # delivered wake before beginning independent ledger cycles, just as the
   # recovery handling turn does, so this fixture does not intentionally carry a
@@ -889,8 +908,8 @@ SH
       i=$((i + 1))
     done
     grep -qF 'watcher: started pid=' "$armout" || fail "bounded ledger cycle $iteration did not start"
-    kill -HUP "$successor_arm" 2>/dev/null || true
-    wait "$successor_arm" 2>/dev/null || true
+    stop_ledger_arm "$successor_arm" \
+      || fail "bounded ledger cycle $iteration ignored repeated bounded HUP cleanup"
     drain_and_ack "$state" \
       || fail "recovery drain after bounded ledger cycle $iteration failed"
     iteration=$((iteration + 1))
