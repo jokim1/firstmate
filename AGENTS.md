@@ -370,7 +370,7 @@ For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary sin
 Tear down a ship task only after landing is confirmed.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
-After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
+After successful teardown, record completion and retain only the configured recent Done history.
 
 A secondmate is persistent and an empty queue is healthy.
 Retire one only on an explicit captain or main-firstmate decision, after loading `secondmate-provisioning`; its home must contain no work under way, and forced discard still requires explicit captain authority.
@@ -409,6 +409,7 @@ Handle actionable wakes as follows:
 2. For `stale:`, inspect the recorded endpoint and load `stuck-crewmate-recovery` for a stopped, looping, confused, or unresponsive worker; a deep-inspection reason also requires current-state and validation-log inspection.
 3. For `check:`, act on the named poll result, including merges, Relay events, process-to-event source results, and captain inbox notes; a handled inbox note is also acknowledged with `bin/fm-inbox.sh drain --ack <id>`, or it stays counted as still waiting for firstmate.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
+5. For `refill:`, re-evaluate ready work against free capacity using the structured fleet view; the wake is advisory only and never itself a spawn or task recommendation (enqueue owners: `bin/fm-wake-lib.sh`, lifecycle hooks in `bin/fm-watch.sh` and `bin/fm-teardown.sh`).
 
 When any wake reports a merged PR for a project cloned in this home, refresh that clone through the guarded fleet-sync path.
 When Relay-linked work reaches a milestone or terminal state, load `fmx-respond`; before terminal teardown, use its promised-final reconciliation when a typed public commitment exists, otherwise post the final completion follow-up so the link clears even if earlier follow-ups were spent.
@@ -494,7 +495,7 @@ A decision is simply a task held for the captain: `tasks-axi hold <id> --reason 
 When a main-side thread such as a pending captain decision or relay reminder is worth durable tracking, file it as its own work item and hold it the same way.
 Captain calls discovered by investigations or visual reviews follow `captain-hold-lifecycle`, which owns their completion gate and recorded-answer rules.
 Update the backlog on every dispatch, completion, and decision for a work item.
-Re-evaluate queued work after every teardown and heartbeat, dispatching items only when dependencies and time gates have cleared.
+Re-evaluate queued work on every `refill:` and `heartbeat:` wake, dispatching items only when dependencies and time gates have cleared.
 
 `.tasks.toml`, `docs/configuration.md`, and current `tasks-axi --help` own the backlog schema, compatibility, retention, and routine command syntax.
 Use compatible `tasks-axi` when the configured backend selects it and the documented manual path otherwise; keep only the configured recent Done entries.
