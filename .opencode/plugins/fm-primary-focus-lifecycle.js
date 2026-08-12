@@ -72,11 +72,15 @@ export const FmPrimaryFocusLifecycle = async ({ directory, worktree }) => {
   const root = worktree ? resolvePath(worktree) : await resolveRoot(directory);
 
   return {
-    "chat.message": async (_input, output) => {
+    "chat.message": async (input, output) => {
       if (!root) return;
       const text = extractText(output?.parts);
       if (!text) return;
-      const payload = JSON.stringify({ prompt: text });
+      const payload = JSON.stringify({
+        prompt: text,
+        session_id: input?.sessionID,
+        event_id: output?.message?.id,
+      });
       await runProcess(`${root}/bin/fm-focus-prompt-hook.sh`, ["--opencode"], payload);
     },
   };

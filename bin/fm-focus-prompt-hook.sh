@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fm-focus-prompt-hook.sh - fail-open harness adapter for suspend-before-switch.
 #
-# Invoked from each primary harness's pre-prompt surface (UserPromptSubmit,
+# Invoked from verified primary-harness pre-prompt surfaces (UserPromptSubmit,
 # Pi input, OpenCode message events, etc.). Translates the harness event into
 # one call of bin/fm-focus.sh switch so a new captain prompt durably suspends
 # any nonterminal active focus before the model takes the new work.
@@ -16,11 +16,13 @@
 #   <hook JSON on stdin> | bin/fm-focus-prompt-hook.sh [--claude|--codex|--grok|--pi|--opencode|--kimi]
 #   bin/fm-focus-prompt-hook.sh --prompt '<text>' [--summary S] ...
 #
-# Prompt extraction (stdin JSON):
+# Prompt and identity extraction (stdin JSON):
 #   .prompt // .user_prompt // .content // .message.content // .text
+# A vendor event id enables retry idempotency. Without one, each callback is a
+# distinct submission. A vendor session id becomes the opaque resume pointer.
 # Operational Firstmate-injected inputs are skipped (no focus mutation).
-# Kimi is not a supported primary harness. --kimi is label-only for external
-# callers and has no tracked Kimi primary hook installer in this slice.
+# Codex and Kimi have no verified tracked pre-prompt adapter in Phase 0.
+# --codex and --kimi remain label-only for external callers.
 set -u
 
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || exit 0
@@ -40,7 +42,10 @@ TASK_ID=
 PROJECT=
 RESUME_KIND=
 RESUME_POINTER=
+EVENT_ID=
+SESSION_ID=
 HARNESS=
+PAYLOAD=
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -84,11 +89,19 @@ while [ $# -gt 0 ]; do
       RESUME_POINTER=${2:-}
       shift 2 || exit 0
       ;;
+    --event-id)
+      EVENT_ID=${2:-}
+      shift 2 || exit 0
+      ;;
+    --session-id)
+      SESSION_ID=${2:-}
+      shift 2 || exit 0
+      ;;
     -h|--help)
       cat <<'EOF'
 Usage: fm-focus-prompt-hook.sh [--claude|--codex|--grok|--pi|--opencode|--kimi] [options]
 Fail-open primary pre-prompt adapter for bin/fm-focus.sh switch.
-Kimi is not a supported primary harness in Phase 0.
+Codex and Kimi have no verified tracked pre-prompt adapter in Phase 0.
 Always exits 0. See the script header for the full contract.
 EOF
       exit 0
@@ -117,6 +130,23 @@ if [ -z "$PROMPT" ]; then
   ' 2>/dev/null) || exit 0
 fi
 
+if [ -n "$PAYLOAD" ]; then
+  if [ -z "$EVENT_ID" ]; then
+    EVENT_ID=$(printf '%s' "$PAYLOAD" | jq -r '
+      (.event_id // .eventId // .eventID // .prompt_id // .promptId
+       // .message_id // .messageId // .message.id // empty)
+      | if type == "string" or type == "number" then tostring else empty end
+    ' 2>/dev/null) || EVENT_ID=
+  fi
+  if [ -z "$SESSION_ID" ]; then
+    SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '
+      (.session_id // .sessionId // .sessionID // .thread_id // .threadId
+       // .conversation_id // empty)
+      | if type == "string" or type == "number" then tostring else empty end
+    ' 2>/dev/null) || SESSION_ID=
+  fi
+fi
+
 [ -n "$PROMPT" ] || exit 0
 
 # Skip Firstmate operational / injected inputs so adapters never recurse into
@@ -136,12 +166,13 @@ if [ -z "$SUMMARY" ]; then
   SUMMARY=$(printf '%s' "$PROMPT" | tr '\n\r\t' '   ' | cut -c1-160)
 fi
 
-# Fingerprint for idempotent multi-callback delivery of the same prompt.
+# Fingerprint only a vendor-identified submission so later identical prompts
+# remain distinct while a retry of the same callback is idempotent.
 FINGERPRINT=
-if command -v shasum >/dev/null 2>&1; then
-  FINGERPRINT=$(printf '%s' "$PROMPT" | shasum -a 256 2>/dev/null | awk '{print $1}')
-elif command -v sha256sum >/dev/null 2>&1; then
-  FINGERPRINT=$(printf '%s' "$PROMPT" | sha256sum 2>/dev/null | awk '{print $1}')
+if [ -n "$EVENT_ID" ] && command -v shasum >/dev/null 2>&1; then
+  FINGERPRINT=$(printf '%s\n%s\n%s' "$HARNESS" "$SESSION_ID" "$EVENT_ID" | shasum -a 256 2>/dev/null | awk '{print $1}')
+elif [ -n "$EVENT_ID" ] && command -v sha256sum >/dev/null 2>&1; then
+  FINGERPRINT=$(printf '%s\n%s\n%s' "$HARNESS" "$SESSION_ID" "$EVENT_ID" | sha256sum 2>/dev/null | awk '{print $1}')
 fi
 
 args=(switch --state-dir "$STATE" --owner-kind "$OWNER_KIND" --summary "$SUMMARY")
@@ -150,9 +181,10 @@ args=(switch --state-dir "$STATE" --owner-kind "$OWNER_KIND" --summary "$SUMMARY
 [ -n "$RESUME_KIND" ] && args+=(--resume-kind "$RESUME_KIND")
 [ -n "$RESUME_POINTER" ] && args+=(--resume-pointer "$RESUME_POINTER")
 [ -n "$FINGERPRINT" ] && args+=(--fingerprint "$FINGERPRINT")
-# Best-effort resume pointer from harness when known.
-if [ -z "$RESUME_KIND" ] && [ -n "$HARNESS" ]; then
-  args+=(--resume-kind "harness-session" --resume-pointer "$HARNESS")
+# Use only a real vendor session identity as a resume pointer.
+if [ -z "$RESUME_KIND" ] && [ -z "$RESUME_POINTER" ] && \
+   [ -n "$HARNESS" ] && [ -n "$SESSION_ID" ]; then
+  args+=(--resume-kind "$HARNESS-session" --resume-pointer "$SESSION_ID")
 fi
 
 # NEVER let a focus failure affect the harness exit path. Bound contention at

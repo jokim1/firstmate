@@ -316,6 +316,45 @@ test_hook_skips_operational_input() {
   pass "prompt hook skips operational Firstmate inputs and stays fail-open"
 }
 
+test_hook_submission_identity_and_resume_pointer() {
+  local fake_root state file rev
+  fake_root="$TMP_ROOT/hook-identity-root"
+  state="$fake_root/state"
+  mkdir -p "$fake_root/bin" "$state"
+  printf 'primary-test\n' > "$fake_root/.fm-secondmate-home"
+  printf '# test primary root\n' > "$fake_root/AGENTS.md"
+  for file in fm-focus-prompt-hook.sh fm-focus.sh fm-primary-scope-lib.sh \
+    fm-operational-input.sh fm-wake-lib.sh; do
+    ln -s "$ROOT/bin/$file" "$fake_root/bin/$file"
+  done
+
+  printf '%s' '{"prompt":"continue","session_id":"session-a"}' \
+    | FM_ROOT_OVERRIDE="$fake_root" FM_STATE_OVERRIDE="$state" \
+      "$fake_root/bin/fm-focus-prompt-hook.sh" --claude
+  printf '%s' '{"prompt":"continue","session_id":"session-a"}' \
+    | FM_ROOT_OVERRIDE="$fake_root" FM_STATE_OVERRIDE="$state" \
+      "$fake_root/bin/fm-focus-prompt-hook.sh" --claude
+  [ "$(revision "$state")" = "2" ] \
+    || fail "separate identical prompts without event ids must both switch focus"
+  [ "$(suspended_count "$state")" = "1" ] \
+    || fail "the first identical prompt must be suspended by the second"
+  [ "$(jq -r '.active.resume_kind' "$state/.focus.json")" = "claude-session" ] \
+    || fail "hook must record the harness-specific session resume kind"
+  [ "$(jq -r '.active.resume_pointer' "$state/.focus.json")" = "session-a" ] \
+    || fail "hook must record the vendor session id as resume pointer"
+
+  printf '%s' '{"prompt":"next","session_id":"session-a","event_id":"event-a"}' \
+    | FM_ROOT_OVERRIDE="$fake_root" FM_STATE_OVERRIDE="$state" \
+      "$fake_root/bin/fm-focus-prompt-hook.sh" --claude
+  rev=$(revision "$state")
+  printf '%s' '{"prompt":"next","session_id":"session-a","event_id":"event-a"}' \
+    | FM_ROOT_OVERRIDE="$fake_root" FM_STATE_OVERRIDE="$state" \
+      "$fake_root/bin/fm-focus-prompt-hook.sh" --claude
+  [ "$(revision "$state")" = "$rev" ] \
+    || fail "a retry with the same vendor event id must be idempotent"
+  pass "prompt hooks distinguish repeated text and retain real session pointers"
+}
+
 test_primary_prompt_hooks_bound_live_lock_contention() {
   local fake_root state lock harness start elapsed status file
   fake_root="$TMP_ROOT/hook-contention-root"
@@ -379,12 +418,10 @@ test_tracked_claude_userprompt_wires_focus_hook() {
   pass "tracked .claude/settings.json UserPromptSubmit wires the focus hook"
 }
 
-test_tracked_codex_userprompt_wires_focus_hook() {
-  local cmd
-  cmd=$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].command // empty' "$ROOT/.codex/hooks.json")
-  printf '%s' "$cmd" | grep -F 'fm-focus-prompt-hook.sh' >/dev/null \
-    || fail "Codex UserPromptSubmit must call fm-focus-prompt-hook.sh"
-  pass "tracked .codex/hooks.json UserPromptSubmit wires the focus hook"
+test_codex_does_not_claim_unreachable_prompt_hook() {
+  jq -e '.hooks | has("UserPromptSubmit") | not' "$ROOT/.codex/hooks.json" >/dev/null \
+    || fail "Codex must not register the unverified project UserPromptSubmit focus hook"
+  pass "Codex excludes the unreachable project prompt hook from Phase 0"
 }
 
 test_tracked_grok_userprompt_wires_focus_hook() {
@@ -408,6 +445,10 @@ test_tracked_opencode_plugin_present() {
   if grep -E 'message\.(updated|completed)' "$plugin" >/dev/null; then
     fail "OpenCode plugin must not defer focus recording to post-prompt events"
   fi
+  grep -F 'session_id: input?.sessionID' "$plugin" >/dev/null \
+    || fail "OpenCode focus adapter must pass the vendor session id"
+  grep -F 'event_id: output?.message?.id' "$plugin" >/dev/null \
+    || fail "OpenCode focus adapter must pass the vendor message id"
   pass "tracked OpenCode plugin records focus before prompt dispatch"
 }
 
@@ -451,6 +492,10 @@ test_tracked_pi_input_wires_focus_hook() {
     || fail "Pi extension must register an input handler"
   grep -F 'child.kill("SIGTERM")' "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" >/dev/null \
     || fail "Pi focus adapter must terminate a timed-out hook"
+  grep -F 'getSessionId?.()' "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" >/dev/null \
+    || fail "Pi focus adapter must pass the vendor session id"
+  grep -F 'event_id: eventId' "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" >/dev/null \
+    || fail "Pi focus adapter must pass a vendor input event id when present"
   pass "tracked Pi extension registers fail-open input focus recording"
 }
 
@@ -470,10 +515,11 @@ test_busy_wake_queue_does_not_block_owner
 test_fail_open_unwritable_state_via_owner
 test_hook_fail_open_unwritable
 test_hook_skips_operational_input
+test_hook_submission_identity_and_resume_pointer
 test_primary_prompt_hooks_bound_live_lock_contention
 test_playbot_owner_kind_recorded
 test_tracked_claude_userprompt_wires_focus_hook
-test_tracked_codex_userprompt_wires_focus_hook
+test_codex_does_not_claim_unreachable_prompt_hook
 test_tracked_grok_userprompt_wires_focus_hook
 test_tracked_opencode_plugin_present
 test_opencode_plugin_times_out_hung_focus_hook

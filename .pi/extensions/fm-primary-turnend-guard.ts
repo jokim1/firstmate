@@ -201,7 +201,7 @@ const focusPromptTimeoutMs = 1000;
 // Phase 0 primary-focus lifecycle: durable suspend-before-switch on captain
 // prompts. Always fail-open (never block the prompt). bin/fm-focus.sh owns the
 // snapshot; bin/fm-focus-prompt-hook.sh owns adapter fail-open semantics.
-function runFocusPromptHook(prompt: string): Promise<void> {
+function runFocusPromptHook(prompt: string, sessionId: string, eventId: string): Promise<void> {
   return new Promise((resolveResult) => {
     let settled = false;
     const child = spawn(root + "/bin/fm-focus-prompt-hook.sh", ["--pi"], {
@@ -220,7 +220,7 @@ function runFocusPromptHook(prompt: string): Promise<void> {
     child.on("error", finish);
     child.on("close", finish);
     child.stdin.on("error", () => {});
-    child.stdin.end(JSON.stringify({ prompt }));
+    child.stdin.end(JSON.stringify({ prompt, session_id: sessionId, event_id: eventId }));
   });
 }
 
@@ -244,20 +244,24 @@ export default function (pi: ExtensionAPI) {
   // Pre-agent captain input (interactive and rpc), including mid-stream steer.
   // Skip extension-sourced operational messages; the hook itself also skips
   // marked operational inputs. Always continue (fail-open).
-  pi.on?.("input", async (event) => {
+  pi.on?.("input", async (event, ctx) => {
     try {
       const ev = event as {
         text?: unknown;
         input?: unknown;
         source?: unknown;
         streamingBehavior?: unknown;
+        id?: unknown;
+        eventId?: unknown;
       };
       const source = String(ev.source ?? "");
       if (source === "extension") return {};
       const text = String(ev.text ?? ev.input ?? "");
       if (!text) return {};
       if (classifyFirstmateCurrentOperationalText(text)) return {};
-      await runFocusPromptHook(text);
+      const sessionId = String(ctx.sessionManager?.getSessionId?.() ?? "");
+      const eventId = String(ev.id ?? ev.eventId ?? "");
+      await runFocusPromptHook(text, sessionId, eventId);
     } catch {
       // Fail-open: never block the captain prompt.
     }
