@@ -92,6 +92,15 @@ printf 'stale: fixture-win actionable\n'
 exit 0
 SH
       ;;
+    refill)
+      cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+echo "$$" >> "$FM_HOME/state/arm-ran"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+printf 'refill: re-evaluate ready work against free capacity\n'
+exit 0
+SH
+      ;;
     failed)
       cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -345,6 +354,19 @@ test_actionable_close_rewakes_with_reason() {
   [ ! -e "$dir/state/.claude-autoarm.lock" ] || fail "owner lock must be released after the cycle"
   [ -e "$dir/state/arm-ran" ] || fail "hook never foregrounded the arm wrapper"
   pass "auto-arm: actionable close translates to exactly one exit-2 rewake with reason"
+}
+
+test_queue_only_refill_close_rewakes_with_reason() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/queue-only-refill")
+  printf 'queued refill\n' > "$dir/state/.wake-queue"
+  write_arm_fixture "$dir" refill
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "a queue-only refill close must exit 2 so Claude rewakes"
+  assert_contains "$out" "refill: re-evaluate ready work against free capacity" \
+    "queue-only refill rewake must carry its reason"
+  [ -e "$dir/state/arm-ran" ] || fail "queue-only home did not foreground the arm wrapper"
+  pass "auto-arm: queue-only refill wakes are owned and delivered"
 }
 
 test_actionable_close_with_live_successor_rewakes_once() {
@@ -795,6 +817,7 @@ test_stale_lock_recovery_preserves_afk_and_need_gates
 test_resolves_outermost_claude_pid_in_nested_bgspare_chain
 test_inert_when_fleet_idle
 test_actionable_close_rewakes_with_reason
+test_queue_only_refill_close_rewakes_with_reason
 test_actionable_close_with_live_successor_rewakes_once
 test_failed_close_rewakes_with_failure_banner
 test_failed_cycles_notify_once_and_keep_retrying

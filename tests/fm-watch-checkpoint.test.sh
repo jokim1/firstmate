@@ -46,6 +46,27 @@ test_signal_passes_through_and_exits_zero() {
   pass "checkpoint passes through a real watcher wake and leaves the queue for drain"
 }
 
+test_refill_passes_through_and_exits_zero() {
+  local home fixture out err status
+  home=$(make_home refill)
+  fixture="$home/fixture"
+  out="$home/out.txt"
+  err="$home/err.txt"
+  mkdir -p "$fixture/bin"
+  cp "$CHECKPOINT" "$fixture/bin/fm-watch-checkpoint.sh"
+  cat > "$fixture/bin/fm-watch.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'refill: re-evaluate ready work against free capacity\n'
+SH
+  chmod +x "$fixture/bin/fm-watch-checkpoint.sh" "$fixture/bin/fm-watch.sh"
+  status=0
+  FM_HOME="$home" "$fixture/bin/fm-watch-checkpoint.sh" --seconds 2 >"$out" 2>"$err" || status=$?
+  expect_code 0 "$status" "refill checkpoint exit"
+  assert_contains "$(cat "$out")" "refill: re-evaluate ready work against free capacity" \
+    "refill wake was not passed through"
+  pass "checkpoint passes through refill-only wakes"
+}
+
 test_registered_check_uses_preserved_watcher_environment() {
   local home out err status
   home=$(make_home check-env)
@@ -89,5 +110,6 @@ test_existing_singleton_watcher_is_not_success() {
 
 test_quiet_checkpoint_exits_124_cleanly
 test_signal_passes_through_and_exits_zero
+test_refill_passes_through_and_exits_zero
 test_registered_check_uses_preserved_watcher_environment
 test_existing_singleton_watcher_is_not_success
