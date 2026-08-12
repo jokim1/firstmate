@@ -94,6 +94,9 @@
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
+# After a successful teardown (local or remote), enqueue one advisory fleet
+# refill wake (bin/fm-wake-lib.sh's fm_wake_enqueue_refill) so firstmate
+# re-evaluates ready work against free capacity. Refill never selects or spawns.
 #
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
 # killed mid-git-operation can leave a .git/worktrees/<wt>/index.lock (or, for a
@@ -731,6 +734,9 @@ remote_secondmate_teardown() {
   fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE" || return 1
   rm -f -- "$STATE/$ID.turn-ended"
   printf 'teardown %s complete (remote %s:%s)\n' "$ID" "$remote_host" "$remote_home"
+  # Capacity free: advisory refill so firstmate re-evaluates ready work.
+  fm_wake_enqueue_refill || \
+    echo "warning: could not enqueue fleet refill after remote teardown of $ID" >&2
   return 0
 }
 
@@ -3117,4 +3123,8 @@ if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
 fi
 echo "teardown $ID complete (window $T, worktree $WT)"
+# Capacity free: advisory refill so firstmate re-evaluates ready work.
+# Multiple teardowns before drain collapse to one refill record (dedupe by kind).
+fm_wake_enqueue_refill || \
+  echo "warning: could not enqueue fleet refill after teardown of $ID" >&2
 backlog_refresh_reminder

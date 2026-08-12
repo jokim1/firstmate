@@ -36,7 +36,7 @@
 #     this hook-owned process tree (never shell &); Claude owns the process
 #     group, so its timeout/session teardown kills arm and watcher together.
 #   - Translation: while supervision is still needed and AFK remains inactive,
-#     an actionable arm close (signal:/stale:/check:/heartbeat) prints one
+#     an actionable arm close (signal:/stale:/check:/heartbeat/refill) prints one
 #     rewake banner to stderr and exits 2, which wakes Claude even while idle
 #     ("Stop hook feedback"). The irrevocable commit point is the EXIT STATUS:
 #     the harness delivers the collected stderr only on exit 2, so an owned
@@ -232,7 +232,7 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
 
   ACTIONABLE=0
   if [ -n "$OUT" ]; then
-    grep -Eq '^(signal:|stale:|check:|heartbeat($|:))' "$OUT" 2>/dev/null && ACTIONABLE=1
+    grep -Eq '^(signal:|stale:|check:|heartbeat($|:)|refill($|:))' "$OUT" 2>/dev/null && ACTIONABLE=1
   fi
   [ "$ACTIONABLE" -eq 1 ] && break
 
@@ -293,7 +293,7 @@ if [ "$ACTIONABLE" -eq 1 ]; then
   fi
   {
     printf 'firstmate watcher wake - one supervision event needs a handling turn now.\n'
-    [ -n "$OUT" ] && grep -E '^(signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null | head -8
+    [ -n "$OUT" ] && grep -E '^(signal:|stale:|check:|heartbeat|refill)' "$OUT" 2>/dev/null | head -8
     printf 'Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command. Until that post-handling acknowledgement, interruption leaves the wake durable for idempotent re-handling. This Stop hook owns watcher continuity: when the handling turn ends, the next needed cycle arms automatically - do NOT run bin/fm-watch-arm.sh after an ordinary wake.\n'
   } >&2
   if autoarm_commit rewake; then
@@ -316,7 +316,7 @@ if [ ! -e "$FAILURE_NOTICE" ]; then
   fi
   {
     printf 'firstmate watcher auto-arm FAILED - the Stop-owned automatic supervision mechanism is broken after %s bounded attempts, and no live watcher with a fresh beacon was verified.\n' "$attempt"
-    [ -n "$OUT" ] && grep -E '^(watcher:|signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null | head -8
+    [ -n "$OUT" ] && grep -E '^(watcher:|signal:|stale:|check:|heartbeat|refill)' "$OUT" 2>/dev/null | head -8
     printf 'Do not launch a manual background arm from this notice; investigate the automatic Stop hook and watcher startup before ending blind.\n'
   } >&2
   if autoarm_commit failed "$FAILURE_NOTICE"; then
