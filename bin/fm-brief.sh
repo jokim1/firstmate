@@ -353,8 +353,10 @@ fi
 
 if [ "$KIND" = scout ]; then
 if [ "$BRIEF_BACKEND" = playbot ]; then
+# shellcheck disable=SC2016  # backticks are brief prose (markdown code), not shell expansion
 SCOUT_RULE2='2. Stay inside this worktree. Write status only to workspace-local `.fm/status.log` and the report only to workspace-local `.fm/report.md`. Never write under firstmate home state paths.'
 SCOUT_DOD_REPORT="Write your findings to $REPORT_PATH (workspace-local). The trusted reconciler copies a bounded untrusted snapshot to the ordinary home report path before waking firstmate."
+# shellcheck disable=SC2016
 SCOUT_STATUS_VERB_NOTE='
    Terminal status lines must begin with a courier-recognized fixed verb: `done:`, `blocked:`, `needs-decision:`, or `failed:`.'
 else
@@ -420,8 +422,10 @@ fi
 SHIP_RULE2_EXTRA=
 SHIP_STATUS_VERB_NOTE=
 if [ "$BRIEF_BACKEND" = playbot ]; then
+  # shellcheck disable=SC2016  # backticks are brief prose (markdown code), not shell expansion
   SHIP_RULE2_EXTRA='
    Write status only to workspace-local `.fm/status.log`. Never write under firstmate home state paths.'
+  # shellcheck disable=SC2016
   SHIP_STATUS_VERB_NOTE='
    Terminal status lines must begin with a courier-recognized fixed verb: `done:`, `blocked:`, `needs-decision:`, or `failed:`.'
 fi
