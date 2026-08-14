@@ -12,7 +12,8 @@
 # has. Supervision health is MODEL-AWARE (fm_watcher_supervision_verdict in
 # bin/fm-wake-lib.sh): under the Claude Stop auto-arm model the watcher runs only
 # between turns, so mid-turn a fresh beacon with no live watcher is healthy and
-# only a stale beacon (beyond FM_GUARD_GRACE) is a genuine lapse; under the Pi
+# only a stale beacon (beyond the poll-derived grace from fm_guard_grace_seconds)
+# is a genuine lapse; under the Pi
 # extension model the extension tears the watcher down and respawns it on every
 # actionable wake, so a fresh beacon with a genuinely unheld lock is healthy
 # while that live Pi session provably owns continuity; any held but unhealthy
@@ -36,7 +37,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 WATCH="$SCRIPT_DIR/fm-watch.sh"
-GRACE=${FM_GUARD_GRACE:-300}
+# GRACE is resolved after sourcing wake-lib (fm_guard_grace_seconds).
+GRACE=
 queue_pending=false
 READ_ONLY=${FM_GUARD_READ_ONLY:-0}
 case "$READ_ONLY" in 1|true|TRUE|yes|YES) READ_ONLY=1 ;; *) READ_ONLY=0 ;; esac
@@ -52,6 +54,7 @@ STALE_BANNER_MARKER="$STATE/.guard-watcher-stale-banner"
 . "$SCRIPT_DIR/fm-tangle-lib.sh"
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
+GRACE=$(fm_guard_grace_seconds)
 
 # Deterministic episode key from the qualitative down-state (the failing
 # condition), NOT the beacon mtime: under the auto-arm model a healthy
