@@ -65,6 +65,22 @@
 # footer appears, so an immediate peek would otherwise see the stale idle pane.
 # The pause is fm-send-only; the shared submit core (used by the away-mode daemon,
 # which only needs "submitted") does not pay it, and the --key path is unaffected.
+#
+# Follow-up queue (bin/fm-send-followup-lib.sh): when a task-selector target is
+# mid-turn, ordinary text steers park in state/<id>.followup-queue/ instead of
+# the harness busy-queue, so a later terminal done/failed cannot replay them as
+# ghost turns. Delivery-time check is the fail-closed owner path: exclusive
+# lease (dispatcher identity; foreign live lease waits so FIFO is preserved),
+# transport_begin setup, final transport_confirm at the last instant before
+# backend send, ack only after confirmed transport (release on failure keeps the
+# item). --resolve-key answers and the --key path never park. Teardown
+# invalidates for hygiene. Residual milliseconds after that final check until
+# send-keys completes are a captain-accepted known limitation (lib header).
+# FM_SEND_FORCE_BUSY=1|0 overrides the busy probe for tests.
+# FM_SEND_FOLLOWUP_LEASE_WAIT_SLEEP / FM_SEND_FOLLOWUP_LEASE_WAIT_MAX bound the
+# foreign-lease wait. FM_SEND_FOLLOWUP_AFTER_LEASE_HOOK,
+# FM_SEND_FOLLOWUP_AFTER_TRANSPORT_BEGIN_HOOK, and
+# FM_SEND_FOLLOWUP_PRE_SEND_HOOK are test-only snippets.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -103,6 +119,10 @@ fi
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-line-cap-lib.sh
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
+# shellcheck source=bin/fm-send-followup-lib.sh
+. "$SCRIPT_DIR/fm-send-followup-lib.sh"
+# shellcheck source=bin/fm-busy-lib.sh
+. "$SCRIPT_DIR/fm-busy-lib.sh"
 
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the requested message WILL still be sent.' "$SCRIPT_DIR/fm-guard.sh" || true
 
@@ -336,10 +356,39 @@ MARK_FROM_FIRSTMATE=0
 PENDING_REPLY_CORR=
 PENDING_REPLY_CREATED=0
 TARGET_TASK_ID=
-if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] && [ "$(fm_meta_get "$TARGET_META" kind)" = secondmate ]; then
-  MARK_FROM_FIRSTMATE=1
-  TARGET_TASK_ID=$(fm_send_id_from_meta "$TARGET_META")
+# Any task selector (ship/scout/secondmate) owns a follow-up queue; explicit
+# backend targets have no status ledger here and never park.
+QUEUE_TASK_ID=
+if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ]; then
+  QUEUE_TASK_ID=$(fm_send_id_from_meta "$TARGET_META")
+  if [ "$(fm_meta_get "$TARGET_META" kind)" = secondmate ]; then
+    MARK_FROM_FIRSTMATE=1
+    TARGET_TASK_ID=$QUEUE_TASK_ID
+  fi
 fi
+
+# 0 when this task-selector send should park in the follow-up queue instead of
+# the harness busy-queue. FM_SEND_FORCE_BUSY=1|0 is a test override. Remote
+# targets never park here (no reliable mid-turn probe on the parent).
+fm_send_target_is_busy() {
+  local verdict rest
+  case "${FM_SEND_FORCE_BUSY-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [ -n "$QUEUE_TASK_ID" ] || return 1
+  [ "$TARGET_BACKEND" != remote ] || return 1
+  if [ -n "$TARGET_META" ]; then
+    verdict=$(fm_busy_classify_meta "$TARGET_META" "$QUEUE_TASK_ID" "$STATE" 2>/dev/null || true)
+    rest=${verdict%% *}
+    case "$rest" in
+      busy) return 0 ;;
+      idle|dead) return 1 ;;
+    esac
+  fi
+  verdict=$(fm_backend_busy_state "$TARGET_BACKEND" "$T" 2>/dev/null || true)
+  [ "$verdict" = busy ]
+}
 
 # Validate the answerer-closes request before any durable mutation or send: the
 # target must have a task ledger in THIS home, the send must carry an answer
@@ -435,113 +484,226 @@ else
   # The pre-marker answer text, kept for the closing resolved note so the
   # durable ledger records the plain answer without marker or corr bytes.
   RESOLVE_ANSWER_TEXT=$MESSAGE
-  if [ "$MARK_FROM_FIRSTMATE" = 1 ]; then
-    # Reuse an existing correlation id for recovery resends; otherwise create a
-    # durable parent expectation before delivery. Transport success never
-    # resolves that expectation (see fm-pending-reply-lib.sh).
-    existing_corr=${FM_PENDING_REPLY_EXISTING_CORR:-$(fm_pending_reply_extract_corr "$MESSAGE")}
-    if [ -n "$existing_corr" ] \
-      && fm_pending_reply_corr_reusable "$STATE" "$existing_corr" "$TARGET_TASK_ID"; then
-      PENDING_REPLY_CORR=$existing_corr
-    else
-      if [ -z "$TARGET_TASK_ID" ]; then
-        echo "error: cannot create pending-reply expectation without a resolvable secondmate task id" >&2
-        exit 1
+
+  # Park ordinary steers for a busy task selector in the firstmate follow-up
+  # queue (not the harness busy-queue). --resolve-key forces the immediate
+  # path so decision answers keep answerer-closes timing.
+  if [ -n "$QUEUE_TASK_ID" ] && [ -z "$RESOLVE_KEYS" ] && fm_send_target_is_busy; then
+    if ! fm_send_followup_enqueue "$STATE" "$QUEUE_TASK_ID" "$MESSAGE"; then
+      echo "error: worker is busy and the follow-up queue for $QUEUE_TASK_ID could not park this steer; nothing was sent" >&2
+      exit 1
+    fi
+    echo "queued follow-up for $QUEUE_TASK_ID (worker busy; delivers when live, drops on terminal done/failed)" >&2
+    exit 0
+  fi
+
+  # Deliver one text body through mark/submit/pending-reply. <close_keys> is 1
+  # only for the caller's original message when --resolve-key was requested.
+  # Queued follow-ups never close decision keys.
+  fm_send_deliver_text() {  # <message> <close_keys:0|1> <resolve_answer>
+    local deliver_msg=$1 close_keys=$2 resolve_answer=$3
+    local existing_corr send_rc verdict settle retries sleep_s delivery_commit_status
+    local PENDING_REPLY_CORR='' PENDING_REPLY_CREATED=0
+    local MESSAGE=$deliver_msg
+
+    if [ "$MARK_FROM_FIRSTMATE" = 1 ]; then
+      # Reuse an existing correlation id for recovery resends; otherwise create a
+      # durable parent expectation before delivery. Transport success never
+      # resolves that expectation (see fm-pending-reply-lib.sh).
+      existing_corr=${FM_PENDING_REPLY_EXISTING_CORR:-$(fm_pending_reply_extract_corr "$MESSAGE")}
+      if [ -n "$existing_corr" ] \
+        && fm_pending_reply_corr_reusable "$STATE" "$existing_corr" "$TARGET_TASK_ID"; then
+        PENDING_REPLY_CORR=$existing_corr
+      else
+        if [ -z "$TARGET_TASK_ID" ]; then
+          echo "error: cannot create pending-reply expectation without a resolvable secondmate task id" >&2
+          return 1
+        fi
+        PENDING_REPLY_CORR=$(fm_pending_reply_create "$FM_HOME" "$STATE" "$TARGET_TASK_ID" "$MESSAGE") \
+          || { echo "error: failed to create parent pending-reply expectation for $TARGET_TASK_ID" >&2; return 1; }
+        PENDING_REPLY_CREATED=1
       fi
-      PENDING_REPLY_CORR=$(fm_pending_reply_create "$FM_HOME" "$STATE" "$TARGET_TASK_ID" "$MESSAGE") \
-        || { echo "error: failed to create parent pending-reply expectation for $TARGET_TASK_ID" >&2; exit 1; }
-      PENDING_REPLY_CREATED=1
+      fm_pending_reply_embed_corr "$MESSAGE" "$PENDING_REPLY_CORR" MESSAGE
+      if [ "$PENDING_REPLY_CREATED" = 1 ] \
+        && ! fm_pending_reply_prepare_delivery "$STATE" "$PENDING_REPLY_CORR"; then
+        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+        echo "error: failed to durably prepare pending-reply delivery for $TARGET_TASK_ID" >&2
+        return 1
+      fi
     fi
-    fm_pending_reply_embed_corr "$MESSAGE" "$PENDING_REPLY_CORR" MESSAGE
-    if [ "$PENDING_REPLY_CREATED" = 1 ] \
-      && ! fm_pending_reply_prepare_delivery "$STATE" "$PENDING_REPLY_CORR"; then
-      fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      echo "error: failed to durably prepare pending-reply delivery for $TARGET_TASK_ID" >&2
-      exit 1
-    fi
-  fi
-  # Slash commands open a completion popup in some TUIs (verified on codex);
-  # submitting too fast selects nothing, so give the popup time to settle before
-  # the (retried) Enter. Codex opens the same kind of popup for a `$<skill>`
-  # invocation, so a `$...` message to a codex target gets the same settle. That
-  # `$` case is scoped to codex on purpose: unlike `/`, a leading `$` commonly
-  # starts ordinary text ("$5/month", "$HOME"), so a universal `$` rule would
-  # needlessly slow plain text to claude/opencode/pi. The target backend's
-  # verified submit retry still backs the settle up either way.
-  case "$*" in
-    /*) settle=1.2 ;;
-    \$*)
-      if [ "$TARGET_HARNESS" = codex ]; then settle=1.2; else settle=0.3; fi
-      ;;
-    *) settle=0.3 ;;
-  esac
-  retries=${FM_SEND_RETRIES:-3}
-  sleep_s=${FM_SEND_SLEEP:-0.4}
-  # Type once, submit, verify. Only exact empty confirms delivery; every other
-  # verdict preserves the loud refusal boundary.
-  send_rc=0
-  if [ "$TARGET_BACKEND" = remote ]; then
-    if "$SCRIPT_DIR/fm-on.sh" "$TARGET_REMOTE_ID" fm-remote-secondmate-control.sh send "$TARGET_REMOTE_ID" "$MESSAGE" < /dev/null >/dev/null; then
-      verdict=empty
+    # Slash commands open a completion popup in some TUIs (verified on codex);
+    # submitting too fast selects nothing, so give the popup time to settle before
+    # the (retried) Enter. Codex opens the same kind of popup for a `$<skill>`
+    # invocation, so a `$...` message to a codex target gets the same settle. That
+    # `$` case is scoped to codex on purpose: unlike `/`, a leading `$` commonly
+    # starts ordinary text ("$5/month", "$HOME"), so a universal `$` rule would
+    # needlessly slow plain text to claude/opencode/pi. The target backend's
+    # verified submit retry still backs the settle up either way.
+    case "$deliver_msg" in
+      /*) settle=1.2 ;;
+      \$*)
+        if [ "$TARGET_HARNESS" = codex ]; then settle=1.2; else settle=0.3; fi
+        ;;
+      *) settle=0.3 ;;
+    esac
+    retries=${FM_SEND_RETRIES:-3}
+    sleep_s=${FM_SEND_SLEEP:-0.4}
+    # Type once, submit, verify. Only exact empty confirms delivery; every other
+    # verdict preserves the loud refusal boundary.
+    send_rc=0
+    if [ "$TARGET_BACKEND" = remote ]; then
+      # Queued follow-up: final terminal/ownership check at the last instant
+      # before this backend call (see fm-send-followup-lib.sh known limitation).
+      if [ -n "${FM_SEND_FOLLOWUP_GATE_TASK:-}" ]; then
+        if [ -n "${FM_SEND_FOLLOWUP_PRE_SEND_HOOK:-}" ]; then
+          # shellcheck disable=SC2086,SC2090
+          eval "$FM_SEND_FOLLOWUP_PRE_SEND_HOOK"
+        fi
+        if ! fm_send_followup_transport_confirm "$STATE" "$FM_SEND_FOLLOWUP_GATE_TASK"; then
+          echo "error: follow-up for $FM_SEND_FOLLOWUP_GATE_TASK aborted before transport (terminal or lost exclusive lease); nothing was sent" >&2
+          return 1
+        fi
+      fi
+      if "$SCRIPT_DIR/fm-on.sh" "$TARGET_REMOTE_ID" fm-remote-secondmate-control.sh send "$TARGET_REMOTE_ID" "$MESSAGE" < /dev/null >/dev/null; then
+        verdict=empty
+      else
+        send_rc=$?
+        verdict=send-failed
+      fi
     else
-      send_rc=$?
-      verdict=send-failed
+      # Local backend: same last-instant gate immediately before submit.
+      if [ -n "${FM_SEND_FOLLOWUP_GATE_TASK:-}" ]; then
+        if [ -n "${FM_SEND_FOLLOWUP_PRE_SEND_HOOK:-}" ]; then
+          # shellcheck disable=SC2086,SC2090
+          eval "$FM_SEND_FOLLOWUP_PRE_SEND_HOOK"
+        fi
+        if ! fm_send_followup_transport_confirm "$STATE" "$FM_SEND_FOLLOWUP_GATE_TASK"; then
+          echo "error: follow-up for $FM_SEND_FOLLOWUP_GATE_TASK aborted before transport (terminal or lost exclusive lease); nothing was sent" >&2
+          return 1
+        fi
+      fi
+      if verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MESSAGE" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
+        :
+      else
+        send_rc=$?
+      fi
     fi
-  elif verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MESSAGE" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
-    :
-  else
-    send_rc=$?
-  fi
-  if [ "$send_rc" -ne 0 ]; then
-    if [ "$TARGET_BACKEND" = remote ] && [ "$send_rc" -eq 255 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-      fm_pending_reply_mark_delivery_unknown "$STATE" "$PENDING_REPLY_CORR" || true
-      echo "error: text delivery to remote secondmate $TARGET_REMOTE_ID is unknown; do not resend - same-host reconciliation is required" >&2
-      exit 1
-    fi
-    if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-      fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-    fi
-    echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
-    exit 1
-  fi
-  case "$verdict" in
-    empty)
-      ;;
-    send-failed)
+    if [ "$send_rc" -ne 0 ]; then
+      if [ "$TARGET_BACKEND" = remote ] && [ "$send_rc" -eq 255 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+        fm_pending_reply_mark_delivery_unknown "$STATE" "$PENDING_REPLY_CORR" || true
+        echo "error: text delivery to remote secondmate $TARGET_REMOTE_ID is unknown; do not resend - same-host reconciliation is required" >&2
+        return 1
+      fi
       if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
         fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
       fi
       echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
-      exit 1
-      ;;
-    *)
-      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      fi
-      echo "error: text not submitted to $T (delivery unconfirmed; verdict=${verdict:-unknown}; tried $RESOLUTION_TRIED)" >&2
-      exit 1
-      ;;
-  esac
-  # Delivery confirmed. Mark the pending expectation delivered without resolving
-  # it: only a correlated parent report acknowledges the request.
-  if [ -n "$PENDING_REPLY_CORR" ]; then
-    if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
-      :
-    else
-      delivery_commit_status=$?
-      if [ "$delivery_commit_status" = 2 ]; then
-        echo "error: text was delivered to $T, but its pending-reply delivery commit failed; a durable recovery marker was stored and the watcher will reconcile it. Do not resend." >&2
+      return 1
+    fi
+    case "$verdict" in
+      empty)
+        ;;
+      send-failed)
+        if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+          fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+        fi
+        echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
+        return 1
+        ;;
+      *)
+        if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+          fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+        fi
+        echo "error: text not submitted to $T (delivery unconfirmed; verdict=${verdict:-unknown}; tried $RESOLUTION_TRIED)" >&2
+        return 1
+        ;;
+    esac
+    # Delivery confirmed. Mark the pending expectation delivered without resolving
+    # it: only a correlated parent report acknowledges the request.
+    if [ -n "$PENDING_REPLY_CORR" ]; then
+      if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
+        :
       else
-        echo "error: text was delivered to $T, but its pending-reply delivery commit and recovery marker both failed. Do not resend; inspect $STATE manually." >&2
+        delivery_commit_status=$?
+        if [ "$delivery_commit_status" = 2 ]; then
+          echo "error: text was delivered to $T, but its pending-reply delivery commit failed; a durable recovery marker was stored and the watcher will reconcile it. Do not resend." >&2
+        else
+          echo "error: text was delivered to $T, but its pending-reply delivery commit and recovery marker both failed. Do not resend; inspect $STATE manually." >&2
+        fi
+        return 1
       fi
-      exit 1
+    fi
+    if [ "$close_keys" = 1 ] && [ -n "$RESOLVE_KEYS" ]; then
+      fm_send_close_resolved_keys "$resolve_answer" || return 1
+    fi
+    return 0
+  }
+
+  # Idle path: drop parked steers when the task is already terminal, otherwise
+  # drain the FIFO before the new message so mid-turn corrections land in order
+  # while the task is still live. Dispatch is exclusive lease (wait on foreign
+  # live lease - never overtake FIFO) -> transport_begin setup -> deliver with
+  # last-instant transport_confirm -> ack (or release on failure).
+  if [ -n "$QUEUE_TASK_ID" ] && [ -z "$RESOLVE_KEYS" ]; then
+    if fm_send_followup_is_terminal "$STATE" "$QUEUE_TASK_ID"; then
+      fm_send_followup_invalidate "$STATE" "$QUEUE_TASK_ID"
+    else
+      lease_wait_sleep=${FM_SEND_FOLLOWUP_LEASE_WAIT_SLEEP:-0.05}
+      lease_wait_max=${FM_SEND_FOLLOWUP_LEASE_WAIT_MAX:-30}
+      lease_wait_start=$SECONDS
+      while :; do
+        lease_rc=0
+        queued_msg=$(fm_send_followup_lease "$STATE" "$QUEUE_TASK_ID") || lease_rc=$?
+        if [ "$lease_rc" -eq 3 ]; then
+          # Foreign live lease: wait and retry so the parked head is delivered
+          # before this process's fresh steer (FIFO). Do not fall through.
+          if [ "$((SECONDS - lease_wait_start))" -ge "$lease_wait_max" ]; then
+            echo "error: follow-up queue for $QUEUE_TASK_ID is held by another live dispatcher longer than ${lease_wait_max}s; refusing to overtake with a fresh send" >&2
+            exit 1
+          fi
+          sleep "$lease_wait_sleep"
+          continue
+        fi
+        if [ "$lease_rc" -eq 1 ]; then
+          # Empty or terminal - safe to send the caller's fresh message next.
+          break
+        fi
+        if [ "$lease_rc" -ne 0 ]; then
+          echo "error: follow-up queue for $QUEUE_TASK_ID could not be leased; nothing further was sent" >&2
+          exit 1
+        fi
+        lease_wait_start=$SECONDS
+        # Test-only hook: inject between lease and transport_begin.
+        if [ -n "${FM_SEND_FOLLOWUP_AFTER_LEASE_HOOK:-}" ]; then
+          # shellcheck disable=SC2086,SC2090
+          eval "$FM_SEND_FOLLOWUP_AFTER_LEASE_HOOK"
+        fi
+        if ! fm_send_followup_transport_begin "$STATE" "$QUEUE_TASK_ID"; then
+          # Terminal (invalidated), foreign lease, or stale generation.
+          break
+        fi
+        # Test-only seam: after begin setup, before deliver's last-instant confirm.
+        if [ -n "${FM_SEND_FOLLOWUP_AFTER_TRANSPORT_BEGIN_HOOK:-}" ]; then
+          # shellcheck disable=SC2086,SC2090
+          eval "$FM_SEND_FOLLOWUP_AFTER_TRANSPORT_BEGIN_HOOK"
+        fi
+        # Final terminal check runs inside deliver immediately before backend send.
+        if FM_SEND_FOLLOWUP_GATE_TASK=$QUEUE_TASK_ID \
+          fm_send_deliver_text "$queued_msg" 0 ""; then
+          fm_send_followup_ack "$STATE" "$QUEUE_TASK_ID" || {
+            echo "error: follow-up for $QUEUE_TASK_ID was delivered but could not be acknowledged in the queue; inspect state manually and do not assume the park is empty" >&2
+            exit 1
+          }
+        else
+          fm_send_followup_release "$STATE" "$QUEUE_TASK_ID" || true
+          exit 1
+        fi
+      done
     fi
   fi
-  # Delivery is fully confirmed: close each answered decision in this home's
-  # ledger (answerer-closes; see the header contract).
-  if [ -n "$RESOLVE_KEYS" ]; then
-    fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1
-  fi
+
+  # Caller's message is never a queued follow-up; do not set the gate.
+  fm_send_deliver_text "$MESSAGE" 1 "$RESOLVE_ANSWER_TEXT" || exit 1
   # Submit landed with exact empty. Confirmation only proves the text was
   # accepted; the harness still needs a beat to spin up the
   # turn before its busy footer shows. Pause so an immediate peek catches the
