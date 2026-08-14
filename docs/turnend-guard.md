@@ -38,7 +38,7 @@ Under every persistent-watcher harness a live identity-matched watcher with a fr
 Its banner names the true failing condition, either a missing live watcher process or a genuinely stale beacon with its real age, and keys the once-per-episode dedup on that condition rather than the beacon mtime.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repository-root `state/`.
-`FM_GUARD_GRACE` controls beacon freshness and defaults to 300 seconds.
+Beacon freshness grace is owned by `fm_guard_grace_seconds` in `bin/fm-wake-lib.sh`: explicit `FM_GUARD_GRACE` wins, otherwise the default is `min(floor(60 * fm_poll_seconds), FM_GUARD_GRACE_MAX)` (900s at the default 15s poll; 3600s ceiling by default), using the same cadence normalization as the watcher sleep.
 If `jq` is missing or hook stdin is empty, the guard exits 0 because it cannot safely read loop-guard fields.
 
 ## Harness integrations
