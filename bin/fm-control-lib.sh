@@ -174,7 +174,9 @@ fm_control_exit_command() {  # <harness>
 # Which named keys a backend adapter can deliver. Every session provider
 # normalizes Enter, Ctrl+C, and the Ctrl+U composer clear; Orca's terminal API
 # exposes only an interrupt and an Enter, so it can deliver neither Escape nor
-# Ctrl+U (bin/backends/orca.sh's fm_backend_orca_send_key).
+# Ctrl+U (bin/backends/orca.sh's fm_backend_orca_send_key). Playbot is an IPC
+# backend, not a key-driven terminal: it supports no named keys; interrupt uses
+# a native threads:stop path in fm-control (plan v3 §3.7).
 fm_control_backend_supports_key() {  # <backend> <key>
   local backend=${1-} key=${2-}
   case "$backend" in
@@ -184,20 +186,45 @@ fm_control_backend_supports_key() {  # <backend> <key>
     orca)
       case "$key" in Enter|C-c) return 0 ;; esac
       ;;
+    playbot)
+      return 1
+      ;;
   esac
   return 1
 }
 
 # Whether <backend> has a recovery-grade agent-state classifier. Only tmux and
 # herdr implement fm_backend_agent_state; zellij, orca, and cmux report
-# `unverified`, so no reading of theirs can prove an agent stopped. The control
-# plane refuses a stop-proving verb there instead of reporting an unprovable
-# transition as success.
+# `unverified`, so no reading of theirs can prove an agent stopped. Playbot
+# implements recovery-grade alive/missing/ambiguous/unreadable (never invents
+# dead in v1) and is eligible for interrupt postcondition checks, but exit and
+# relaunch still refuse before mutation because no verified Playbot primitive
+# stops an agent while preserving its endpoint and worktree (plan v3 §3.7).
+# The control plane refuses a stop-proving verb there instead of reporting an
+# unprovable transition as success.
 fm_control_backend_state_verified() {  # <backend>
   case "${1-}" in
-    tmux|herdr) return 0 ;;
+    tmux|herdr|playbot) return 0 ;;
   esac
   return 1
+}
+
+# Whether <backend> may use a native (non-key) interrupt path. Playbot alone
+# uses threads:stop with rollout/current-state proof.
+fm_control_backend_native_interrupt() {  # <backend>
+  case "${1-}" in
+    playbot) return 0 ;;
+  esac
+  return 1
+}
+
+# Whether <backend> supports exit/relaunch verbs that require stopping an agent
+# while preserving the endpoint. Playbot deliberately returns false.
+fm_control_backend_supports_exit_relaunch() {  # <backend>
+  case "${1-}" in
+    playbot) return 1 ;;
+  esac
+  return 0
 }
 
 # The per-task wiring artifacts a harness leaves behind, so a relaunch that
