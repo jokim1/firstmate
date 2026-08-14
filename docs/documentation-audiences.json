@@ -213,6 +213,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/playbot-lanes/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/process-event-sources/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -361,6 +365,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/playbot-lanes.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/remote-secondmates.md",
       "audience": "operator-current"
     },
@@ -426,6 +434,10 @@
     },
     {
       "path": "docs/verification/muse.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/playbot-lanes.md",
       "audience": "maintainer-verification"
     },
     {
