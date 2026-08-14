@@ -323,6 +323,169 @@ test_autoarm_fresh_beacon_without_watcher_is_healthy() {
   pass "fm-guard stale banner: auto-arm fresh beacon without a live watcher is healthy"
 }
 
+# Poll-derived default grace (60x FM_POLL, hard-capped) must clear multi-minute
+# healthy gaps that the old fixed 300s false-alarmed on (observed ~424s beat age).
+set_beacon_age() {
+  local path=$1 age=$2
+  touch "$path"
+  python3 - "$path" "$age" <<'PY'
+import os, sys, time
+path = sys.argv[1]
+age = int(sys.argv[2])
+now = time.time()
+os.utime(path, (now - age, now - age))
+PY
+}
+
+test_poll_derived_grace_covers_multi_minute_healthy_gap() {
+  local dir home out grace age
+  dir=$(make_guard_case poll-derived-grace)
+  home=$(case_home "$dir")
+  # Explicit override off; default FM_POLL=15 => grace 900.
+  unset FM_GUARD_GRACE 2>/dev/null || true
+  grace=$(FM_POLL=15 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 900 ] || fail "default poll-derived grace expected 900, got $grace"
+  grace=$(FM_POLL=10 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 600 ] || fail "FM_POLL=10 should yield grace 600, got $grace"
+  grace=$(FM_GUARD_GRACE=42 FM_POLL=15 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 42 ] || fail "explicit FM_GUARD_GRACE must win, got $grace"
+
+  # A beacon aged ~424s (the observed false-alarm gap) must stay healthy under
+  # the poll-derived default and must NOT print WATCHER DOWN under auto-arm.
+  set_beacon_age "$home/state/.last-watcher-beat" 424
+  age=$(FM_STATE_OVERRIDE="$home/state" bash -c '. "$1"; fm_path_age "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$home/state/.last-watcher-beat")
+  [ "$age" -ge 400 ] || fail "test setup: expected beacon age >=400s, got $age"
+  [ "$age" -lt 900 ] || fail "test setup: expected beacon age <900s, got $age"
+  out=$(
+    FM_ROOT_OVERRIDE="$(case_root "$dir")" \
+      FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" \
+      FM_CONFIG_OVERRIDE="$home/config" \
+      FM_SUPERVISION_MODEL=autoarm \
+      env -u FM_GUARD_GRACE \
+      "$ROOT/bin/fm-guard.sh" 2>&1 >/dev/null || true
+  )
+  [ -z "$out" ] \
+    || fail "auto-arm with ~${age}s-old beacon under poll-derived grace must stay silent, got: $out"
+  pass "fm-guard stale banner: poll-derived grace covers multi-minute healthy beacon age"
+}
+
+# Adversarial counterexample: FM_POLL=86400 must not produce multi-day grace.
+# Derived grace is hard-capped independent of poll so genuine down-detection stays finite.
+test_poll_derived_grace_hard_cap_independent_of_poll() {
+  local grace
+  unset FM_GUARD_GRACE 2>/dev/null || true
+  grace=$(FM_POLL=86400 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 3600 ] || fail "FM_POLL=86400 must cap derived grace at 3600, got $grace"
+  grace=$(FM_POLL=100 FM_GUARD_GRACE_MAX=3600 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 3600 ] || fail "FM_POLL=100 (60x=6000) must cap at 3600, got $grace"
+  grace=$(FM_POLL=30 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 1800 ] || fail "FM_POLL=30 under the cap should yield 1800, got $grace"
+  # Standalone supervision fallback must honor the same ceiling.
+  # shellcheck disable=SC2016 # $1 expands inside the isolated child shell.
+  grace=$(FM_POLL=86400 bash -c '
+    # Intentionally do not source wake-lib: exercise fm_sup_default_grace alone.
+    . "$1"
+    fm_sup_default_grace
+  ' _ "$ROOT/bin/fm-supervision-lib.sh")
+  [ "$grace" = 3600 ] || fail "fm_sup_default_grace must cap FM_POLL=86400 at 3600, got $grace"
+  pass "fm-guard stale banner: poll-derived grace hard cap is independent of FM_POLL"
+}
+
+# Shared fm_poll_seconds: positive fractions scale grace; malformed/zero/negative
+# normalize to the default 15s cadence for BOTH poll and grace.
+test_shared_poll_cadence_normalizes_and_scales_fractional() {
+  local grace poll
+  unset FM_GUARD_GRACE 2>/dev/null || true
+  poll=$(FM_POLL=0.2 bash -c '. "$1"; fm_poll_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$poll" = 0.2 ] || fail "FM_POLL=0.2 must normalize to 0.2, got $poll"
+  grace=$(FM_POLL=0.2 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 12 ] || fail "fractional FM_POLL=0.2 must yield grace floor(0.2*60)=12, got $grace"
+  poll=$(FM_POLL=15.5 bash -c '. "$1"; fm_poll_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$poll" = 15.5 ] || fail "FM_POLL=15.5 must normalize to 15.5, got $poll"
+  grace=$(FM_POLL=15.5 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 930 ] || fail "fractional FM_POLL=15.5 must yield grace 930, got $grace"
+  for bad in garbage abc 0 -1 0.0 '' '..' '.2' '2.'; do
+    poll=$(FM_POLL="$bad" bash -c '. "$1"; fm_poll_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+    [ "$poll" = 15 ] || fail "malformed FM_POLL='$bad' must normalize poll to 15, got $poll"
+    grace=$(FM_POLL="$bad" bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+    [ "$grace" = 900 ] || fail "malformed FM_POLL='$bad' must yield grace 900, got $grace"
+  done
+  # Zero-padded integers must canonicalize to base-10 (not octal) for both poll
+  # and grace: raw "010" used to sleep 10s while grace $((010*60))=480 octal;
+  # raw "0008" hard-errored with empty grace and permanent WATCHER DOWN.
+  poll=$(FM_POLL=010 bash -c '. "$1"; fm_poll_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$poll" = 10 ] || fail "FM_POLL=010 must canonicalize to 10, got $poll"
+  grace=$(FM_POLL=010 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 600 ] || fail "FM_POLL=010 must yield grace 600 (10*60), got $grace"
+  poll=$(FM_POLL=0008 bash -c '. "$1"; fm_poll_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$poll" = 8 ] || fail "FM_POLL=0008 must canonicalize to 8, got $poll"
+  grace=$(FM_POLL=0008 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 480 ] || fail "FM_POLL=0008 must yield grace 480 (8*60), not empty/octal-error, got '$grace'"
+  # Sub-resolution fractions that round to 0 under %.6f must fall back (not sleep 0).
+  poll=$(FM_POLL=0.0000001 bash -c '. "$1"; fm_poll_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$poll" = 15 ] || fail "FM_POLL=0.0000001 must fall back to 15 after rounding to 0, got $poll"
+  grace=$(FM_POLL=0.0000001 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 900 ] || fail "FM_POLL=0.0000001 must yield default grace 900, got $grace"
+  # Huge integers must not saturate %d / overflow grace to 1.
+  poll=$(FM_POLL=99999999999999999999 bash -c '. "$1"; fm_poll_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$poll" = 15 ] || fail "huge FM_POLL must fall back to 15, got $poll"
+  grace=$(FM_POLL=99999999999999999999 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 900 ] || fail "huge FM_POLL must yield default grace 900, got $grace"
+  # Ceiling is inclusive: 86400 is still a valid poll (grace then hard-caps).
+  poll=$(FM_POLL=86400 bash -c '. "$1"; fm_poll_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$poll" = 86400 ] || fail "FM_POLL=86400 at the ceiling must stay 86400, got $poll"
+  poll=$(FM_POLL=86401 bash -c '. "$1"; fm_poll_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$poll" = 15 ] || fail "FM_POLL=86401 above the ceiling must fall back to 15, got $poll"
+  pass "fm-guard stale banner: shared poll cadence normalizes malformed and scales fractional"
+}
+
+# Production guard must alarm just past the hard-capped grace (not stay quiet
+# for a day when FM_POLL is absurd). Age the beacon past the ceiling with utime.
+test_alarm_just_past_bounded_grace() {
+  local dir home out age grace
+  dir=$(make_guard_case past-bounded-grace)
+  home=$(case_home "$dir")
+  unset FM_GUARD_GRACE 2>/dev/null || true
+  grace=$(FM_POLL=86400 bash -c '. "$1"; fm_guard_grace_seconds' _ "$ROOT/bin/fm-wake-lib.sh")
+  [ "$grace" = 3600 ] || fail "setup: expected capped grace 3600, got $grace"
+
+  # Just inside the ceiling: still healthy under auto-arm (fresh enough beacon).
+  set_beacon_age "$home/state/.last-watcher-beat" 3500
+  age=$(FM_STATE_OVERRIDE="$home/state" bash -c '. "$1"; fm_path_age "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$home/state/.last-watcher-beat")
+  [ "$age" -lt 3600 ] || fail "setup: expected age <3600 inside ceiling, got $age"
+  out=$(
+    FM_ROOT_OVERRIDE="$(case_root "$dir")" \
+      FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" \
+      FM_CONFIG_OVERRIDE="$home/config" \
+      FM_SUPERVISION_MODEL=autoarm \
+      FM_POLL=86400 \
+      env -u FM_GUARD_GRACE \
+      "$ROOT/bin/fm-guard.sh" 2>&1 >/dev/null || true
+  )
+  [ -z "$out" ] \
+    || fail "auto-arm with age ${age}s under capped grace 3600 must stay silent, got: $out"
+
+  # Just past the ceiling: must alarm even though uncapped 60x would still be quiet.
+  set_beacon_age "$home/state/.last-watcher-beat" 3605
+  age=$(FM_STATE_OVERRIDE="$home/state" bash -c '. "$1"; fm_path_age "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$home/state/.last-watcher-beat")
+  [ "$age" -ge 3600 ] || fail "setup: expected age >=3600 past ceiling, got $age"
+  out=$(
+    FM_ROOT_OVERRIDE="$(case_root "$dir")" \
+      FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" \
+      FM_CONFIG_OVERRIDE="$home/config" \
+      FM_SUPERVISION_MODEL=autoarm \
+      FM_POLL=86400 \
+      env -u FM_GUARD_GRACE \
+      "$ROOT/bin/fm-guard.sh" 2>&1 >/dev/null || true
+  )
+  [ "$(count_text "$out" "WATCHER DOWN - SUPERVISION IS OFF")" -eq 1 ] \
+    || fail "auto-arm with age ${age}s past capped grace must print WATCHER DOWN, got: $out"
+  pass "fm-guard stale banner: alarms just past hard-capped grace under absurd FM_POLL"
+}
+
 test_autoarm_stale_beacon_alarms_with_correct_reason() {
   local dir out
   dir=$(make_guard_case autoarm-stale)
@@ -388,6 +551,10 @@ test_persistent_no_watcher_episode_survives_beacon_touch() {
 test_first_stale_call_prints_full_banner
 test_repeated_same_episode_prints_reminder_only
 test_autoarm_fresh_beacon_without_watcher_is_healthy
+test_poll_derived_grace_covers_multi_minute_healthy_gap
+test_poll_derived_grace_hard_cap_independent_of_poll
+test_shared_poll_cadence_normalizes_and_scales_fractional
+test_alarm_just_past_bounded_grace
 test_autoarm_stale_beacon_alarms_with_correct_reason
 test_autoarm_stale_episode_is_stable
 test_persistent_no_watcher_banner_names_missing_process

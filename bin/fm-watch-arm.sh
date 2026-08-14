@@ -22,8 +22,8 @@
 #
 # This script forks the watcher as a tracked child, then VERIFIES the outcome
 # before it settles in. It confirms a watcher process is genuinely alive AND the
-# liveness beacon (state/.last-watcher-beat) is fresh within FM_GUARD_GRACE (the
-# single source of truth, shared with fm-watch.sh and fm-guard.sh), and prints
+# liveness beacon (state/.last-watcher-beat) is fresh within the shared
+# poll-derived grace (fm_guard_grace_seconds / FM_GUARD_GRACE override), and prints
 # exactly one unambiguous status line:
 #   watcher: started pid=<N> (beacon fresh)              - it launched one and confirmed it
 #   watcher: attached pid=<N> (beacon <age>s)            - a live+fresh successor holds the lock;
@@ -68,7 +68,7 @@ WATCH="$SCRIPT_DIR/fm-watch.sh"
 WATCH_LOCK="$STATE/.watch.lock"
 BEAT="$STATE/.last-watcher-beat"
 # "Fresh" reuses the guard's threshold so there is one definition of liveness.
-GRACE=${FM_GUARD_GRACE:-300}
+GRACE=$(fm_guard_grace_seconds)
 # How long to wait for a freshly forked watcher to acquire the lock and beat.
 # Git Bash/MSYS pays a much higher fork cost while the watcher completes its
 # required pre-lock migration, so its bounded default covers that cold start.

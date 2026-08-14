@@ -94,10 +94,111 @@ fm_watcher_lock_matches_pid() {
   FM_WATCHER_MATCHED_IDENTITY=$lock_identity
 }
 
+# fm_poll_seconds
+# Single owner of watcher poll-cadence normalization for the watcher loop sleep
+# and for every grace consumer. Reads FM_POLL (default 15). Accepts a positive
+# integer or positive decimal (e.g. 0.2, 15.5) and prints a canonical base-10
+# token so sleep and grace share one meaning. Zero-padded integers (010, 0008)
+# are rewritten to unpadded decimal (10, 8): echoing the raw token left the
+# watcher sleeping decimal while bash $(( poll * 60 )) read C-style octal, and
+# 0008 hard-errored with empty grace (permanent WATCHER DOWN on a healthy
+# beacon). Empty, zero, negative, multi-dot, non-numeric, sub-resolution
+# fractions that round to 0 (e.g. 0.0000001 -> sprintf 0), or values above the
+# sane poll ceiling FM_POLL_MAX_SECONDS (default 86400) normalize to 15 so the
+# watcher never busy-loops on sleep 0 / saturating huge integers. The ceiling
+# is checked on the numeric value before printing so awk %d saturation cannot
+# emit INT64_MAX. This function does not re-export FM_POLL; callers assign POLL
+# once.
+fm_poll_seconds() {
+  local raw=${FM_POLL:-15} default=15 canon max_poll
+  max_poll=${FM_POLL_MAX_SECONDS:-86400}
+  case "$max_poll" in ''|*[!0-9]*) max_poll=86400 ;; esac
+  [ "$max_poll" -gt 0 ] || max_poll=86400
+  case "$raw" in
+    ''|*[!0-9.]*|*.*.*|.*|*.)
+      printf '%s\n' "$default"
+      return 0
+      ;;
+  esac
+  # Canonical base-10: awk always parses decimal, so leading zeros never become
+  # octal for either sleep or $(( grace )) consumers. Re-validate the printed
+  # token (post-round) so sub-resolution fractions cannot collapse to sleep 0.
+  canon=$(awk -v p="$raw" -v d="$default" -v m="$max_poll" 'BEGIN {
+    n = p + 0
+    if (!(n > 0) || n > m) { print d; exit }
+    if (n == int(n)) {
+      printf "%d\n", int(n)
+      exit
+    }
+    s = sprintf("%.6f", n)
+    sub(/0+$/, "", s)
+    sub(/\.$/, "", s)
+    # Post-round positivity: 0.0000001 -> "0.000000" -> "0" must not ship.
+    if (!(s + 0 > 0)) { print d; exit }
+    if ((s + 0) > m) { print d; exit }
+    print s
+  }') || canon=$default
+  case "$canon" in
+    ''|*[!0-9.]*|*.*.*|.*|*.) canon=$default ;;
+  esac
+  # Defense: reject a canonical zero or empty after the awk path.
+  if ! awk -v c="$canon" -v m="$max_poll" 'BEGIN { exit !((c + 0) > 0 && (c + 0) <= m) }'; then
+    canon=$default
+  fi
+  printf '%s\n' "$canon"
+}
+
+# fm_guard_grace_seconds
+# Single owner of the default watcher-beacon stale grace used by guards, arm
+# health checks, and the turn-end guard. Explicit FM_GUARD_GRACE always wins.
+# Otherwise the default is derived from the shared fm_poll_seconds cadence so
+# grace stays calibrated to the beacon's healthy inter-poll interval instead of
+# a free-floating constant.
+# Historical fixed 300s under-covered healthy multi-minute gaps (observed false
+# WATCHER DOWN banners at ~424s beat age during normal operation and auto-arm
+# mid-turn pauses). 60x POLL (900s at the default 15s poll) clears those healthy
+# gaps while still treating multi-hour silence as a genuine lapse.
+#
+# Derived grace is hard-capped at FM_GUARD_GRACE_MAX (default 3600s), independent
+# of the raw poll: an absurd poll (e.g. 86400) must not suppress genuine
+# down-detection for days. Fractional poll is first-class (grace = floor(poll*60),
+# at least 1s) so a test cadence of 0.2 yields grace 12, matching the real sleep.
+# FM_GUARD_GRACE_MAX=3600 when unset or invalid.
+fm_guard_grace_seconds() {
+  local poll grace max
+  case "${FM_GUARD_GRACE:-}" in
+    ''|*[!0-9]*) ;;
+    *) printf '%s\n' "$FM_GUARD_GRACE"; return 0 ;;
+  esac
+  poll=$(fm_poll_seconds)
+  max=${FM_GUARD_GRACE_MAX:-3600}
+  case "$max" in ''|*[!0-9]*) max=3600 ;; esac
+  [ "$max" -gt 0 ] || max=3600
+  # poll is always a canonical base-10 token from fm_poll_seconds; still use
+  # 10# on the integer path so a future raw consumer cannot reintroduce octal.
+  case "$poll" in
+    *[!0-9]*)
+      grace=$(awk -v p="$poll" -v m="$max" 'BEGIN {
+        g = int(p * 60)
+        if (g < 1) g = 1
+        if (g > m) g = m
+        print g
+      }')
+      ;;
+    *)
+      grace=$(( 10#$poll * 60 ))
+      [ "$grace" -ge 1 ] || grace=1
+      [ "$grace" -le "$max" ] || grace=$max
+      ;;
+  esac
+  printf '%s\n' "$grace"
+}
+
 FM_WATCHER_HEALTHY_PID=
 FM_WATCHER_HEALTHY_IDENTITY=
 fm_watcher_healthy() {
-  local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME} lockdir beat pid identity age
+  local state=$1 watch_path=$2 grace=${3:-} home=${4:-$FM_HOME} lockdir beat pid identity age
+  [ -n "$grace" ] || grace=$(fm_guard_grace_seconds)
   FM_WATCHER_HEALTHY_PID=
   FM_WATCHER_HEALTHY_IDENTITY=
   lockdir="$state/.watch.lock"
@@ -167,8 +268,9 @@ FM_WATCHER_VERDICT_OK=false
 # shellcheck disable=SC2034 # Read by callers after the function returns.
 FM_WATCHER_VERDICT_REASON=stale-beacon
 fm_watcher_supervision_verdict() {
-  local state=$1 watch=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME}
+  local state=$1 watch=$2 grace=${3:-} home=${4:-$FM_HOME}
   local beat age fresh=false
+  [ -n "$grace" ] || grace=$(fm_guard_grace_seconds)
   FM_WATCHER_VERDICT_OK=false
   FM_WATCHER_VERDICT_REASON=stale-beacon
   beat="$state/.last-watcher-beat"
