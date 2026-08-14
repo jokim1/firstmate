@@ -53,7 +53,7 @@ The proof covers ownership only, never freshness: the fresh-beacon half of the p
 With away mode off the daemon lock proves nothing and the strict watcher predicate is unchanged.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repository-root `state/`.
-`FM_GUARD_GRACE` controls beacon freshness and defaults to 300 seconds.
+Beacon freshness grace is owned by `fm_guard_grace_seconds` in `bin/fm-wake-lib.sh`: explicit `FM_GUARD_GRACE` wins, otherwise the default is `min(floor(60 * fm_poll_seconds), FM_GUARD_GRACE_MAX)` (900s at the default 15s poll; 3600s ceiling by default), using the same cadence normalization as the watcher sleep.
 If `jq` is missing or hook stdin is empty, the guard exits 0 because it cannot safely read loop-guard fields.
 
 ## Harness integrations

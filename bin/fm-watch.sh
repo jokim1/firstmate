@@ -144,7 +144,9 @@ mkdir -p "$STATE"
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
 WATCHER_DOWNTIME_MARKER="$STATE/.watcher-down"
-WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}
+# Defaults to the shared poll-derived grace (fm_guard_grace_seconds) so re-arm
+# stale detection stays calibrated with the guard/beacon contract.
+WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-$(fm_guard_grace_seconds)}
 # The singleton-lock acquisition, EXIT trap, and the blocking supervision loop
 # all live below the source guard at the very bottom of this file (see "Main
 # entry"). Sourcing this file for unit tests therefore loads the functions -
@@ -168,7 +170,10 @@ fi
 # markers, while bin/fm-wake-lib.sh owns their wake-facing routing, the legacy
 # turn-ended signature, annotation staleness checks, and guarded bookkeeping writes.
 
-POLL=${FM_POLL:-15}                   # seconds between cycles
+# Shared cadence with guards: fm_poll_seconds (bin/fm-wake-lib.sh, already sourced
+# via fm-push-transition-lib) normalizes malformed/zero/negative FM_POLL to 15 and
+# keeps positive fractions so sleep and grace never disagree.
+POLL=$(fm_poll_seconds)               # seconds between cycles
 HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
