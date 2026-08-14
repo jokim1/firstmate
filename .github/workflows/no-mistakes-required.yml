@@ -6,6 +6,7 @@ on:
     types: [opened, edited, synchronize, reopened]
     branches:
       - main
+      - lila-main
 
 permissions:
   contents: read

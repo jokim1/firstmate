@@ -1,0 +1,44 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence.v1",
+  "operation": "threads:openThread",
+  "appVersion": "0.101.0",
+  "smokeRunId": "2026-08-27T16-27-32-783Z",
+  "recordedAt": "2026-08-27T16:27:33.888Z",
+  "projectId": "project_07474ac1d119",
+  "projectRootId": "root_1274183bc1fe",
+  "wireChannel": "threads:launch",
+  "idSource": "app",
+  "fusedWith": "workspace:create",
+  "request": {
+    "destination": {
+      "kind": "new-workspace",
+      "workspace": {
+        "strategy": "quick",
+        "projectId": "project_07474ac1d119",
+        "projectRootId": "root_1274183bc1fe",
+        "mode": "open",
+        "baseRef": "main",
+        "branch": "fm-playbot-lane-smoke-1787848052783",
+        "expectedCommit": "7aa761a69a65892a4eee352c3ac78d066d8a5fc9"
+      }
+    },
+    "thread": {
+      "title": "fm-playbot-lane-smoke 2026-08-27T16-27-32-783Z",
+      "approvalMode": "default",
+      "planMode": false,
+      "ephemeral": false
+    },
+    "activate": true
+  },
+  "resultWasUndefined": false,
+  "threadId": "chat-424d59ee-c41e-4393-b6d0-e2b84d2e5944",
+  "workspaceId": "ws_3485095685dc",
+  "requestSha256": "2e6a6899620a2d30bfc18a8ce13be4de4960a97e8c404171be3b466bdb4c6eac",
+  "resultThreadId": "chat-424d59ee-c41e-4393-b6d0-e2b84d2e5944",
+  "resultSha256": "a3faa609aa6d31b85774f8dc95df4394e6aaabf11d94bcf845af305c4821f774",
+  "persisted": {
+    "session_id": null,
+    "agent_status": null,
+    "archived": 0
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence.v1",
+  "operation": "threads:openThread",
+  "appVersion": "0.92.0",
+  "smokeRunId": "2026-08-15T06-30-33-620Z",
+  "recordedAt": "2026-08-15T06:30:33.930Z",
+  "projectId": "project_07474ac1d119",
+  "projectRootId": "root_1274183bc1fe",
+  "request": {
+    "id": "chat-1-1786775433911",
+    "workspaceId": "ws_caeec1261dad",
+    "title": "fm-playbot-lane-smoke 2026-08-15T06-30-33-620Z",
+    "approvalMode": "default",
+    "planMode": false,
+    "ephemeral": false
+  },
+  "resultWasUndefined": true,
+  "threadId": "chat-1-1786775433911",
+  "workspaceId": "ws_caeec1261dad",
+  "requestSha256": "8a1ef5832d175ef78fa2af9258622796b8e1754447eed91e3b3931539cebfb5b",
+  "persisted": {
+    "session_id": null,
+    "agent_status": null,
+    "archived": 0
+  }
+}

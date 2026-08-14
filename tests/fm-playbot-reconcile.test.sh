@@ -1,0 +1,426 @@
+#!/usr/bin/env bash
+# tests/fm-playbot-reconcile.test.sh - hermetic suite for
+# bin/fm-playbot-reconcile.mjs (plan v3 section 3.5, amendments 1A/4A,
+# V2SIM-3/4/6): bound-route validation, strict per-line JSONL rollout
+# derivation, the pending -> acknowledged outbox state machine, the turn-ended
+# touch, size caps, one static pointer line, and lock-owner-only
+# acknowledgement. All fixtures are synthetic; nothing touches a live
+# Playbot install.
+set -u
+
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+TMP_ROOT=$(fm_test_tmproot fm-playbot-reconcile-tests)
+FIX="$TMP_ROOT/fixtures"
+mkdir -p "$FIX"
+node "$ROOT/tests/playbot-fixtures/generate.mjs" "$FIX" >/dev/null || fail "fixture generation failed"
+
+LANES="$ROOT/bin/fm-playbot-lanes.mjs"
+RECONCILE="$ROOT/bin/fm-playbot-reconcile.mjs"
+HOME_DIR="$TMP_ROOT/home"
+STATE="$HOME_DIR/state"
+mkdir -p "$STATE"
+APPROVAL_CDP_PID=
+trap '[ -z "$APPROVAL_CDP_PID" ] || kill "$APPROVAL_CDP_PID" 2>/dev/null; fm_test_cleanup' EXIT
+
+export FM_HOME="$HOME_DIR"
+export FM_STATE_OVERRIDE="$STATE"
+export FM_PLAYBOT_APP_DB="$FIX/playbot.db"
+export FM_PLAYBOT_CODEX_DB="$FIX/harness/state_5.sqlite"
+export FM_PLAYBOT_APP_RUN_STATE="$FIX/playbot-app-run-state.json"
+export FM_PLAYBOT_DEVTOOLS_PORT_FILE="$FIX/DevToolsActivePort"
+export FM_PLAYBOT_APP_BUNDLE="$FIX/fixture-app.asar"
+export FM_PLAYBOT_APP_VERSION="0.90.0"
+
+file_mode() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %Lp "$1"
+  else
+    stat -c %a "$1"
+  fi
+}
+
+file_mtime() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %m "$1"
+  else
+    stat -c %Y "$1"
+  fi
+}
+
+# write_task_fixture <task-id> <thread-id> <workspace-id> <worktree-dir> <kind>
+write_task_fixture() {
+  local id=$1 thread=$2 workspace=$3 worktree_dir=$4 kind=$5 worktree digest
+  worktree=$(cd "$FIX/$worktree_dir" && pwd -P)
+  cat > "$STATE/$id.meta" <<EOF
+window=playbot:$thread
+endpoint_task_id=$id
+worktree=$worktree
+project=$FIX/projects/alpha
+harness=codex
+kind=$kind
+mode=local-only
+yolo=off
+tasktmp=$TMP_ROOT/tasktmp
+model=fixture-model
+effort=low
+spawn_gen=1
+backend=playbot
+playbot_project_id=project-alpha
+playbot_project_root_id=root-alpha
+playbot_workspace_id=$workspace
+playbot_thread_id=$thread
+playbot_route_gen=1
+playbot_delivery_id=delivery-$id
+EOF
+  digest=$(node "$LANES" meta-digest --meta "$STATE/$id.meta") || fail "meta-digest failed for $id"
+  cat > "$STATE/$id.playbot-route.json" <<EOF
+{
+  "schema": "firstmate.playbot.route.v1",
+  "home": "$HOME_DIR",
+  "taskId": "$id",
+  "spawnGen": 1,
+  "routeGen": 1,
+  "metaDigest": "$digest",
+  "threadId": "$thread",
+  "workspaceId": "$workspace",
+  "projectId": "project-alpha",
+  "projectRootId": "root-alpha",
+  "playbotSessionId": null,
+  "worktree": "$worktree"
+}
+EOF
+  chmod 0600 "$STATE/$id.playbot-route.json"
+}
+
+# outbox_field <task-id> <node-expression-on-outbox>
+outbox_field() {
+  node -e '
+const o = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+console.log(eval(process.argv[2]));
+' "$STATE/$1.playbot-outbox.json" "$2"
+}
+
+run_fixture_reconcile() {
+  node --input-type=module - "$RECONCILE" "$1" "$2" <<'NODE'
+import { pathToFileURL } from 'node:url';
+const reconcile = await import(pathToFileURL(process.argv[2]).href);
+const result = await reconcile.reconcileCheck(process.argv[3], {
+  checkKeyQueued: process.argv[4] === '1',
+  approvalOptions: { forSmoke: true }
+});
+for (const line of result.printed) process.stdout.write(`${line}\n`);
+process.exitCode = result.exitCode;
+NODE
+}
+
+approval_state_field() {
+  node -e '
+const state = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+console.log(eval(process.argv[2]));
+' "$APPROVAL_STATE" "$1"
+}
+
+printf '%s\n' "$$" > "$STATE/.lock"
+
+# --- completed turn: one pending event, one static line, turn-ended touch ------
+
+write_task_fixture rc-done thread-complete workspace-task worktrees/task ship
+OUT=$(node "$RECONCILE" check rc-done --check-key-queued 0) || fail "check failed for rc-done"
+[ "$(printf '%s\n' "$OUT" | grep -c '^playbot-event ')" = 1 ] || fail "check must print exactly one static pointer line, got: $OUT"
+printf '%s' "$OUT" | grep -q '^playbot-event task=rc-done event=[a-f0-9]* record=state/rc-done.playbot-outbox.json$' \
+  || fail "the static pointer line must carry only trusted routing data: $OUT"
+[ "$(outbox_field rc-done 'o.events.length')" = 1 ] || fail "outbox must hold exactly one event"
+[ "$(outbox_field rc-done 'o.events[0].state')" = pending ] || fail "the new event must be pending"
+[ "$(outbox_field rc-done 'o.events[0].kind')" = "completed:done" ] || fail "a valid terminal verb must classify the completion"
+[ -e "$STATE/rc-done.turn-ended" ] || fail "the reconciler must touch state/<id>.turn-ended for a newly completed turn (1A)"
+REC="$STATE/rc-done.playbot-result-$(outbox_field rc-done 'o.events[0].id').json"
+[ -f "$REC" ] || fail "the worker-result record must exist"
+[ "$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.trust)' "$REC")" = "untrusted-worker-data" ] \
+  || fail "the worker-result record must be labelled untrusted-worker-data"
+pass "completed turn produces one pending event, one static line, a bounded untrusted record, and a turn-ended touch"
+
+# --- replay safety: queued key silences, missing key reprints -------------------
+
+OUT=$(node "$RECONCILE" check rc-done --check-key-queued 1) || fail "queued check failed"
+[ -z "$OUT" ] || fail "a pending event with a queued check key must stay silent (the durable queue owns delivery)"
+OUT=$(node "$RECONCILE" check rc-done --check-key-queued 0) || fail "unqueued re-check failed"
+[ "$(printf '%s\n' "$OUT" | grep -c '^playbot-event ')" = 1 ] || fail "pending without a queued key must reprint the same static pointer"
+[ "$(outbox_field rc-done 'o.events.length')" = 1 ] || fail "re-checks must not duplicate the event"
+pass "outbox replay is safe: queued stays silent, unqueued reprints, never duplicated"
+
+# --- acknowledgement: lock-owner only -------------------------------------------
+
+EVENT_ID=$(outbox_field rc-done 'o.events[0].id')
+mv "$STATE/.lock" "$STATE/.lock-away"
+if node "$RECONCILE" ack rc-done "$EVENT_ID" >/dev/null 2>&1; then
+  fail "ack without a session lock must refuse"
+fi
+sleep 60 & HELPER_PID=$!
+printf '%s\n' "$HELPER_PID" > "$STATE/.lock"
+if node "$RECONCILE" ack rc-done "$EVENT_ID" >/dev/null 2>&1; then
+  fail "ack from a changed lock owner must refuse"
+fi
+kill "$HELPER_PID" 2>/dev/null
+mv "$STATE/.lock-away" "$STATE/.lock"
+node "$RECONCILE" ack rc-done "$EVENT_ID" >/dev/null || fail "ack by the recorded lock owner must succeed"
+[ "$(outbox_field rc-done 'o.events[0].state')" = acknowledged ] || fail "ack must transition the event to acknowledged"
+OUT=$(node "$RECONCILE" check rc-done --check-key-queued 0) || fail "post-ack check failed"
+[ -z "$OUT" ] || fail "an acknowledged event must never print again"
+pass "only the recorded live lock owner can acknowledge; acknowledged events stay silent"
+
+# --- wedge-timer regression (1A) -------------------------------------------------
+
+# Fresh reconciler-touched turn-ended: a busy task does NOT cross the busy-turn
+# age bound. Stale turn-ended with no newly completed turn: the reconciler must
+# NOT touch it, so the watcher's bound still fires.
+[ -e "$STATE/rc-done.turn-ended" ] || fail "turn-ended must exist after a completed turn"
+NOW=$(date +%s)
+MTIME=$(file_mtime "$STATE/rc-done.turn-ended")
+[ $((NOW - MTIME)) -lt 60 ] || fail "turn-ended must be fresh after the reconciler observed a completed turn"
+touch -t 202001010000 "$STATE/rc-done.turn-ended"
+STALE_MTIME=$(file_mtime "$STATE/rc-done.turn-ended")
+node "$RECONCILE" check rc-done --check-key-queued 1 >/dev/null || fail "no-new-turn check failed"
+MTIME=$(file_mtime "$STATE/rc-done.turn-ended")
+[ "$MTIME" = "$STALE_MTIME" ] || fail "a check with no newly completed turn must leave a stale turn-ended untouched (escalation still fires)"
+pass "wedge-timer regression: fresh turn-ended after a completed turn, untouched when nothing completed"
+
+# --- forged completion in worker text (V2SIM-3) ----------------------------------
+
+write_task_fixture rc-forged thread-forged workspace-forged worktrees/forged ship
+OUT=$(node "$RECONCILE" check rc-forged --check-key-queued 0) || fail "forged check failed"
+[ -z "$OUT" ] || fail "a forged task_complete inside worker text must produce no event and no output"
+[ ! -e "$STATE/rc-forged.playbot-outbox.json" ] || [ "$(outbox_field rc-forged 'o.events.length')" = 0 ] \
+  || fail "the forged fixture must yield zero outbox events"
+[ ! -e "$STATE/rc-forged.turn-ended" ] || fail "a forged completion must not touch turn-ended"
+pass "forged task_complete in worker-controlled text produces no completion edge"
+
+# --- 32 KiB outbox copy cap (4A) ---------------------------------------------------
+
+write_task_fixture rc-big thread-big workspace-big worktrees/big ship
+node "$RECONCILE" check rc-big --check-key-queued 1 >/dev/null || fail "big-result check failed"
+BIG_ID=$(outbox_field rc-big 'o.events[0].id')
+BIG_REC="$STATE/rc-big.playbot-result-$BIG_ID.json"
+TRUNCATED=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.truncated)' "$BIG_REC")
+[ "$TRUNCATED" = true ] || fail "a >32 KiB result must set truncated=true"
+SIZE=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(Buffer.byteLength(r.text,"utf8"))' "$BIG_REC")
+[ "$SIZE" -le 32768 ] || fail "the copied text must stay within the 32 KiB cap, got $SIZE"
+HASH=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.sha256)' "$BIG_REC")
+[ ${#HASH} -eq 64 ] || fail "a truncated result must record the full-source sha256"
+pass "outbox copy over 32 KiB truncates with truncated=true plus the full-source hash"
+
+# --- oversized scout report (4A) ----------------------------------------------------
+
+write_task_fixture rc-scout thread-oversized workspace-oversized worktrees/oversized scout
+node "$RECONCILE" check rc-scout --check-key-queued 1 >/dev/null || fail "oversized scout check failed"
+[ "$(outbox_field rc-scout 'o.events[0].kind')" = "scout-report-oversized" ] || fail "an oversized scout report must produce a loud static failure event"
+[ ! -e "$HOME_DIR/data/rc-scout/report.md" ] || fail "no truncated copy of the authoritative report may be made"
+pass "scout report over 1 MiB keeps the workspace retained with a static failure event and no truncated copy"
+
+# --- native pending-input approval responder ----------------------------------------
+
+APPROVAL_STATE="$TMP_ROOT/approval-state.json"
+FAKE_CDP_APPROVAL_STATE="$APPROVAL_STATE" \
+  node "$ROOT/tests/playbot-fixtures/fake-cdp.mjs" ws-approvals > "$TMP_ROOT/approval-cdp-port" &
+APPROVAL_CDP_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$TMP_ROOT/approval-cdp-port" ] && break
+  sleep 0.2
+done
+APPROVAL_CDP_PORT=$(cat "$TMP_ROOT/approval-cdp-port")
+[ -n "$APPROVAL_CDP_PORT" ] || fail "approval fake CDP server did not bind"
+printf '%s\n' "$APPROVAL_CDP_PORT" > "$FIX/DevToolsActivePort"
+PENDING_WORKTREE=$(cd "$FIX/worktrees/pending" && pwd -P)
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"command-pending","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"uv --offline run tool.py"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-command thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-command 0 >/dev/null || fail "command refusal reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a command approval must stay pending without an IPC response"
+grep -Fq 'blocked: Playbot approval request command-pending left pending by deny-command-approval-outside-sandbox' "$STATE/rc-command.status" || fail "a command approval must append a request-specific blocked status"
+grep -Fq 'uv --offline run tool.py' "$STATE/rc-command.playbot-approvals.jsonl" || fail "the refusal journal must retain the command request text"
+[ "$(outbox_field rc-command 'o.events[0].kind')" = "input-request" ] || fail "a command approval must remain an input-request event"
+pass "command approvals remain pending, journaled, and blocked for firstmate"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-grant","method":"item/permissions/requestApproval","params":{"permissions":{"fileSystem":{"read":["$PENDING_WORKTREE"],"write":["$PENDING_WORKTREE/assets"]}}}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-allow-grant thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-allow-grant 0 >/dev/null || fail "in-root structured grant reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an in-root structured grant must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].request.response.scope')" = turn ] || fail "an in-root structured grant must be approved only for the current turn"
+pass "in-root structured filesystem grant is turn-scoped"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"command-after-grant","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"uv --offline run tool.py"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[{"channel":"threads:respondToApproval","request":{"threadId":"thread-pending","requestId":"allow-grant","response":{"permissions":{"fileSystem":{"read":["$PENDING_WORKTREE"],"write":["$PENDING_WORKTREE/assets"]}},"scope":"turn"}}}]}
+EOF
+OUT=$(run_fixture_reconcile rc-allow-grant 0) || fail "new command after safe grant reconcile failed"
+[ "$(outbox_field rc-allow-grant 'o.events.length')" = 1 ] || fail "a new blocked request must create an input-request event without a status transition"
+[ "$(outbox_field rc-allow-grant 'o.events[0].kind')" = input-request ] || fail "the new blocked request must create an input-request event"
+REQUEST_FP=$(outbox_field rc-allow-grant 'o.events[0].approvalRequestFingerprint')
+[ "${#REQUEST_FP}" = 64 ] || fail "the input-request event must retain its blocked request fingerprint"
+[ "$(printf '%s\n' "$OUT" | grep -c '^playbot-event ')" = 1 ] || fail "the new blocked request must print one static wake pointer"
+run_fixture_reconcile rc-allow-grant 1 >/dev/null || fail "repeat new command reconcile failed"
+[ "$(outbox_field rc-allow-grant 'o.events.length')" = 1 ] || fail "a repeat poll of the same blocked request must not duplicate its event"
+[ "$(wc -l < "$STATE/rc-allow-grant.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "the safe grant and later blocked command must each be journaled once"
+pass "new blocked fingerprints wake once while status remains pending"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-grant","method":"item/permissions/requestApproval","params":{"permissions":{"fileSystem":{"write":["/tmp/playbot-escape"]}}}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-deny-grant thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-deny-grant 0 >/dev/null || fail "out-of-root structured grant reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an out-of-root structured grant must stay pending"
+grep -Fq 'deny-permissions-outside-approved-roots' "$STATE/rc-deny-grant.status" || fail "an out-of-root structured grant must append a policy-specific blocked status"
+pass "out-of-root structured filesystem grant is refused and left pending"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[{"itemId":"change-in-root","files":[{"path":"assets/hero.png"}]}],"approvalRequests":[{"id":"file-change-in-root","method":"item/fileChange/requestApproval","params":{"itemId":"change-in-root"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-file-change thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-file-change 0 >/dev/null || fail "in-root file-change reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an in-root file-change proposal must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].request.response.decision')" = accept ] || fail "an in-root file-change proposal must be accepted for one request only"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[{"itemId":"change-outside-root","files":[{"path":"/tmp/playbot-escape"}]}],"approvalRequests":[{"id":"file-change-outside-root","method":"item/fileChange/requestApproval","params":{"itemId":"change-outside-root"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[{"channel":"threads:respondToApproval","request":{"threadId":"thread-pending","requestId":"file-change-in-root","response":{"decision":"accept"}}}]}
+EOF
+run_fixture_reconcile rc-file-change 0 >/dev/null || fail "second file-change reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an out-of-root second proposal must stay pending without another IPC response"
+grep -Fq 'blocked: Playbot approval request file-change-outside-root left pending by deny-file-change-outside-worktree' "$STATE/rc-file-change.status" || fail "the out-of-root second proposal must append a request-specific blocked status"
+[ "$(wc -l < "$STATE/rc-file-change.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "each file-change proposal must be validated and journaled independently"
+pass "file-change proposals are accepted once and independently revalidated"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[{"id":"unknown-question","method":"item/tool/requestUserInput","params":{"questions":[{"header":"Choice","question":"Which direction?"}]}}],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-user-input thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-user-input 0 >/dev/null || fail "unknown user-input reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "unknown user input must stay pending without an IPC response"
+grep -Fq 'deny-unknown-user-input' "$STATE/rc-user-input.status" || fail "unknown user input must append a policy-specific blocked status"
+pass "unknown user input is never guessed and stays pending for firstmate"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"consumeResponses":false,"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-once","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"uv --offline run tool.py"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-idempotent thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-idempotent 1 >/dev/null || fail "first idempotence reconcile failed"
+run_fixture_reconcile rc-idempotent 1 >/dev/null || fail "repeat idempotence reconcile failed"
+[ "$(wc -l < "$STATE/rc-idempotent.playbot-approvals.jsonl" | tr -d ' ')" = 1 ] || fail "the same approval decision must be journaled only once"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an unchanged command request must never receive an IPC response"
+pass "repeat reconciliation journals an unchanged command request only once"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-elicitation","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png"}]}]}],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-asset thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset 0 >/dev/null || fail "asset elicitation reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "known-safe asset elicitation must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].channel')" = "threads:respondToMcpElicitation" ] || fail "asset elicitation must use respondToMcpElicitation"
+[ "$(approval_state_field 'state.responses[0].request.response._meta')" = null ] || fail "asset elicitation must be accepted for one request only"
+pass "in-root target without linked assets receives one-request MCP acceptance"
+
+REMOTE_ASSET_URL=https://unknown.example/private.png
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-remote-after-accepted","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["$REMOTE_ASSET_URL"]}]}]}],"agentStatus":"pending_input"},"responses":[{"channel":"threads:respondToMcpElicitation","request":{"threadId":"thread-pending","requestId":"asset-elicitation","response":{"action":"accept","content":null,"_meta":null}}}]}
+EOF
+run_fixture_reconcile rc-asset 0 >/dev/null || fail "second asset elicitation reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "a remote second asset request must stay pending without another IPC response"
+grep -Fq "reference=\"$REMOTE_ASSET_URL\"" "$STATE/rc-asset.status" || fail "the independently validated second asset request must name its blocked reference"
+[ "$(wc -l < "$STATE/rc-asset.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "each asset request must be validated and journaled independently"
+pass "a second asset request is independently validated after acceptance"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-in-root-link","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["assets/source.png"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-asset-linked thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset-linked 0 >/dev/null || fail "in-root linked asset reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an in-root linked asset must stay pending without an IPC response"
+grep -Fq 'deny-linked-asset-request' "$STATE/rc-asset-linked.status" || fail "the in-root linked asset must append a policy-specific blocked status"
+pass "in-root linked asset stays pending"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-message-suffix","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI. Additional request.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png"}]}]}],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-asset-message thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset-message 0 >/dev/null || fail "non-exact asset message reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a non-exact asset confirmation message must stay pending"
+grep -Fq 'deny-unknown-mcp-elicitation' "$STATE/rc-asset-message.status" || fail "a non-exact asset confirmation must append a policy-specific blocked status"
+pass "asset confirmation matching requires the exact message"
+
+kill "$APPROVAL_CDP_PID" 2>/dev/null
+wait "$APPROVAL_CDP_PID" 2>/dev/null
+APPROVAL_CDP_PID=
+
+# --- multi-turn rollout: two events, one printed line --------------------------------
+
+write_task_fixture rc-multi thread-multi workspace-task worktrees/task ship
+OUT=$(node "$RECONCILE" check rc-multi --check-key-queued 0) || fail "multi-turn check failed"
+[ "$(outbox_field rc-multi 'o.events.length')" = 2 ] || fail "two newly completed turns must produce two events"
+[ "$(printf '%s\n' "$OUT" | grep -c '^playbot-event ')" = 1 ] || fail "concurrent completions collapse to one static pointer line"
+pass "multiple newly completed turns dedupe into bounded events with one printed line"
+
+# --- corrupt outbox is a visible failure ---------------------------------------------
+
+write_task_fixture rc-corrupt thread-complete workspace-task worktrees/task ship
+printf 'not json at all' > "$STATE/rc-corrupt.playbot-outbox.json"
+chmod 0600 "$STATE/rc-corrupt.playbot-outbox.json"
+RC=0
+OUT=$(node "$RECONCILE" check rc-corrupt --check-key-queued 0 2>/dev/null) || RC=$?
+[ "$RC" -ne 0 ] || fail "a corrupt outbox must fail nonzero"
+printf '%s' "$OUT" | grep -q '^playbot-reconcile-failure task=rc-corrupt stage=outbox$' \
+  || fail "a corrupt outbox must print one static failure line, got: $OUT"
+pass "corrupt or unverifiable records are a visible failure, never silently filtered"
+
+# --- orphaned dispatch transaction past deadline (V2SIM-4) ----------------------------
+
+write_task_fixture rc-txn thread-complete workspace-task worktrees/task ship
+mkdir -p "$STATE/.playbot-dispatch"
+printf 'task_id=rc-txn\nstate=accepted\nworkspace_id=workspace-task\nthread_id=thread-complete\n' > "$STATE/.playbot-dispatch/rc-txn.txn"
+touch -t 202001010000 "$STATE/.playbot-dispatch/rc-txn.txn"
+RC=0
+OUT=$(FM_PLAYBOT_TXN_DEADLINE_SECS=600 node "$RECONCILE" check rc-txn --check-key-queued 0 2>/dev/null) || RC=$?
+[ "$RC" -ne 0 ] || fail "a stale pre-worker-started transaction must fail nonzero"
+printf '%s' "$OUT" | grep -q '^playbot-reconcile-failure task=rc-txn stage=dispatch-transaction$' \
+  || fail "a stale transaction must print one static failure pointer, got: $OUT"
+RC=0
+OUT=$(FM_PLAYBOT_TXN_DEADLINE_SECS=600 node "$RECONCILE" check rc-txn --check-key-queued 0 2>/dev/null) || RC=$?
+[ -z "$OUT" ] || fail "the same failure episode must not wake twice"
+rm -f "$STATE/.playbot-dispatch/rc-txn.txn"
+pass "an orphaned post-meta transaction past deadline yields exactly one static failure pointer"
+
+# --- Playbot absence: bounded, visible, non-destructive -------------------------------
+
+write_task_fixture rc-absent thread-complete workspace-task worktrees/task ship
+RC=0
+OUT=$(FM_PLAYBOT_APP_DB="$TMP_ROOT/nonexistent.db" node "$RECONCILE" check rc-absent --check-key-queued 0 2>/dev/null) || RC=$?
+[ "$RC" -ne 0 ] || fail "Playbot absence must fail nonzero"
+printf '%s' "$OUT" | grep -q '^playbot-reconcile-failure task=rc-absent stage=' \
+  || fail "Playbot absence must produce one visible failure line"
+[ -f "$STATE/rc-absent.playbot-route.json" ] || fail "task records must stay intact when Playbot is absent"
+pass "Playbot absence is bounded and visible with every record retained"
+
+# --- generated check wrapper: lock, queued-key boolean, registration -----------------
+
+write_task_fixture rc-wrap thread-complete workspace-task worktrees/task ship
+node "$RECONCILE" write-check rc-wrap >/dev/null || fail "write-check failed"
+[ -x "$STATE/rc-wrap.check.sh" ] || fail "the generated wrapper must be executable"
+[ "$(file_mode "$STATE/rc-wrap.check.sh")" = 700 ] || fail "the generated wrapper must be mode 0700"
+[ ! -L "$STATE/rc-wrap.check.sh" ] || fail "the generated wrapper must not be a symlink"
+WRAP_OUT=$(FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" bash "$STATE/rc-wrap.check.sh") || fail "wrapper run failed"
+printf '%s' "$WRAP_OUT" | grep -q '^playbot-event task=rc-wrap ' || fail "the wrapper must print the reconciler's static pointer line"
+# Concurrency: parallel wrapper runs collapse onto one outbox event.
+write_task_fixture rc-race thread-multi workspace-task worktrees/task ship
+node "$RECONCILE" write-check rc-race >/dev/null || fail "write-check for rc-race failed"
+for _ in 1 2 3 4; do
+  FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" bash "$STATE/rc-race.check.sh" >/dev/null 2>&1 &
+done
+wait
+[ "$(outbox_field rc-race 'o.events.length')" = 2 ] || fail "concurrent checks must produce exactly the two real events, got $(outbox_field rc-race 'o.events.length')"
+"$ROOT/bin/fm-check-register.sh" rc-wrap >/dev/null || fail "fm-check-register must bind the generated wrapper"
+[ -f "$STATE/rc-wrap.check-trust" ] || fail "registration must write the trust record"
+pass "generated wrapper is a registerable mode-0700 check that collapses concurrent runs"
+
+printf 'fm-playbot-reconcile: all tests passed\n'
