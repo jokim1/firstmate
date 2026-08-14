@@ -367,6 +367,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
           age_seconds:null,contradiction:false,reason:(.secondmate_current.registry.reason // "Registered secondmate table unavailable")}
        else empty end ]
      + [ $secondmate_views[]
+       | ([.unresolved_children[]? | .id] | if length > 0 then "unresolved: " + join(", ") else "" end) as $unresolved_note
        | {id,state:.bearings_state,
           doing:((if .bearings_state == "active_child_work" then
                     ([.active_children[] | .id + ": " + (.doing // .state)] | join("; "))
@@ -375,7 +376,10 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                   elif .bearings_state == "externally_held" then
                     ([.bearings_holds[] | .id + ": " + (.reason // "held")] | join("; "))
                   elif .bearings_state == "no_active_work" then "No active child work"
-                  else (.current.reason // "Current home state unavailable") end) | trunc(120)),
+                  else (.current.reason // "Current home state unavailable") end) as $base
+                | (if $unresolved_note == "" then $base
+                   elif $base == "" or $base == "No active child work" then $unresolved_note
+                   else $base + "; " + $unresolved_note end) | trunc(120)),
           provenance:.provenance.selected,freshness:.freshness.status,
           age_seconds:.freshness.age_seconds,contradiction:(.contradiction // false),
           reason:(.current.reason // "-")} ]) as $secondmates_all
