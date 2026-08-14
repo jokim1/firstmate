@@ -349,6 +349,7 @@ require_state_verified_backend() {  # <verb>
 # before sending anything when the backend cannot deliver either key, because
 # an interrupt that cancels the turn but leaves the restored prompt in the
 # composer would make the next submitted line concatenate onto it.
+# Playbot is not key-driven: deliver_interrupt routes to native stop instead.
 send_interrupt_keys() {
   local key repeat clear i=0
   key=$(fm_control_interrupt_key "$HARNESS")
@@ -366,6 +367,23 @@ send_interrupt_keys() {
   done
   [ -z "$clear" ] || fm_backend_send_key "$BACKEND" "$T" "$clear" "$LABEL" \
     || die "interrupt key $key reached task $ID, but $clear did not, so its composer still holds the cancelled prompt; clear it before the next lifecycle action"
+}
+
+# deliver_playbot_interrupt: native threads:stop with exact task/thread/turn
+# match and rollout/current-state proof that the turn stopped while the
+# endpoint remains live (plan v3 §3.7). Never guesses C-c or Escape.
+deliver_playbot_interrupt() {
+  local proof
+  fm_backend_source playbot || die "playbot backend adapter could not be loaded for interrupt"
+  if ! declare -F fm_backend_playbot_interrupt >/dev/null 2>&1; then
+    die "playbot adapter has no fm_backend_playbot_interrupt; refusing to guess a key"
+  fi
+  proof=$(fm_backend_playbot_interrupt "$T" "$ID" "$META") \
+    || die "playbot native interrupt (threads:stop) failed or could not prove the turn stopped for task $ID"
+  case "$proof" in
+    stopped|turn-stopped|confirmed) printf 'confirmed' ;;
+    *) printf 'unconfirmed' ;;
+  esac
 }
 
 prepare_interrupt_ack() {
@@ -404,6 +422,11 @@ interrupt_cancel_claim() {
 # cancellation claim available after delivery.
 deliver_interrupt() {
   local cancel
+  if fm_control_backend_native_interrupt "$BACKEND"; then
+    cancel=$(deliver_playbot_interrupt) || return $?
+    printf '%s' "$cancel"
+    return 0
+  fi
   prepare_interrupt_ack
   send_interrupt_keys
   cancel=$(interrupt_cancel_claim)
@@ -443,6 +466,9 @@ retire_busy_incarnation() {
 # `already-stopped` or `stopped`.
 do_exit() {
   local state cmd verdict cancel interrupt_result=not-needed
+  # Playbot refuses exit before any key or command is sent (plan v3 §3.7).
+  fm_control_backend_supports_exit_relaunch "$BACKEND" \
+    || die "backend=playbot refuses 'exit' before mutation: no verified Playbot primitive stops an agent while preserving its endpoint and worktree; use teardown after safety checks for retirement, or escalate a missing task for explicit recovery"
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -782,6 +808,10 @@ do_relaunch() {
   local exit_result state note_line
   local -a spawn_args
 
+  # Playbot refuses relaunch before any mutation (plan v3 §3.7): a missing task
+  # escalates for explicit recovery with its workspace retained.
+  fm_control_backend_supports_exit_relaunch "$BACKEND" \
+    || die "backend=playbot refuses 'relaunch' before mutation: no verified Playbot primitive stops an agent while preserving its endpoint and worktree; escalate a missing task for explicit recovery with the workspace retained"
   require_state_verified_backend relaunch
   resolve_relaunch_profile
 

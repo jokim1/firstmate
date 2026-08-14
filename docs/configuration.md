@@ -64,15 +64,18 @@ The file format is unchanged in both modes; tasks-axi and manual edits produce t
 ## Runtime backend (config/backend / FM_BACKEND)
 
 For spawn-capable adapters, the runtime session-provider backend controls where task windows/endpoints are created, captured, sent to, watched, and killed.
-`tmux` is the verified reference backend (see [`docs/tmux-backend.md`](tmux-backend.md)); `herdr`, `zellij`, `orca`, and `cmux` are experimental spawn backends (see [`docs/herdr-backend.md`](herdr-backend.md), [`docs/zellij-backend.md`](zellij-backend.md), [`docs/orca-backend.md`](orca-backend.md), and [`docs/cmux-backend.md`](cmux-backend.md)).
-Treehouse remains the worktree provider for tmux, herdr, zellij, and cmux, since herdr, zellij, and cmux are session providers only; Orca provides both the task worktree and terminal endpoint.
+`tmux` is the verified reference backend (see [`docs/tmux-backend.md`](tmux-backend.md)); `herdr`, `zellij`, `orca`, `cmux`, and `playbot` are experimental backends (see [`docs/herdr-backend.md`](herdr-backend.md), [`docs/zellij-backend.md`](zellij-backend.md), [`docs/orca-backend.md`](orca-backend.md), and [`docs/cmux-backend.md`](cmux-backend.md); Playbot contract docs land with the additive lane as `docs/playbot-lanes.md`).
+Treehouse remains the worktree provider for tmux, herdr, zellij, and cmux, since herdr, zellij, and cmux are session providers only; Orca and Playbot each provide both the task worktree and the task endpoint.
 New spawns choose the backend in this order: an explicit `--backend` flag that current authority for that exact task alone has authorized (a present captain instruction or the task's own accepted brief; never later-task precedent by analogy), then `FM_BACKEND`, then the first non-empty line of local gitignored `config/backend`, then runtime auto-detection from `$TMUX`, `HERDR_ENV=1`, or cmux runtime signals, then default `tmux`.
 If more than one runtime marker is present, detection resolves innermost-first: `$TMUX` is checked before `HERDR_ENV=1`, which is checked before cmux's primary `CMUX_WORKSPACE_ID` marker and its documented fallback signals - tmux or herdr started from inside a cmux terminal is the innermost, currently-executing layer, while cmux itself (a terminal application, not a nestable multiplexer) is always checked last.
 See [`docs/cmux-backend.md`](cmux-backend.md#runtime-detection) for why cmux can be selected when `CMUX_WORKSPACE_ID` is absent.
 Auto-detected herdr or cmux prints a stderr notice naming `config/backend` and `--backend tmux` as opt-outs; auto-detected tmux stays silent to preserve existing default behavior.
-Zellij and Orca are never auto-detected; select them by putting the name in a local `config/backend` file, by exporting `FM_BACKEND=<name>`, or by telling the first mate in chat.
-Any value other than `tmux`, `herdr`, `zellij`, `orca`, or `cmux` is rejected until another adapter is implemented and verified.
-`fm-spawn.sh` accepts `tmux`, `herdr`, `zellij`, `orca`, and `cmux` for ship and scout tasks; `backend=orca` and `backend=cmux` both still refuse `--secondmate` until secondmate launch semantics are designed for each.
+Zellij, Orca, and Playbot are never auto-detected and never become the home default through silent detection; select them only by explicit per-task `--backend`, a present captain instruction, `FM_BACKEND`, or local `config/backend`.
+There is no automatic captain phrase trigger for Playbot.
+Any value other than `tmux`, `herdr`, `zellij`, `orca`, `cmux`, or `playbot` is rejected until another adapter is implemented and verified.
+`fm-spawn.sh` accepts `tmux`, `herdr`, `zellij`, `orca`, `cmux`, and `playbot` for ship and scout tasks; `backend=orca`, `backend=cmux`, and `backend=playbot` all refuse `--secondmate` until secondmate ownership is designed and proved for each.
+Live `backend=playbot` dispatch remains phase-gated in `fm_backend_validate_spawn` until Phase 1/2 native gates pass (workspace create, send acceptance, stop, archive/cleanup, confinement); hermetic fixture tests may set `FM_PLAYBOT_NATIVE_SPAWN=1` only.
+Playbot v1 supports scout and ship `local-only` only; ship `direct-PR` and `no-mistakes` are refused.
 `codex-app` is not an accepted runtime backend yet; [`docs/codex-app-backend.md`](codex-app-backend.md) owns the Codex App boundary.
 The session-start secondmate liveness sweep uses the recovery-grade `fm_backend_agent_state` classifier where verified.
 The comment above that function in `bin/fm-backend.sh` is the single owner of its detailed state contract and recovery authorization.
@@ -87,6 +90,11 @@ A herdr task additionally records `herdr_session=`, `herdr_workspace_id=`, `herd
 A zellij task additionally records `zellij_session=`, `zellij_tab_id=`, and `zellij_pane_id=`.
 An Orca task additionally records `orca_worktree_id=` and `terminal=`, with `window=fm-<id>` kept as the shared firstmate alias.
 A cmux task additionally records `cmux_workspace_id=` and `cmux_surface_id=`.
+A Playbot task records `window=playbot:<thread-id>`, `harness=codex`, `playbot_project_id=`, `playbot_project_root_id=`, `playbot_workspace_id=`, `playbot_thread_id=`, `playbot_route_gen=`, and `playbot_delivery_id=`.
+Late-bound Playbot session identity is not a meta field; it lives only on the home-local `state/<id>.playbot-route.json` route record and is re-verified against the live app on every session-mapping use.
+Playbot project bindings are home-local (`state/.playbot-project-bindings.json`), one registered Firstmate project per exact Playbot project/root identity; dispatch looks up Playbot IDs from the Firstmate project only.
+Per-home MCP registration uses a stable name derived from the canonical `FM_HOME` and a content-addressed install receipt under that home's `state/`; multiple Firstmate homes never share route, outbox, lease, or binding records.
+Compatibility states reported by the Playbot doctor include app reachability, schema/version match, controller lease validity, and operating mode (`native-enabled`, `courier-only-confinement`, `courier-only-compatibility`, or read-only lab); mutations stay disabled outside a native-enabled home after the Phase 1/2 gates.
 Task selectors for `fm-peek.sh`, `fm-send.sh`, and `fm-crew-state.sh` resolve centrally through `fm_backend_resolve_selector`.
 A selector containing `:` is passed through as an explicit backend endpoint escape hatch.
 Otherwise an exact task id matching `state/<id>.meta` wins before the legacy `fm-<id>` label fallback, so task ids that themselves start with `fm-` route to their own metadata instead of being stripped.
@@ -108,6 +116,7 @@ Use the guarded cleanup path described in [`docs/zellij-backend.md`](zellij-back
 cmux has no session layer at all - one workspace per task, in whatever cmux window is open - and its socket password (when configured) is read from local, gitignored `config/cmux-socket-password` under the effective config directory, never committed.
 The caller-facing label remains `fm-<id>`, but the actual cmux workspace title is scoped by the active `FM_HOME` readable label plus a short hash of the resolved `FM_ROOT` path as `fm-<home-label>-<id>`.
 Test cleanup must use the guarded path in [`docs/cmux-backend.md`](cmux-backend.md#current-operation-and-safety), never enumerate-and-close every workspace.
+Playbot has no default session and is never selected by ambient markers; Windows remains unsupported for the native lane until a separate live proof.
 `config/backend` is inherited into secondmate homes under the primary-authoritative contract owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md).
 
 ## Away-mode supervisor backend (FM_SUPERVISOR_BACKEND / FM_SUPERVISOR_TARGET)
