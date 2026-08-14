@@ -76,12 +76,14 @@ Refresh the hints whenever the serial lane gains scripts, rather than waiting fo
 
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
-| `portable-serial-1of5` | 30 | 911111 ms (~15.19 min) |
-| `portable-serial-2of5` | 31 | 911128 ms (~15.19 min) |
-| `portable-serial-3of5` | 32 | 911128 ms (~15.19 min) |
-| `portable-serial-4of5` | 31 | 911128 ms (~15.19 min) |
-| `portable-serial-5of5` | 30 | 911111 ms (~15.19 min) |
-| imbalance | | 17 ms |
+| `portable-serial-1of7` | 18 | 807171 ms (~13.45 min) |
+| `portable-serial-2of7` | 24 | 807170 ms (~13.45 min) |
+| `portable-serial-3of7` | 25 | 807194 ms (~13.45 min) |
+| `portable-serial-4of7` | 24 | 807193 ms (~13.45 min) |
+| `portable-serial-5of7` | 24 | 807191 ms (~13.45 min) |
+| `portable-serial-6of7` | 24 | 807194 ms (~13.45 min) |
+| `portable-serial-7of7` | 25 | 807191 ms (~13.45 min) |
+| imbalance | | 24 ms |
 
 The current table is generated from the runner's retained maxima plus its default for the nine unhinted scripts.
 Run 34342484144 observed a shard reach about 20 minutes of passing work, so the 30-minute job cap keeps meaningful hang-tripwire margin for job setup and runner-speed spread.
@@ -126,7 +128,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | Lane | Bound | Rationale |
 |---|---|---|
 | portable parallel 1/2 | job `timeout-minutes: 10` | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
-| portable serial 1-5 | job `timeout-minutes: 30` | Current runners can take about 20 minutes; the 30-minute cap remains a hang tripwire while leaving margin for job setup and runner-speed spread. |
+| portable serial 1-7 | job `timeout-minutes: 30` | Current runners can take about 20 minutes; the 30-minute cap remains a hang tripwire while leaving margin for job setup and runner-speed spread. The fork keeps seven serial shards (a standing divergence): upstream's raised cap now leaves headroom, but retiring back to five is a later structural step, not this rebase's union. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
 
 Timeouts are hang tripwires rather than expected healthy durations.
