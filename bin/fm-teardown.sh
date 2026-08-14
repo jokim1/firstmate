@@ -702,6 +702,9 @@ if [ -z "$BUSY_GEN" ]; then
 fi
 ORCA_WORKTREE_ID=$(fm_meta_get "$META" orca_worktree_id)
 ORCA_PATH_MATCH_VERIFIED=0
+PLAYBOT_WORKSPACE_ID=$(fm_meta_get "$META" playbot_workspace_id)
+PLAYBOT_THREAD_ID=$(fm_meta_get "$META" playbot_thread_id)
+PLAYBOT_ENDPOINT_RETIRED=0
 
 KIND=$(grep '^kind=' "$META" | cut -d= -f2- || true)
 [ -n "$KIND" ] || KIND=ship
@@ -893,6 +896,80 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   T_ORCA=$(meta_value "$META" terminal)
   [ -z "$T_ORCA" ] || T=$T_ORCA
 fi
+
+# Playbot cleanup helpers (plan v3 §3.7): run after common dirty/unlanded
+# checks; retire check/route/outbox/txn only after endpoint proof.
+playbot_retention_receipt_path() {
+  printf '%s/%s.playbot-retention' "$STATE" "$ID"
+}
+
+playbot_write_retention_receipt() {  # <reason>
+  local reason=$1 path
+  path=$(playbot_retention_receipt_path)
+  {
+    echo "task_id=$ID"
+    echo "ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "reason=$reason"
+    echo "window=$T"
+    echo "worktree=${WT:-}"
+    echo "playbot_workspace_id=${PLAYBOT_WORKSPACE_ID:-}"
+    echo "playbot_thread_id=${PLAYBOT_THREAD_ID:-}"
+  } > "$path" || return 1
+  echo "warning: playbot cleanup retained an orphan receipt at $path ($reason)" >&2
+}
+
+playbot_retire_records() {
+  # Only after endpoint retirement is confirmed.
+  rm -f -- \
+    "$STATE/$ID.playbot-route.json" \
+    "$STATE/$ID.playbot-outbox.json" \
+    "$STATE/$ID.check.sh" \
+    "$STATE/$ID.check-trust" \
+    "$STATE/$ID.pr-poll" \
+    "$STATE/$ID.pr-poll-registration" \
+    "$STATE/.playbot-dispatch/$ID.txn" \
+    2>/dev/null || true
+  rmdir "$STATE/.playbot-dispatch" 2>/dev/null || true
+}
+
+playbot_teardown_endpoint() {
+  local proof gone_rc
+  fm_backend_source playbot || {
+    echo "error: playbot backend adapter could not be loaded; preserving task state" >&2
+    return 1
+  }
+  if ! declare -F fm_backend_playbot_teardown >/dev/null 2>&1; then
+    echo "error: playbot adapter has no fm_backend_playbot_teardown; preserving task state" >&2
+    return 1
+  fi
+  # Adapter: stop current turn, archive exact task-owned thread, optionally
+  # archive/remove workspace. Prints: retired | retained:<reason> | refuse:<reason>
+  set +e
+  proof=$(fm_backend_playbot_teardown "$META" "$ID" "$T" "$WT" "$PLAYBOT_WORKSPACE_ID" "$PLAYBOT_THREAD_ID")
+  gone_rc=$?
+  set -e
+  case "$gone_rc:$proof" in
+    0:retired)
+      PLAYBOT_ENDPOINT_RETIRED=1
+      return 0
+      ;;
+    0:retained:*)
+      playbot_write_retention_receipt "${proof#retained:}" || true
+      # Workspace retained but thread endpoint must still be gone for record retirement.
+      if declare -F fm_backend_playbot_endpoint_confirmed_gone >/dev/null 2>&1 \
+         && fm_backend_playbot_endpoint_confirmed_gone "$T"; then
+        PLAYBOT_ENDPOINT_RETIRED=1
+        return 0
+      fi
+      echo "error: playbot teardown retained workspace but could not prove endpoint $T is gone; preserving every durable record" >&2
+      return 1
+      ;;
+    *)
+      echo "error: playbot teardown refused or failed for $ID (${proof:-no-proof}); preserving every durable record" >&2
+      return 1
+      ;;
+  esac
+}
 
 # Where a harness's firstmate-owned global turn-end registry entry lives is
 # owned by bin/fm-control-lib.sh, so teardown and the control plane's relaunch
@@ -2729,6 +2806,18 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
+if [ "$BACKEND" = playbot ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ]; then
+  if ! inspectable_git_worktree "$WT"; then
+    echo "REFUSED: Playbot ship task $ID has no inspectable git worktree at ${WT:-<missing>}." >&2
+    echo "Cannot verify dirty or unlanded work; restore the worktree path or get explicit OK to discard, then --force." >&2
+    exit 1
+  fi
+  [ -n "$PLAYBOT_WORKSPACE_ID" ] && [ -n "$PLAYBOT_THREAD_ID" ] || {
+    echo "REFUSED: Playbot task $ID is missing playbot_workspace_id or playbot_thread_id; preserving task state." >&2
+    exit 1
+  }
+fi
+
 if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   if validate_worktree_teardown_safety; then
     :
@@ -2794,6 +2883,28 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   fi
   [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
+elif [ "$BACKEND" = playbot ] && [ "$KIND" != secondmate ]; then
+  # After common dirty/unlanded validation: stop turn, archive thread/workspace
+  # through the adapter, retain receipt if removal unsupported, retire records
+  # only after endpoint proof (plan v3 §3.7).
+  if [ -d "$WT" ]; then
+    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+    if [ "$branch" != "HEAD" ]; then
+      if git -C "$WT" checkout --detach -q 2>/dev/null; then
+        git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+      fi
+    fi
+    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+      "$WT/.opencode/plugins/fm-busy-state.js" \
+      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  fi
+  playbot_teardown_endpoint || exit 1
+  if [ "$PLAYBOT_ENDPOINT_RETIRED" = 1 ]; then
+    playbot_retire_records
+  else
+    echo "error: playbot endpoint retirement was not confirmed for $ID; preserving every durable record" >&2
+    exit 1
+  fi
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
   if [ "$branch" != "HEAD" ]; then
@@ -2862,7 +2973,7 @@ elif [ "$BACKEND" = herdr ]; then
   else
     echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
   fi
-elif [ "$BACKEND" != orca ]; then
+elif [ "$BACKEND" != orca ] && [ "$BACKEND" != playbot ]; then
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
