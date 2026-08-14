@@ -1700,12 +1700,14 @@ EOF
           and [.queued[].id] == ["production-observation"]
           and [.holds[].id] == ["production-observation"])
       and (.secondmate_current.records[] | select(.id == "sshhip")
-        | .current.state == "unknown"
-          and (.current.reason | contains("child current state unavailable: unreadable-child"))
+        | .current.state == "captain_decision"
+          and .current.reason == null
           and .provenance.selected == "structured-home"
-          and .provenance.summary_valid == false
-          and .provenance.trust == "partial-structured"
-          and .invalidity == {kind:"child_current_unavailable",ids:["unreadable-child"]}
+          and .provenance.summary_valid == true
+          and .provenance.trust == "complete"
+          and .invalidity == {kind:null,ids:[]}
+          and [.unresolved_children[].id] == ["unreadable-child"]
+          and (.unresolved_children[0].state == "unknown")
           and [.decisions_open[].id] == ["reviewer-decision"]
           and [.holds[].id] == ["reviewer-decision"]
           and [.queued[].id] == ["reviewer-decision"]
@@ -1715,9 +1717,9 @@ EOF
           and .counts.holds == 1
           and .counts.queued == 1
           and .counts.landed == 1
-          and .counts.endpoints == 1)
-      and (.secondmate_landed.partial | length) == 1
-      and (.secondmate_landed.partial[0] | endswith("/mixed-sshhip-home"))
+          and .counts.endpoints == 1
+          and .counts.unresolved_children == 1)
+      and (.secondmate_landed.partial | length) == 0
       and (.secondmate_landed.unreadable | length) == 0
       and (.secondmate_current.records[] | select(.id == "home-assistant")
         | .current.state == "active_child_work"
@@ -1737,8 +1739,8 @@ EOF
         and .reason == "documented no live worker"))
       and (.gates | any(.id == "captain-run" and .owner == "home-assistant"
         and .blocked_by == "prep,security"))
-      and (.secondmates | any(.id == "sshhip" and .state == "unknown"
-        and (.reason | contains("unreadable-child"))))
+      and (.secondmates | any(.id == "sshhip" and .state == "captain_decision"
+        and (.doing | contains("unresolved: unreadable-child"))))
   ' >/dev/null || fail "end-to-end mixed-domain projection was wrong: $json"
 
   sed '/unreadable-child/a\

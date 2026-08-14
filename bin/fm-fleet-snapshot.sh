@@ -54,9 +54,12 @@
 #     each home with explicit provenance, freshness, endpoint evidence, and unknown
 #     failure reasons. Parent status and bounded terminal evidence are historical,
 #     untrusted supplements only and never override readable structured-home facts.
-#     Each structured-home record carries active_children, decisions_open, holds,
-#     queued, landed, endpoints, counts, and omitted. Actionable captain holds
-#     appear in decisions_open; blocked captain holds remain queued with metadata.
+#     Each structured-home record carries active_children, unresolved_children,
+#     decisions_open, holds, queued, landed, endpoints, counts, and omitted.
+#     Actionable captain holds appear in decisions_open; blocked captain holds
+#     remain queued with metadata. An unresolvable mid-run child degrades
+#     per-child (named in unresolved_children) and does not poison a home that
+#     otherwise has live structured evidence.
 #   secondmate_landed: {records[],truncated[],unreadable[],partial[]} - the
 #     compatibility landed-work roll-up derived from secondmate_current. Readable
 #     structured homes with an unknown current classification are partial, not
@@ -693,7 +696,12 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
             report_path:((.report_path // null) | if . == null then null else trunc(500) end),
             local_note:((.local_note // null) | if . == null then null else trunc(120) end),completion} ]
        | sort_by([(.completion.date // ""), .id]) | reverse) as $landed_all
-    | ([ $tasks[] | select(.current_state.state == "unknown") ]) as $unknown_children
+    # Unresolvable mid-run children degrade per-child: they are named in
+    # unresolved_children and never alone make the home inventory invalid or
+    # force the home verdict to unknown when live structured evidence remains.
+    | ([ $tasks[] | select(.current_state.state == "unknown")
+         | {id,kind,state:.current_state.state,source:.current_state.source,
+            doing:((.current_state.detail // "") | trunc(120))} ]) as $unknown_children
     | ([ $owned_in_flight[]
          | select(.requires_child_metadata)
          | select(.id as $id | [$tasks[].id] | index($id) | not) ]) as $orphan_in_flight
@@ -749,16 +757,12 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
               reason:((.current_state.detail // .current_state.state) | trunc(120)),source:"child-state"} ]) as $holds_all
     | ($backlog.present == true
        and ($unstructured_current | length) == 0
-       and ($unknown_children | length) == 0
        and ($orphan_in_flight | length) == 0
        and ($unowned_children | length) == 0
        and ($terminal_in_flight | length) == 0) as $valid
     | (if ($strict_invalidities | length) > 0 then $strict_invalidities[0].reason
-       elif ($unknown_children | length) > 0 then
-         "child current state unavailable: " + ($unknown_children | map(.id) | join(", "))
        else null end) as $reason
     | (if ($strict_invalidities | length) > 0 then $strict_invalidities[0] | del(.reason)
-       elif ($unknown_children | length) > 0 then {kind:"child_current_unavailable",ids:($unknown_children | map(.id))}
        else {kind:null,ids:[]} end) as $invalidity
     | (if $valid | not then "unknown"
        elif any($decisions_all[]; .verb == "needs-decision" or .verb == "captain-hold") then "captain_decision"
@@ -774,6 +778,7 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
         invalidity:$invalidity,
         state:$state,
         active_children:$active_all[:$child_n],
+        unresolved_children:$unknown_children[:$child_n],
         decisions_open:$decisions_all[:$decisions_n],
         holds:$holds_all[:$queued_n],
         queued:([$queued_all[] | {id:(.id | trunc(120)),title:(.title | trunc(120)),
@@ -793,6 +798,7 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
           endpoint:(.endpoint + {target:((.endpoint.target // null) | if . == null then null else trunc(240) end)})}][:$child_n]),
         counts:{
           active_children:($active_all | length),
+          unresolved_children:($unknown_children | length),
           decisions_open:($decisions_all | length),
           holds:($holds_all | length),
           queued:($queued_all | length),
@@ -801,6 +807,7 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
         },
         omitted:[
           (if ($active_all | length) > $child_n then {surface:"active_children",count:(($active_all | length) - $child_n)} else empty end),
+          (if ($unknown_children | length) > $child_n then {surface:"unresolved_children",count:(($unknown_children | length) - $child_n)} else empty end),
           (if ($decisions_all | length) > $decisions_n then {surface:"decisions_open",count:(($decisions_all | length) - $decisions_n)} else empty end),
           (if ($queued_all | length) > $queued_n then {surface:"queued",count:(($queued_all | length) - $queued_n)} else empty end),
           (if ($tasks | length) > $child_n then {surface:"endpoints",count:(($tasks | length) - $child_n)} else empty end),
@@ -1141,7 +1148,7 @@ parent_evidence_reconciliation_json() {  # <summary-json> <activities-json> <dec
 secondmate_current_json() {  # <parent-tasks-json>
   local tasks=$1 registry union rows total_registered total shown truncated
   local row id home host remote registered registry_error task status_file event_raw event_note event_epoch event_age
-  local activity_scan activities decisions reconciliation provenance freshness reason summary summary_rc summary_bytes summary_valid summary_reason summary_invalidity state current_reason terminal terminal_contradiction contradiction
+  local activity_scan activities decisions reconciliation provenance freshness reason summary summary_rc summary_bytes summary_valid summary_reason state current_reason terminal terminal_contradiction contradiction
   local records='[]' seen_homes=''
   registry=$(registry_secondmates_json) || return 1
   union=$(jq -n --argjson registry "$registry" --argjson tasks "$tasks" '
@@ -1247,7 +1254,8 @@ secondmate_current_json() {  # <parent-tasks-json>
           and (($remote == true) or .generated == $generated)
           and (.valid | type) == "boolean" and (.state | type) == "string"
           and (.invalidity | type) == "object" and (.invalidity.ids | type) == "array"
-          and (.active_children | type) == "array" and (.decisions_open | type) == "array"
+          and (.active_children | type) == "array" and (.unresolved_children | type) == "array"
+          and (.decisions_open | type) == "array"
           and (.holds | type) == "array" and (.queued | type) == "array"
           and (.landed | type) == "array" and (.endpoints | type) == "array"
           and (.counts | type) == "object" and (.omitted | type) == "array"
@@ -1257,10 +1265,7 @@ secondmate_current_json() {  # <parent-tasks-json>
           summary_valid=$(printf '%s' "$summary" | jq -r '.valid')
           if [ "$summary_valid" != true ]; then
             summary_reason=$(printf '%s' "$summary" | jq -r '.reason // "unknown reason"')
-            summary_invalidity=$(printf '%s' "$summary" | jq -r '.invalidity.kind // "unknown"')
-            if [ "$summary_invalidity" != child_current_unavailable ]; then
-              reason="structured home state invalid: $summary_reason"
-            fi
+            reason="structured home state invalid: $summary_reason"
           fi
         fi
       fi
@@ -1295,6 +1300,7 @@ secondmate_current_json() {  # <parent-tasks-json>
            trust:(if $summary_valid then "complete" else "partial-structured" end),parent_event_role:"historical-only"},
          freshness:{status:"fresh",observed_at:$observed,age_seconds:0},
          active_children:$summary.active_children,
+         unresolved_children:($summary.unresolved_children // []),
          decisions_open:$summary.decisions_open,holds:$summary.holds,queued:$summary.queued,
          landed:$summary.landed,endpoints:$summary.endpoints,counts:$summary.counts,omitted:$summary.omitted,
          parent_event:{raw:$event_raw,note:$event_note,age_seconds:$event_age,open_activities:$activities,open_decisions:$decisions,activity_scan:$activity_scan,reconciliation:$reconciliation},
@@ -1322,7 +1328,8 @@ secondmate_current_json() {  # <parent-tasks-json>
          current:{state:"unknown",reason:$reason},invalidity:null,
          provenance:{selected:$provenance,structured_home:($home | if . == "" then null else . end),parent_event_role:"fallback-only-not-current"},
          freshness:{status:$freshness,observed_at:$observed,age_seconds:$event_age},
-         active_children:[],decisions_open:[],holds:[],queued:[],landed:[],endpoints:[],counts:{active_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[],
+         active_children:[],unresolved_children:[],decisions_open:[],holds:[],queued:[],landed:[],endpoints:[],
+         counts:{active_children:0,unresolved_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[],
          parent_event:{raw:$event_raw,note:$event_note,age_seconds:$event_age,open_activities:$activities,open_decisions:$decisions,activity_scan:$activity_scan},
          terminal_evidence:$terminal,contradiction:false}')
     fi

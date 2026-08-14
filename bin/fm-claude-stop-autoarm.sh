@@ -62,7 +62,6 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
-GRACE=${FM_GUARD_GRACE:-300}
 OWNER_LOCK="$STATE/.claude-autoarm.lock"
 EPOCH="$STATE/.claude-autoarm-epoch"
 FAILURE_NOTICE="$STATE/.claude-autoarm-failure-notified"
@@ -79,6 +78,7 @@ esac
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+GRACE=$(fm_guard_grace_seconds)
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 # shellcheck source=bin/fm-hook-host-lib.sh
