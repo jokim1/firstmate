@@ -47,16 +47,20 @@
 #   docs/cmux-backend.md),
 #   then tmux.
 #   Spawn-capable backends are the reference tmux adapter and experimental
-#   herdr, zellij, orca, and cmux. Orca owns both the task worktree and
-#   terminal, so ship/scout Orca spawns do not run treehouse get; cmux is a
-#   session provider only, exactly like herdr/zellij, so it does. An
-#   auto-detected herdr or cmux spawn prints a loud stderr notice;
-#   auto-detected tmux stays silent; zellij and orca are never auto-detected.
-#   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
-#   blocked backend contract. Default tmux spawns do not write backend= to meta;
-#   absent backend= means tmux. cmux does not support --secondmate spawns yet.
-#   A backend spawn refusal (missing dependency, version gate, unauthenticated
-#   socket, or unsupported secondmate mode) is terminal for that selected backend;
+#   herdr, zellij, orca, cmux, and playbot. Orca and playbot own both the task
+#   worktree and the endpoint, so ship/scout spawns on those backends do not run
+#   treehouse get; cmux is a session provider only, exactly like herdr/zellij,
+#   so it does. An auto-detected herdr or cmux spawn prints a loud stderr notice;
+#   auto-detected tmux stays silent; zellij, orca, and playbot are never
+#   auto-detected. Live playbot dispatch is phase-gated in
+#   fm_backend_validate_spawn until Phase 1/2 native gates pass
+#   (FM_PLAYBOT_NATIVE_SPAWN=1 unlocks hermetic fixture tests only). playbot
+#   refuses --secondmate and ship modes other than local-only. codex-app is not
+#   a known backend yet; docs/codex-app-backend.md owns that blocked backend
+#   contract. Default tmux spawns do not write backend= to meta; absent backend=
+#   means tmux. cmux does not support --secondmate spawns yet. A backend spawn
+#   refusal (missing dependency, version gate, unauthenticated socket, phase
+#   gate, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
 #   A herdr crewmate or scout is placed in the exact workspace of the firstmate
 #   or secondmate process launching it, resolved from that process's own herdr
@@ -641,6 +645,16 @@ BACKEND=
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
+PLAYBOT_ABORT_CLEANUP=0
+PLAYBOT_WORKSPACE_ID=
+PLAYBOT_THREAD_ID=
+PLAYBOT_PROJECT_ID=
+PLAYBOT_PROJECT_ROOT_ID=
+PLAYBOT_ROUTE_GEN=
+PLAYBOT_DELIVERY_ID=
+PLAYBOT_BINDING_GEN=
+PLAYBOT_BRIEF_DIGEST=
+PLAYBOT_TXN_STATE=
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -681,6 +695,226 @@ parse_orca_worktree_result() {
   else
     ORCA_TERMINAL=
   fi
+}
+
+# Playbot dispatch transaction helpers (plan v3 §3.4). States:
+# prepared -> created -> thread-created -> meta-published -> submitted ->
+# accepted -> worker-started. Re-entry for the same task id resumes from the
+# durable txn under the existing spawn locks (V2SIM-4 pre-meta recovery).
+playbot_txn_path() {  # <task-id>
+  printf '%s/.playbot-dispatch/%s.txn' "$STATE" "$1"
+}
+
+playbot_txn_read_field() {  # <txn-file> <key>
+  local txn=$1 key=$2
+  [ -f "$txn" ] || return 1
+  grep "^$key=" "$txn" 2>/dev/null | tail -1 | cut -d= -f2-
+}
+
+playbot_txn_write() {  # <state> [extra key=value]...
+  local stage=$1 path tmp
+  shift
+  path=$(playbot_txn_path "$ID")
+  mkdir -p "$(dirname "$path")" || return 1
+  tmp="$path.tmp.$$"
+  {
+    echo "task_id=$ID"
+    echo "brief_digest=$PLAYBOT_BRIEF_DIGEST"
+    echo "project_binding_gen=$PLAYBOT_BINDING_GEN"
+    echo "requested_base=${PLAYBOT_REQUESTED_BASE:-HEAD}"
+    echo "delivery_id=$PLAYBOT_DELIVERY_ID"
+    echo "state=$stage"
+    [ -z "${PLAYBOT_WORKSPACE_ID:-}" ] || echo "workspace_id=$PLAYBOT_WORKSPACE_ID"
+    [ -z "${PLAYBOT_THREAD_ID:-}" ] || echo "thread_id=$PLAYBOT_THREAD_ID"
+    [ -z "${PLAYBOT_PROJECT_ID:-}" ] || echo "playbot_project_id=$PLAYBOT_PROJECT_ID"
+    [ -z "${PLAYBOT_PROJECT_ROOT_ID:-}" ] || echo "playbot_project_root_id=$PLAYBOT_PROJECT_ROOT_ID"
+    [ -z "${WT:-}" ] || echo "worktree=$WT"
+    while [ "$#" -gt 0 ]; do
+      echo "$1"
+      shift
+    done
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$path" || return 1
+  PLAYBOT_TXN_STATE=$stage
+}
+
+playbot_txn_load_existing() {
+  local path field
+  path=$(playbot_txn_path "$ID")
+  [ -f "$path" ] || return 1
+  PLAYBOT_TXN_STATE=$(playbot_txn_read_field "$path" state) || return 1
+  PLAYBOT_BRIEF_DIGEST=$(playbot_txn_read_field "$path" brief_digest) || true
+  PLAYBOT_BINDING_GEN=$(playbot_txn_read_field "$path" project_binding_gen) || true
+  PLAYBOT_REQUESTED_BASE=$(playbot_txn_read_field "$path" requested_base) || true
+  PLAYBOT_DELIVERY_ID=$(playbot_txn_read_field "$path" delivery_id) || true
+  PLAYBOT_WORKSPACE_ID=$(playbot_txn_read_field "$path" workspace_id) || true
+  PLAYBOT_THREAD_ID=$(playbot_txn_read_field "$path" thread_id) || true
+  PLAYBOT_PROJECT_ID=$(playbot_txn_read_field "$path" playbot_project_id) || true
+  PLAYBOT_PROJECT_ROOT_ID=$(playbot_txn_read_field "$path" playbot_project_root_id) || true
+  field=$(playbot_txn_read_field "$path" worktree) || true
+  [ -z "$field" ] || WT=$field
+  return 0
+}
+
+playbot_brief_digest() {  # <brief-path>
+  # Portable sha256 for the brief body that seeds the delivery marker.
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    echo "error: need shasum or sha256sum to digest the Playbot brief" >&2
+    return 1
+  fi
+}
+
+playbot_new_delivery_id() {
+  # Stable non-secret UUID-like delivery id for this spawn incarnation.
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  else
+    printf 'd%s.%s.%s' "$(date +%s)" "${BASHPID:-$$}" "$RANDOM"
+  fi
+}
+
+# Named re-entry: pre-meta stages resume here on a later same-id spawn (V2SIM-4).
+# Crash re-entry points: after prepared, after created, after thread-created.
+playbot_dispatch_transaction() {
+  local slug binding_raw create_raw thread_raw stage rest
+  PLAYBOT_ABORT_CLEANUP=1
+  if playbot_txn_load_existing; then
+    stage=$PLAYBOT_TXN_STATE
+    case "$stage" in
+      prepared|created|thread-created|meta-published|submitted|accepted) ;;
+      worker-started)
+        if [ -f "$STATE/$ID.meta" ]; then
+          echo "error: playbot task $ID is already worker-started; refuse duplicate spawn" >&2
+          return 1
+        fi
+        ;;
+      *)
+        echo "error: playbot dispatch txn for $ID has unknown state '$stage'; reconcile state/.playbot-dispatch/$ID.txn" >&2
+        return 1
+        ;;
+    esac
+  else
+    stage=new
+  fi
+
+  if [ "$stage" = new ]; then
+    PLAYBOT_BRIEF_DIGEST=$(playbot_brief_digest "$BRIEF") || return 1
+    PLAYBOT_DELIVERY_ID=$(playbot_new_delivery_id)
+    PLAYBOT_REQUESTED_BASE=${PLAYBOT_REQUESTED_BASE:-HEAD}
+    binding_raw=$(fm_backend_playbot_binding_resolve "$PROJ_ABS") || {
+      echo "error: playbot project binding missing or mismatched for $PROJ_ABS; bind the registered project first" >&2
+      return 1
+    }
+    # binding_resolve prints: project_id\troot_id\tbinding_gen
+    PLAYBOT_PROJECT_ID=${binding_raw%%$'\t'*}
+    rest=${binding_raw#*$'\t'}
+    PLAYBOT_PROJECT_ROOT_ID=${rest%%$'\t'*}
+    PLAYBOT_BINDING_GEN=${rest#*$'\t'}
+    [ -n "$PLAYBOT_PROJECT_ID" ] && [ -n "$PLAYBOT_PROJECT_ROOT_ID" ] && [ -n "$PLAYBOT_BINDING_GEN" ] || {
+      echo "error: playbot binding_resolve returned a malformed record for $PROJ_ABS" >&2
+      return 1
+    }
+    playbot_txn_write prepared || return 1
+    stage=prepared
+  fi
+
+  # V2SIM-5: slug embeds the task id so prepared->created recovery is unique.
+  slug="fm-${ID}"
+
+  if [ "$stage" = prepared ]; then
+    create_raw=$(fm_backend_playbot_workspace_create "$PROJ_ABS" "$slug" "${PLAYBOT_REQUESTED_BASE:-HEAD}" "$ID") || {
+      echo "error: playbot workspace:create failed for $slug (txn remains prepared for same-id re-entry)" >&2
+      return 1
+    }
+    # workspace_create prints: workspace_id\tworktree_path
+    PLAYBOT_WORKSPACE_ID=${create_raw%%$'\t'*}
+    WT=${create_raw#*$'\t'}
+    [ -n "$PLAYBOT_WORKSPACE_ID" ] && [ -n "$WT" ] && [ "$WT" != "$PLAYBOT_WORKSPACE_ID" ] || {
+      echo "error: playbot workspace:create returned a malformed workspace record" >&2
+      return 1
+    }
+    validate_spawn_worktree "playbot workspace create" "$slug" || return 1
+    playbot_txn_write created || return 1
+    stage=created
+  fi
+
+  if [ "$stage" = created ]; then
+    [ -n "$PLAYBOT_WORKSPACE_ID" ] || { echo "error: playbot txn created without workspace_id" >&2; return 1; }
+    thread_raw=$(fm_backend_playbot_thread_create "$PLAYBOT_WORKSPACE_ID" "$ID" "$PLAYBOT_DELIVERY_ID") || {
+      echo "error: playbot thread create failed for $ID (txn remains created for same-id re-entry)" >&2
+      return 1
+    }
+    PLAYBOT_THREAD_ID=$thread_raw
+    [ -n "$PLAYBOT_THREAD_ID" ] || {
+      echo "error: playbot thread create returned an empty thread id" >&2
+      return 1
+    }
+    playbot_txn_write thread-created || return 1
+    stage=thread-created
+  fi
+
+  T="playbot:$PLAYBOT_THREAD_ID"
+  W="fm-$ID"
+  WT_TARGET=$T
+  # Meta publication is the next stage; caller continues into the ordinary
+  # publisher block, then returns here for send_initial via playbot_finish_dispatch.
+  PLAYBOT_TXN_STATE=$stage
+  return 0
+}
+
+playbot_finish_dispatch() {
+  local send_verdict stage=${PLAYBOT_TXN_STATE:-}
+  [ -n "$PLAYBOT_THREAD_ID" ] || {
+    echo "error: playbot_finish_dispatch requires a thread id" >&2
+    return 1
+  }
+  [ -n "$PLAYBOT_ROUTE_GEN" ] || {
+    echo "error: playbot_finish_dispatch requires playbot_route_gen from meta publication" >&2
+    return 1
+  }
+  if [ "$stage" != meta-published ] && [ "$stage" != submitted ] \
+     && [ "$stage" != accepted ] && [ "$stage" != worker-started ]; then
+    # Route record is adapter-owned (late-bound session id lives there, not meta).
+    fm_backend_playbot_route_write "$STATE" "$ID" \
+      "$SPAWN_GEN" "$PLAYBOT_ROUTE_GEN" \
+      "$PLAYBOT_PROJECT_ID" "$PLAYBOT_PROJECT_ROOT_ID" \
+      "$PLAYBOT_WORKSPACE_ID" "$PLAYBOT_THREAD_ID" \
+      "$PLAYBOT_DELIVERY_ID" "$WT" || {
+      echo "error: playbot route write failed for $ID after meta publish; txn stays thread-created for recovery" >&2
+      return 1
+    }
+    playbot_txn_write meta-published || return 1
+    stage="meta-published"
+  fi
+  if [ "$stage" = "meta-published" ] || [ "$stage" = submitted ]; then
+    # Initial multiline brief delivery is the final spawn stage (not fm-send).
+    # Adapter must treat delivery_id as idempotent (plan v3 §3.6 marker).
+    [ "$stage" = submitted ] || playbot_txn_write submitted || return 1
+    send_verdict=$(fm_backend_playbot_send_initial \
+      "playbot:$PLAYBOT_THREAD_ID" "$BRIEF" "$PLAYBOT_DELIVERY_ID" "$PLAYBOT_BRIEF_DIGEST") || {
+      echo "error: playbot initial brief delivery failed for $ID (txn=submitted; resume send, do not recreate)" >&2
+      return 1
+    }
+    case "$send_verdict" in
+      accepted|empty)
+        playbot_txn_write accepted || return 1
+        stage=accepted
+        ;;
+      *)
+        echo "error: playbot initial brief delivery inconclusive for $ID (verdict=$send_verdict); txn stays submitted for reconciliation" >&2
+        return 1
+        ;;
+    esac
+  fi
+  if [ "$stage" = accepted ]; then
+    playbot_txn_write worker-started || return 1
+  fi
+  PLAYBOT_ABORT_CLEANUP=0
+  return 0
 }
 
 spawn_abort_cleanup() {
@@ -726,6 +960,17 @@ spawn_abort_cleanup() {
   if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
+  fi
+  if [ "$PLAYBOT_ABORT_CLEANUP" = 1 ]; then
+    PLAYBOT_ABORT_CLEANUP=0
+    # Pre-meta abort: keep the txn for same-id re-entry (plan v3 §3.4 V2SIM-4);
+    # best-effort external cleanup only when the adapter can prove safety.
+    if [ -n "${PLAYBOT_THREAD_ID:-}" ]; then
+      fm_backend_kill playbot "playbot:$PLAYBOT_THREAD_ID" 2>/dev/null || true
+    fi
+    if [ -n "${PLAYBOT_WORKSPACE_ID:-}" ]; then
+      fm_backend_remove_worktree playbot "$PLAYBOT_WORKSPACE_ID" 2>/dev/null || true
+    fi
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
@@ -953,8 +1198,25 @@ if [ "$RELAUNCH" -eq 0 ]; then
     echo "error: backend=cmux does not support --secondmate spawns yet" >&2
     exit 1
   fi
+  if [ "$BACKEND" = playbot ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=playbot does not support --secondmate spawns; one global Playbot app has no verified parent/child ownership contract" >&2
+    exit 1
+  fi
   if [ "$BACKEND" = orca ]; then
     fm_backend_orca_runtime_check || exit 1
+  fi
+  if [ "$BACKEND" = playbot ]; then
+    # V1 supports scout and ship local-only only (plan v3 §3.3).
+    if [ "$KIND" = ship ]; then
+      case "$MODE" in
+        local-only) ;;
+        *)
+          echo "error: backend=playbot refuses ship mode '$MODE'; v1 supports only local-only (direct-PR and no-mistakes need separate proof)" >&2
+          exit 1
+          ;;
+      esac
+    fi
+    fm_backend_playbot_runtime_check || exit 1
   fi
 fi
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
@@ -2083,6 +2345,11 @@ EOF
     fi
     T="$ORCA_TERMINAL"
     ;;
+  playbot)
+    # Playbot owns workspace + thread; treehouse is never invoked (plan v3 §3.4).
+    # Re-entry: same-id spawn resumes an orphaned pre-meta txn (V2SIM-4).
+    playbot_dispatch_transaction || exit 1
+    ;;
 esac
 fi
 if [ "$KIND" = secondmate ]; then
@@ -2207,7 +2474,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
-elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$BACKEND" != playbot ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -2615,7 +2882,13 @@ fi
 
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
+# Playbot window is playbot:<thread-id> (plan v3 §3.2); keep fm-<id> only as W alias.
+[ "$BACKEND" = playbot ] && META_WINDOW=$T
 SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
+# Mint route gen before the atomic meta publisher so meta and route match.
+if [ "$BACKEND" = playbot ]; then
+  PLAYBOT_ROUTE_GEN="r$(date +%s).${BASHPID:-$$}.$RANDOM"
+fi
 SPAWN_META_PATH="$STATE/$ID.meta"
 if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_META_LOCK=$(fm_meta_lock_path "$STATE/$ID.meta") || exit 1
@@ -2627,7 +2900,7 @@ fi
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id playbot_project_id playbot_project_root_id playbot_workspace_id playbot_thread_id playbot_route_gen playbot_delivery_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -2638,7 +2911,12 @@ preserve_relaunch_meta() {
   echo "endpoint_task_id=$ID"
   echo "worktree=$WT"
   echo "project=$PROJ_ABS"
-  echo "harness=$HARNESS"
+  # Playbot workers are always Codex in v1 (plan v3 §3.2); record honestly.
+  if [ "$BACKEND" = playbot ]; then
+    echo "harness=codex"
+  else
+    echo "harness=$HARNESS"
+  fi
   echo "kind=$KIND"
   [ -z "$MODE" ] || echo "mode=$MODE"
   [ -z "$YOLO" ] || echo "yolo=$YOLO"
@@ -2671,6 +2949,15 @@ preserve_relaunch_meta() {
     echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
     echo "cmux_surface_id=$CMUX_SURFACE_ID"
   fi
+  if [ "$BACKEND" = playbot ]; then
+    # No playbot_session_id in meta (plan v3 §3.2 [3A]); route record owns it.
+    echo "playbot_project_id=$PLAYBOT_PROJECT_ID"
+    echo "playbot_project_root_id=$PLAYBOT_PROJECT_ROOT_ID"
+    echo "playbot_workspace_id=$PLAYBOT_WORKSPACE_ID"
+    echo "playbot_thread_id=$PLAYBOT_THREAD_ID"
+    echo "playbot_route_gen=$PLAYBOT_ROUTE_GEN"
+    echo "playbot_delivery_id=$PLAYBOT_DELIVERY_ID"
+  fi
   if [ "$KIND" = secondmate ]; then
     echo "home=$PROJ_ABS"
     echo "projects=$SECONDMATE_PROJECTS"
@@ -2699,6 +2986,14 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
+if [ "$BACKEND" = playbot ]; then
+  # Final stages: route write + initial brief delivery (plan v3 §3.4 steps 6-7).
+  playbot_finish_dispatch || exit 1
+  SPAWN_DELIVERY=
+  [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
+  echo "spawned $ID harness=codex kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT backend=playbot"
+  exit 0
+fi
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
