@@ -1058,6 +1058,12 @@ families_for_changed_path() {
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
       ;;
+    tests/playbot-fixtures/*)
+      # The Playbot lane fixture helpers feed the three playbot shell suites.
+      printf '%s\n' "__script__:fm-playbot-lanes.test.sh"
+      printf '%s\n' "__script__:fm-playbot-backend.test.sh"
+      printf '%s\n' "__script__:fm-playbot-reconcile.test.sh"
+      ;;
     tests/fixtures/*/*)
       # A fixture belongs to whichever suite reads its directory, found by the
       # same reference scan used for shared helpers. Keyed on the directory
