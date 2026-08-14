@@ -148,7 +148,11 @@
 #   and scout batches. The loop lives here, in bash, so callers never hand-write a
 #   multi-task shell loop (the tool shell is zsh, which does not word-split unquoted
 #   $vars and silently breaks ad-hoc `for ... in $pairs` loops).
-#   Launch templates live in launch_template() below; placeholders replaced before launch:
+#   Launch templates live in launch_template() below; placeholders replaced before launch.
+#   Every ship/scout/secondmate/relaunch command is then prefixed with
+#   foreign_marker_scrub_prefix so verified foreign primary-harness env markers
+#   cannot leak into a different harness's worker (see that function).
+#   Placeholders replaced before launch:
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
 #     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
@@ -1085,6 +1089,39 @@ pi_supports_tui_mode() {
   printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)'
 }
 
+# Foreign primary-harness env-marker scrub for every crewmate/secondmate launch.
+# bin/fm-harness.sh ranks verified env markers above process ancestry, so a
+# launcher identity (CLAUDECODE, PI_CODING_AGENT/FM_PI_HARNESS, GROK_AGENT)
+# inherited into a DIFFERENT harness's worker can misdetect that worker (e.g.
+# CLAUDECODE=1 into a codex pane). Print an `env -u ...` prefix that drops every
+# verified marker not native to the target harness; markerless adapters
+# (codex, opencode, kimi, muse) and unknown/raw targets drop all of them.
+# Applied at the final launch-env construction site below so every backend
+# surface (tmux, herdr, zellij, orca, cmux) and every kind (ship, scout,
+# secondmate, relaunch) inherits the same boundary. Marker inventory owner:
+# bin/fm-harness.sh detect_own.
+foreign_marker_scrub_prefix() {
+  local harness=$1
+  case "$harness" in
+    claude)
+      # Keep CLAUDECODE; scrub every non-claude verified marker.
+      printf '%s' 'env -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT'
+      ;;
+    pi|pi-signed)
+      # Keep PI_CODING_AGENT and FM_PI_HARNESS (the latter is re-set on the
+      # launch line for the selected Pi identity).
+      printf '%s' 'env -u CLAUDECODE -u GROK_AGENT'
+      ;;
+    grok)
+      # Keep GROK_AGENT; scrub every non-grok verified marker.
+      printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS'
+      ;;
+    *)
+      printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS'
+      ;;
+  esac
+}
+
 # The verified launch command per adapter. The knowledge half of each adapter
 # (busy-state source, exit command, dialogs, quirks) lives in the harness-adapters skill.
 launch_template() {
@@ -1150,8 +1187,9 @@ launch_template() {
     # plugin engine is off in the default build, so firstmate folds muse's own
     # session event log instead (bin/fm-busy-lib.sh), bound by the sidecar
     # written below. Nothing to place in the template for it.
-    # codex, opencode, and kimi are also markerless and share this inherited-marker hazard; changing their verified launch boundaries belongs in follow-up work.
-    muse) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS XDG_CONFIG_HOME=__MUSECONFIG__ XDG_DATA_HOME=__MUSEDATA__ MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on __MUSEBIN__ --yolo __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # Foreign primary-marker scrub is owned by foreign_marker_scrub_prefix and
+    # applied to every harness at launch-env construction, not here.
+    muse) printf '%s' 'XDG_CONFIG_HOME=__MUSECONFIG__ XDG_DATA_HOME=__MUSEDATA__ MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on __MUSEBIN__ --yolo __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     *) return 1 ;;
   esac
 }
@@ -2706,6 +2744,14 @@ if [ "$KIND" = secondmate ]; then
   # Reuse the single frozen decision from the carrier resolution above so the
   # injected carrier and this on/off snapshot are guaranteed to agree.
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home FM_TRACE_CONTEXT=$SPAWN_TRACE_EFFECTIVE FM_SUPERVISION_MODEL=$supervision_model $LAUNCH"
+fi
+# Drop foreign primary-harness identity markers from the pane launch command.
+# Must land after every NAME=value prefix above so env receives both the -u
+# flags and those assignments, and before any `unset TRACEPARENT; ...` wrap so
+# that wrap stays a shell compound command around the env-prefixed launch.
+FOREIGN_MARKER_SCRUB=$(foreign_marker_scrub_prefix "$HARNESS")
+if [ -n "$FOREIGN_MARKER_SCRUB" ]; then
+  LAUNCH="$FOREIGN_MARKER_SCRUB $LAUNCH"
 fi
 if [ -z "$SPAWN_TRACEPARENT" ] && [ "$RELAUNCH" -eq 1 ]; then
   LAUNCH="unset TRACEPARENT; $LAUNCH"
