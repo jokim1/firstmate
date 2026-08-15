@@ -1913,14 +1913,38 @@ function parseStructuredExecOutput(text) {
 }
 
 function structuredExecCommands(input) {
-  const commands = [];
-  const pattern = /(?:^|[,{]\s*)["']?cmd["']?\s*:\s*("(?:\\.|[^"\\])*")/g;
-  for (const match of input.matchAll(pattern)) {
-    try {
-      commands.push(JSON.parse(match[1]));
-    } catch {}
+  const invocation = input.match(/^\s*(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.exec_command\s*\(/);
+  if (!invocation) return [];
+  let index = invocation[0].length;
+  while (/\s/.test(input[index] ?? '')) index += 1;
+  if (input[index] !== '{') return [];
+  const start = index;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (; index < input.length; index += 1) {
+    const char = input[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}' && --depth === 0) break;
   }
-  return commands;
+  if (depth !== 0 || inString) return [];
+  let request;
+  try {
+    request = JSON.parse(input.slice(start, index + 1));
+  } catch {
+    return [];
+  }
+  if (!isPlainObject(request) || typeof request.cmd !== 'string') return [];
+  const variable = invocation[1].replace(/[$]/g, '\\$&');
+  const resultBinding = new RegExp(`^\\s*\\)\\s*;\\s*text\\s*\\(\\s*JSON\\.stringify\\s*\\(\\s*\\{\\s*exit_code\\s*:\\s*${variable}\\.exit_code\\s*,\\s*output\\s*:\\s*${variable}\\.output\\s*\\}\\s*\\)\\s*\\)\\s*;?\\s*$`);
+  return resultBinding.test(input.slice(index + 1)) ? [request.cmd] : [];
 }
 
 function shellCommandTokens(command) {

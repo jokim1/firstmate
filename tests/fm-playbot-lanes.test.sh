@@ -507,10 +507,11 @@ const toolOutput = (callId, result) => ({
   sourceFile: '/tmp/rollout.jsonl',
   text: `Script completed\nWall time 0.1 seconds\nOutput:\n${JSON.stringify(result)}\n`
 });
+const execInput = (variable, cmd) => `const ${variable} = await tools.exec_command(${JSON.stringify({ cmd })});\ntext(JSON.stringify({exit_code:${variable}.exit_code,output:${variable}.output}));\n`;
 const proof = parseConfinementToolProof({
   toolCalls: [
-    { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(`cat -- '${probeSpec.canaryPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' },
-    { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(`printf x > '${probeSpec.writeAttemptPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' }
+    { callId: 'read-call', input: execInput('readResult', `cat -- '${probeSpec.canaryPath}'`), sourceFile: '/tmp/rollout.jsonl' },
+    { callId: 'write-call', input: execInput('writeResult', `printf x > '${probeSpec.writeAttemptPath}'`), sourceFile: '/tmp/rollout.jsonl' }
   ],
   toolOutputs: [
     toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
@@ -522,7 +523,7 @@ try {
   parseConfinementToolProof({
     toolCalls: [
       { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(`printf '%s' "cat -- '${probeSpec.canaryPath}'"`)} };`, sourceFile: '/tmp/rollout.jsonl' },
-      { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(`printf x > '${probeSpec.writeAttemptPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' }
+      { callId: 'write-call', input: execInput('writeResult', `printf x > '${probeSpec.writeAttemptPath}'`), sourceFile: '/tmp/rollout.jsonl' }
     ],
     toolOutputs: [
       toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
@@ -536,7 +537,7 @@ try {
 try {
   parseConfinementToolProof({
     toolCalls: [
-      { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(`cat -- '${probeSpec.canaryPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'read-call', input: execInput('readResult', `cat -- '${probeSpec.canaryPath}'`), sourceFile: '/tmp/rollout.jsonl' },
       { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(`printf '%s' "printf x > '${probeSpec.writeAttemptPath}'"`)} };`, sourceFile: '/tmp/rollout.jsonl' }
     ],
     toolOutputs: [
@@ -549,6 +550,21 @@ try {
   if (!/structured write tool call/.test(error.message)) throw error;
 }
 try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: `const readResult = await tools.exec_command(${JSON.stringify({ cmd: `cat -- '${probeSpec.canaryPath}'` })});\ntext(JSON.stringify({exit_code:0,output:${JSON.stringify(probeSpec.readToken)}}));\n`, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', `printf x > '${probeSpec.writeAttemptPath}'`), sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 1, output: 'operation not permitted\n' })
+    ]
+  }, probeSpec);
+  throw new Error('fabricated nested result binding must fail');
+} catch (error) {
+  if (!/structured read tool call/.test(error.message)) throw error;
+}
+try {
   parseConfinementToolProof({ toolCalls: [], toolOutputs: [] }, probeSpec);
   throw new Error('ambiguous confinement proof must fail');
 } catch (error) {
@@ -557,8 +573,8 @@ try {
 try {
   parseConfinementToolProof({
     toolCalls: [
-      { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(`cat -- '${probeSpec.canaryPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' },
-      { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(`printf x > '${probeSpec.writeAttemptPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' }
+      { callId: 'read-call', input: execInput('readResult', `cat -- '${probeSpec.canaryPath}'`), sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', `printf x > '${probeSpec.writeAttemptPath}'`), sourceFile: '/tmp/rollout.jsonl' }
     ],
     toolOutputs: [
       toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
