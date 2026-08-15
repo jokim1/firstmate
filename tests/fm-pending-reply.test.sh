@@ -1173,11 +1173,15 @@ test_single_slow_observation_keeps_beacon_fresh_mid_poll() {
     probe="$home/observation-started"
     watch_path="$ROOT/bin/fm-watch.sh"
     owner_pid=${BASHPID:-$$}
+    # This fixture clock is intentionally scoped to the isolated subshell.
+    # shellcheck disable=SC2030,SC2031
     export FM_PENDING_REPLY_NOW=11500
     setup_beat_owner "$state" "$home" "$watch_path" "$owner_pid"
     corr=$(fm_pending_reply_create "$home" "$state" hibit "slow backend observation")
     fm_pending_reply_mark_delivered "$state" "$corr"
     fm_write_secondmate_meta "$state/hibit.meta" "$home/hibit" "sess:fm-hibit"
+    # Invoked indirectly through the pending-reply tick.
+    # shellcheck disable=SC2329
     fm_backend_busy_state() {
       : > "$probe"
       sleep 3
@@ -1216,6 +1220,8 @@ test_tick_retires_record_that_resolves_mid_poll() {
   local home state corr
   home=$(setup_parent mid-poll-retire)
   state="$home/state"
+  # Reset the fixture clock after the isolated subshell test.
+  # shellcheck disable=SC2031
   export FM_PENDING_REPLY_NOW=12000
   corr=$(fm_pending_reply_create "$home" "$state" "hibit" "lands during tick")
   fm_pending_reply_mark_delivered "$state" "$corr"
