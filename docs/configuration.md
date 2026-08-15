@@ -79,7 +79,7 @@ A Playbot task records `window=playbot:<thread-id>`, `harness=codex`, `playbot_p
 Late-bound Playbot session identity is not a meta field; it lives only on the home-local `state/<id>.playbot-route.json` route record and is re-verified against the live app on every session-mapping use.
 Playbot project bindings are home-local (`state/.playbot-project-bindings.json`), one registered Firstmate project per exact Playbot project/root identity; dispatch looks up Playbot IDs from the Firstmate project only.
 Per-home MCP registration uses a stable name derived from the canonical `FM_HOME` and a content-addressed install receipt under that home's `state/`; multiple Firstmate homes never share route, outbox, lease, or binding records.
-Compatibility states reported by the Playbot doctor include app reachability, schema/version match, controller lease validity, and operating mode (`native-enabled`, `courier-only-confinement`, `courier-only-compatibility`, or read-only lab); mutations stay disabled outside a native-enabled home after the Phase 1/2 gates.
+Compatibility states reported by the Playbot doctor include app reachability, schema/version match, controller lease validity, and operating mode (`native-enabled`, `courier-only-confinement`, `courier-only-compatibility`, or read-only lab); mutations are enabled only in a `native-enabled` home.
 Task selectors for `fm-peek.sh`, `fm-send.sh`, and `fm-crew-state.sh` resolve centrally through `fm_backend_resolve_selector`.
 A selector containing `:` is passed through as an explicit backend endpoint escape hatch.
 Otherwise an exact task id matching `state/<id>.meta` wins before the legacy `fm-<id>` label fallback, so task ids that themselves start with `fm-` route to their own metadata instead of being stripped.
@@ -309,6 +309,7 @@ This section is the single owner of that universal toolchain list; backend guide
 In that list, no-mistakes runs the validation pipeline, gh-axi, chrome-devtools-axi, and lavish-axi cover GitHub, browser, and rich-review operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
 The per-backend delta is required only for the backend resolved from `FM_BACKEND`, then `config/backend`, then runtime auto-detection, then default `tmux`, so a home is never told to install a tool an inactive backend or feature would need.
 That delta is owned in code by `fm_backend_required_tools` in `bin/fm-backend.sh`: the resolved backend's own session-provider CLI (`tmux`, `herdr`, `zellij`, `orca`, or `cmux`), `jq` for the JSON-emitting experimental adapters (`herdr`, `zellij`, `cmux`) whose spawn and liveness paths parse the backend's JSON output, and the `treehouse` worktree provider for every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`).
+Playbot provides its own task worktree and endpoint, so its only backend-specific addition to the universal toolchain is `ssh-keygen` for mutation-evidence attestation.
 Backend tool availability uses the adapter's own executable resolver, so bootstrap and spawn agree on supported non-`PATH` locations such as cmux's bundled CLI.
 An unknown resolved backend emits `BACKEND_INVALID` and blocks dispatch instead of silently dropping its dependency delta or falling back to tmux.
 Orca provides both the task worktree and terminal endpoint (see "Runtime backend" above), so `backend=orca` requires only `orca` on top of the universal toolchain and skips both `treehouse` and every other backend's session CLI.
@@ -527,7 +528,7 @@ FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests
 FM_PROJECTS_OVERRIDE=    # alternate projects dir, mainly for tests
 FM_CONFIG_OVERRIDE=      # alternate config dir, mainly for tests
 FM_PROC_ROOT_OVERRIDE=   # alternate /proc root for Linux process-identity reads in fm-wake-lib.sh and fm-teardown.sh, mainly for tests
-FM_BACKEND=             # optional runtime backend override for new spawns; tmux/herdr/zellij/orca/cmux support ship/scout spawns, codex-app is not accepted
+FM_BACKEND=             # optional runtime backend override for new spawns; tmux/herdr/zellij/orca/cmux/playbot support ship/scout spawns, codex-app is not accepted
 FM_TRACE_CONTEXT=       # optional trace-context override; see "Trace context propagation"
 HERDR_SESSION=default  # herdr-only: named session for normal backend ops; not enough for destructive cleanup (docs/herdr-backend.md)
 FM_BACKEND_HERDR_SUBMIT_POLLS=6  # herdr-only: agent-state samples spread across each Enter attempt's budget when confirming a submit (docs/herdr-backend.md "Current transport behavior")

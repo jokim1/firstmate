@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bin/backends/playbot.sh - the Playbot session-provider adapter (EXPERIMENTAL;
-# registered known/spawn-capable in bin/fm-backend.sh, but live dispatch stays
-# phase-gated there until the Phase 1/2 native gates pass).
+# registered known/spawn-capable in bin/fm-backend.sh, with live dispatch gated
+# by this adapter's native-readiness check for the installed release).
 #
 # Contract owner: plan v3 (data/lanemcp-impl-plan/report.md) section 1.2's
 # adapter table, section 3.4's dispatch transaction, section 3.7's

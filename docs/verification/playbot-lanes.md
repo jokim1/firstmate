@@ -51,7 +51,7 @@ Refresh this record after each smoke run and after every Playbot release's read-
 
 Host: macOS, Playbot 0.92.0, disposable project `project_07474ac1d119` only.
 Command: `node bin/fm-playbot-lanes.mjs smoke --json`
-Smoke run id: `2026-08-15T08-19-52-693Z` (bound to HEAD `8890285b` lanes digest).
+Smoke run id: `2026-08-15T08-19-52-693Z` (bound to the lanes script at `8890285b`).
 Result: `operatingState: native-enabled`, confinement `readAllowed=true` / `writeDenied=true` via fixed worktree probe scripts + structured tool proof.
 
 Post-smoke:

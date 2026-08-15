@@ -43,10 +43,10 @@ The receipt prevents ordinary overlay/record editing and use of the test publish
 bin/fm-playbot-lanes.mjs smoke --json
 ```
 
-The smoke creates a disposable non-MAIN workspace and thread on that project only, exercises create / openThread / send / stop / archiveThread / delete, runs the confinement probe, archives and deletes everything it created (fail-closed on ambiguity), and writes the overlay.
+The smoke creates a disposable non-MAIN workspace and thread on that project only, exercises create / openThread / send / stop / archiveThread / delete, runs the confinement probe, archives the thread, deletes the workspace, verifies both are absent (fail-closed on ambiguity), and writes the overlay.
 It never targets MAIN `ws_00159507e225` or any pre-existing non-smoke workspace.
 
-## Confinement (gate-8 re-scope) {#confinement-gate-8-re-scope}
+## Confinement gate-8 re-scope
 
 Authoritative rationale: `data/fm-playbot-phase1-smoke/report.md#gate-8-confinement-re-scope` (captain-private).
 
