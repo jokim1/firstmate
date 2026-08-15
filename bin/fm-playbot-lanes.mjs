@@ -1886,17 +1886,49 @@ export function buildConfinementProbeSpec({ smokeRunId, canaryPath, writeAttempt
   const readToken = `FIRSTMATE_READ_ALLOWED:${smokeRunId}`;
   const writeToken = `FIRSTMATE_WRITE_SUCCEEDED:${smokeRunId}`;
   const expectedCanary = `playbot-smoke-canary ${smokeRunId}`;
-  const readCommand = `value=$(cat -- ${shellQuote(canaryPath)}) && [ "$value" = ${shellQuote(expectedCanary)} ] && printf '%s\\n' ${shellQuote(readToken)}`;
-  const writeCommand = `printf '%s\\n' ${shellQuote(writeToken)} > ${shellQuote(writeAttemptPath)}`;
+  const readScriptPath = resolve(worktreePath, '.fm-smoke-confinement-read.sh');
+  const writeScriptPath = resolve(worktreePath, '.fm-smoke-confinement-write.sh');
+  const readCommand = `bash ${shellQuote(readScriptPath)}`;
+  const writeCommand = `bash ${shellQuote(writeScriptPath)}`;
+  const readScript = [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    `value=$(cat -- ${shellQuote(canaryPath)})`,
+    `[ "$value" = ${shellQuote(expectedCanary)} ]`,
+    `printf '%s\\n' ${shellQuote(readToken)}`,
+    ''
+  ].join('\n');
+  const writeScript = [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    `printf '%s\\n' ${shellQuote(writeToken)} > ${shellQuote(writeAttemptPath)}`,
+    ''
+  ].join('\n');
   return {
     canaryPath,
     writeAttemptPath,
     expectedCanary,
     readToken,
     writeToken,
+    readScriptPath,
+    writeScriptPath,
+    readScript,
+    writeScript,
+    readCommand,
+    writeCommand,
     readInput: confinementExecInput(readCommand, worktreePath),
     writeInput: confinementExecInput(writeCommand, worktreePath)
   };
+}
+
+export function writeConfinementProbeScripts(spec) {
+  if (existsSync(spec.readScriptPath) || existsSync(spec.writeScriptPath)) {
+    throw new Error('confinement probe script path already exists');
+  }
+  writeFileSync(spec.readScriptPath, spec.readScript, { mode: 0o700, flag: 'wx' });
+  writeFileSync(spec.writeScriptPath, spec.writeScript, { mode: 0o700, flag: 'wx' });
+  chmodSync(spec.readScriptPath, 0o700);
+  chmodSync(spec.writeScriptPath, 0o700);
 }
 
 function parseStructuredExecOutput(text) {
@@ -1947,75 +1979,14 @@ function structuredExecCommands(input) {
   return resultBinding.test(input.slice(index + 1)) ? [request.cmd] : [];
 }
 
-function shellCommandTokens(command) {
-  const tokens = [];
-  let token = '';
-  let quote = null;
-  const push = () => {
-    if (token) tokens.push(token);
-    token = '';
-  };
-  for (let index = 0; index < command.length; index += 1) {
-    const char = command[index];
-    if (quote) {
-      if (char === quote) quote = null;
-      else if (char === '\\' && quote === '"' && index + 1 < command.length) token += command[index += 1];
-      else token += char;
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      push();
-      continue;
-    }
-    const pair = command.slice(index, index + 2);
-    if (['&&', '||', '>>', '$('].includes(pair)) {
-      push();
-      tokens.push(pair);
-      index += 1;
-      continue;
-    }
-    if ([';', '|', '>', '(', ')'].includes(char)) {
-      push();
-      tokens.push(char);
-      continue;
-    }
-    if (char === '\\' && index + 1 < command.length) token += command[index += 1];
-    else token += char;
-  }
-  push();
-  return quote ? [] : tokens;
-}
-
-function shellCommandOperands(tokens, index) {
-  const end = tokens.findIndex((token, tokenIndex) => tokenIndex > index
-    && [';', '&&', '||', '|', ')'].includes(token));
-  return tokens.slice(index + 1, end === -1 ? undefined : end);
-}
-
 function isConfinementReadInput(input, spec) {
-  if (input.includes(spec.writeAttemptPath)) return false;
-  return structuredExecCommands(input).some((command) => {
-    const tokens = shellCommandTokens(command);
-    return tokens.some((token, index) => token === 'cat'
-      && tokens[index + (tokens[index + 1] === '--' ? 2 : 1)] === spec.canaryPath)
-      || tokens.some((token, index) => token === 'dd'
-        && shellCommandOperands(tokens, index).some((operand, operandIndex, operands) =>
-          operand === `if=${spec.canaryPath}` || (operand === 'if' && operands[operandIndex + 1] === spec.canaryPath)));
-  });
+  const commands = structuredExecCommands(input);
+  return commands.length === 1 && commands[0] === spec.readCommand;
 }
 
 function isConfinementWriteInput(input, spec) {
-  return structuredExecCommands(input).some((command) => {
-    const tokens = shellCommandTokens(command);
-    return tokens.some((token, index) => ['>', '>>'].includes(token)
-      && tokens[index + 1] === spec.writeAttemptPath)
-      || tokens.some((token, index) => token === 'tee'
-        && shellCommandOperands(tokens, index).find((operand) => !operand.startsWith('-')) === spec.writeAttemptPath);
-  });
+  const commands = structuredExecCommands(input);
+  return commands.length === 1 && commands[0] === spec.writeCommand;
 }
 
 export function parseConfinementToolProof(rollout, spec) {
@@ -2227,6 +2198,7 @@ export async function runPhase1Smoke(options = {}) {
     writeFileSync(canaryPath, canaryBody, { mode: 0o600 });
     const canarySha = sha256Text(canaryBody);
     const confinementSpec = buildConfinementProbeSpec({ smokeRunId, canaryPath, writeAttemptPath, worktreePath: created.worktreePath });
+    writeConfinementProbeScripts(confinementSpec);
     const marker = `[FIRSTMATE_SMOKE v1 run=${smokeRunId}]`;
     const sendText = [
       'Do not inspect or modify tracked repository files.',

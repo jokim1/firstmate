@@ -256,9 +256,9 @@ ALLOWED_SIGNERS_SHA=$(shasum -a 256 "$ALLOWED_SIGNERS" | awk '{print $1}')
 export FM_PLAYBOT_EVIDENCE_ROOT="$EVIDENCE_ROOT"
 export FM_PLAYBOT_EVIDENCE_OVERLAY="$OVERLAY"
 export FM_PLAYBOT_SMOKE_FIXTURE=1
-node --input-type=module - "$ROOT/bin/fm-playbot-lanes.mjs" "$EVIDENCE_ROOT" "$OVERLAY" "$SIGNING_KEY" "$ALLOWED_SIGNERS" "$ALLOWED_SIGNERS_SHA" "$FIX/playbot.db" <<'NODE'
+node --input-type=module - "$ROOT/bin/fm-playbot-lanes.mjs" "$EVIDENCE_ROOT" "$OVERLAY" "$SIGNING_KEY" "$ALLOWED_SIGNERS" "$ALLOWED_SIGNERS_SHA" "$FIX/playbot.db" <<'NODE' || fail "mutation evidence fixture checks failed"
 import { pathToFileURL } from 'node:url';
-import { writeFileSync, readFileSync, chmodSync } from 'node:fs';
+import { writeFileSync, readFileSync, chmodSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -278,6 +278,7 @@ const {
   mintNativeThreadId,
   buildMutationEvaluateExpression,
   buildConfinementProbeSpec,
+  writeConfinementProbeScripts,
   parseConfinementToolProof,
   assertProjectMutationTarget,
   assertThreadMutationTarget,
@@ -500,8 +501,18 @@ const probeSpec = buildConfinementProbeSpec({
   smokeRunId: 'proof-fixture',
   canaryPath: '/tmp/canary fixture',
   writeAttemptPath: '/tmp/write fixture',
-  worktreePath: '/tmp/worktree fixture'
+  worktreePath: resolve(evidenceRoot, 'probe-worktree')
 });
+mkdirSync(resolve(evidenceRoot, 'probe-worktree'));
+writeConfinementProbeScripts(probeSpec);
+if ((statSync(probeSpec.readScriptPath).mode & 0o777) !== 0o700
+  || (statSync(probeSpec.writeScriptPath).mode & 0o777) !== 0o700) {
+  throw new Error('confinement probe scripts must be mode 0700');
+}
+if (!readFileSync(probeSpec.readScriptPath, 'utf8').includes(probeSpec.canaryPath)
+  || !readFileSync(probeSpec.writeScriptPath, 'utf8').includes(probeSpec.writeAttemptPath)) {
+  throw new Error('confinement probe scripts must bind the fixed probe paths');
+}
 const toolOutput = (callId, result) => ({
   callId,
   sourceFile: '/tmp/rollout.jsonl',
@@ -510,8 +521,8 @@ const toolOutput = (callId, result) => ({
 const execInput = (variable, cmd) => `const ${variable} = await tools.exec_command(${JSON.stringify({ cmd })});\ntext(JSON.stringify({exit_code:${variable}.exit_code,output:${variable}.output}));\n`;
 const proof = parseConfinementToolProof({
   toolCalls: [
-    { callId: 'read-call', input: execInput('readResult', `cat -- '${probeSpec.canaryPath}'`), sourceFile: '/tmp/rollout.jsonl' },
-    { callId: 'write-call', input: execInput('writeResult', `printf x > '${probeSpec.writeAttemptPath}'`), sourceFile: '/tmp/rollout.jsonl' }
+    { callId: 'read-call', input: execInput('readResult', probeSpec.readCommand), sourceFile: '/tmp/rollout.jsonl' },
+    { callId: 'write-call', input: execInput('writeResult', probeSpec.writeCommand), sourceFile: '/tmp/rollout.jsonl' }
   ],
   toolOutputs: [
     toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
@@ -522,8 +533,8 @@ if (!proof.readAttempted || !proof.writeAttempted || proof.writeOutcome !== 'den
 try {
   parseConfinementToolProof({
     toolCalls: [
-      { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(`printf '%s' "cat -- '${probeSpec.canaryPath}'"`)} };`, sourceFile: '/tmp/rollout.jsonl' },
-      { callId: 'write-call', input: execInput('writeResult', `printf x > '${probeSpec.writeAttemptPath}'`), sourceFile: '/tmp/rollout.jsonl' }
+      { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(probeSpec.readCommand)} };`, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', probeSpec.writeCommand), sourceFile: '/tmp/rollout.jsonl' }
     ],
     toolOutputs: [
       toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
@@ -537,8 +548,8 @@ try {
 try {
   parseConfinementToolProof({
     toolCalls: [
-      { callId: 'read-call', input: execInput('readResult', `cat -- '${probeSpec.canaryPath}'`), sourceFile: '/tmp/rollout.jsonl' },
-      { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(`printf '%s' "printf x > '${probeSpec.writeAttemptPath}'"`)} };`, sourceFile: '/tmp/rollout.jsonl' }
+      { callId: 'read-call', input: execInput('readResult', probeSpec.readCommand), sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(probeSpec.writeCommand)} };`, sourceFile: '/tmp/rollout.jsonl' }
     ],
     toolOutputs: [
       toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
@@ -552,8 +563,8 @@ try {
 try {
   parseConfinementToolProof({
     toolCalls: [
-      { callId: 'read-call', input: `const readResult = await tools.exec_command(${JSON.stringify({ cmd: `cat -- '${probeSpec.canaryPath}'` })});\ntext(JSON.stringify({exit_code:0,output:${JSON.stringify(probeSpec.readToken)}}));\n`, sourceFile: '/tmp/rollout.jsonl' },
-      { callId: 'write-call', input: execInput('writeResult', `printf x > '${probeSpec.writeAttemptPath}'`), sourceFile: '/tmp/rollout.jsonl' }
+      { callId: 'read-call', input: `const readResult = await tools.exec_command(${JSON.stringify({ cmd: probeSpec.readCommand })});\ntext(JSON.stringify({exit_code:0,output:${JSON.stringify(probeSpec.readToken)}}));\n`, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', probeSpec.writeCommand), sourceFile: '/tmp/rollout.jsonl' }
     ],
     toolOutputs: [
       toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
@@ -565,16 +576,31 @@ try {
   if (!/structured read tool call/.test(error.message)) throw error;
 }
 try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: execInput('readResult', `${probeSpec.readCommand} # ignored`), sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', `${probeSpec.writeCommand}; true`), sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 1, output: 'operation not permitted\n' })
+    ]
+  }, probeSpec);
+  throw new Error('augmented probe commands must fail');
+} catch (error) {
+  if (!/structured read tool call/.test(error.message)) throw error;
+}
+try {
   parseConfinementToolProof({ toolCalls: [], toolOutputs: [] }, probeSpec);
   throw new Error('ambiguous confinement proof must fail');
 } catch (error) {
-  if (!/structured tool call/.test(error.message)) throw error;
+  if (!/structured read tool call/.test(error.message)) throw error;
 }
 try {
   parseConfinementToolProof({
     toolCalls: [
-      { callId: 'read-call', input: execInput('readResult', `cat -- '${probeSpec.canaryPath}'`), sourceFile: '/tmp/rollout.jsonl' },
-      { callId: 'write-call', input: execInput('writeResult', `printf x > '${probeSpec.writeAttemptPath}'`), sourceFile: '/tmp/rollout.jsonl' }
+      { callId: 'read-call', input: execInput('readResult', probeSpec.readCommand), sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', probeSpec.writeCommand), sourceFile: '/tmp/rollout.jsonl' }
     ],
     toolOutputs: [
       toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
