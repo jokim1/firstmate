@@ -170,21 +170,28 @@ INTERRUPT_PROOF=$(
 ) || fail "interrupt must allow the native stop transition beyond two seconds"
 [ "$INTERRUPT_PROOF" = stopped ] || fail "slower verified interrupt must print stopped"
 if (
+  printf '0\n' > "$TMP_ROOT/interrupt-timeout-polls"
   fm_backend_playbot_tool_check() { return 0; }
   fm_backend_playbot_lane() {
     case "${1:-}" in
       stop) return 0 ;;
-      busy-state) printf 'busy\n' ;;
+      busy-state)
+        poll_count=$(cat "$TMP_ROOT/interrupt-timeout-polls")
+        printf '%s\n' "$((poll_count + 1))" > "$TMP_ROOT/interrupt-timeout-polls"
+        printf 'busy\n'
+        ;;
       *) return 1 ;;
     esac
   }
-  sleep() { :; }
+  sleep() { SECONDS=1000; }
   fm_backend_playbot_interrupt playbot:thread-complete be-ep "$STATE/be-ep.meta"
 ) >/dev/null 2>"$TMP_ROOT/interrupt-unverified.err"; then
   fail "interrupt must refuse when the exact thread never becomes idle"
 fi
 grep -q 'stop was not verified' "$TMP_ROOT/interrupt-unverified.err" \
   || fail "unverified interrupt must name the missing stop postcondition"
+[ "$(cat "$TMP_ROOT/interrupt-timeout-polls")" -eq 1 ] \
+  || fail "interrupt verification must stop at its wall-clock deadline"
 pass "interrupt reports success only after exact idle-state proof"
 # workspace_create and send_initial fail at binding/file preflight or the gate.
 if fm_backend_playbot_workspace_create /tmp/whatever fm-some-task HEAD some-task >/dev/null 2>"$TMP_ROOT/lc.err"; then

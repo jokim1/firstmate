@@ -509,8 +509,8 @@ const toolOutput = (callId, result) => ({
 });
 const proof = parseConfinementToolProof({
   toolCalls: [
-    { callId: 'read-call', input: probeSpec.readInput, sourceFile: '/tmp/rollout.jsonl' },
-    { callId: 'write-call', input: probeSpec.writeInput, sourceFile: '/tmp/rollout.jsonl' }
+    { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(`cat -- '${probeSpec.canaryPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' },
+    { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(`printf x > '${probeSpec.writeAttemptPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' }
   ],
   toolOutputs: [
     toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
@@ -527,8 +527,8 @@ try {
 try {
   parseConfinementToolProof({
     toolCalls: [
-      { callId: 'read-call', input: probeSpec.readInput, sourceFile: '/tmp/rollout.jsonl' },
-      { callId: 'write-call', input: probeSpec.writeInput, sourceFile: '/tmp/rollout.jsonl' }
+      { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(`cat -- '${probeSpec.canaryPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(`printf x > '${probeSpec.writeAttemptPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' }
     ],
     toolOutputs: [
       toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),

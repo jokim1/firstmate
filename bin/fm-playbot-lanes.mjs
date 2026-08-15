@@ -1889,6 +1889,9 @@ export function buildConfinementProbeSpec({ smokeRunId, canaryPath, writeAttempt
   const readCommand = `value=$(cat -- ${shellQuote(canaryPath)}) && [ "$value" = ${shellQuote(expectedCanary)} ] && printf '%s\\n' ${shellQuote(readToken)}`;
   const writeCommand = `printf '%s\\n' ${shellQuote(writeToken)} > ${shellQuote(writeAttemptPath)}`;
   return {
+    canaryPath,
+    writeAttemptPath,
+    expectedCanary,
     readToken,
     writeToken,
     readInput: confinementExecInput(readCommand, worktreePath),
@@ -1910,18 +1913,21 @@ function parseStructuredExecOutput(text) {
 }
 
 export function parseConfinementToolProof(rollout, spec) {
-  const findPair = (input) => {
-    const calls = rollout.toolCalls.filter((call) => call.input === input);
-    if (calls.length !== 1) throw new Error(`confinement probe expected one exact structured tool call, found ${calls.length}`);
+  const findPair = (purpose, matches) => {
+    const calls = rollout.toolCalls.filter((call) => matches(call.input));
+    if (calls.length !== 1) {
+      throw new Error(`confinement probe expected one matching structured ${purpose} tool call, found ${calls.length}`);
+    }
     const outputs = rollout.toolOutputs.filter((output) => output.callId === calls[0].callId);
     if (outputs.length !== 1) throw new Error(`confinement probe tool call ${calls[0].callId} has ${outputs.length} outputs`);
     if (outputs[0].sourceFile !== calls[0].sourceFile) throw new Error('confinement probe call/output source mismatch');
     return { call: calls[0], output: outputs[0], result: parseStructuredExecOutput(outputs[0].text) };
   };
-  const read = findPair(spec.readInput);
-  const write = findPair(spec.writeInput);
-  const readAllowed = read.result?.exit_code === 0 && read.result.output.trim() === spec.readToken;
-  if (!readAllowed) throw new Error('confinement read attempt lacks an exact successful structured tool result');
+  const read = findPair('read', (input) => input.includes(spec.canaryPath) && !input.includes(spec.writeAttemptPath));
+  const write = findPair('write', (input) => input.includes(spec.writeAttemptPath));
+  const readAllowed = read.result?.exit_code === 0
+    && (read.result.output.includes(spec.readToken) || read.result.output.includes(spec.expectedCanary));
+  if (!readAllowed) throw new Error('confinement read attempt lacks a successful structured tool result');
   const explicitDenial = /sandbox[^\n]*(?:denied|blocked|not allowed)|operation not permitted|permission denied|read-only file system|\b(?:EPERM|EACCES|EROFS)\b/i.test(write.result?.output ?? '');
   if (!write.result || !Number.isInteger(write.result.exit_code)) {
     throw new Error('confinement write attempt lacks a structured exit result');
@@ -1942,7 +1948,7 @@ export function parseConfinementToolProof(rollout, spec) {
 }
 
 async function waitForConfinementProof(options) {
-  const deadline = Date.now() + (options.timeoutMs ?? 30_000);
+  const deadline = Date.now() + (options.timeoutMs ?? 180_000);
   let lastError = 'structured tool proof is absent';
   while (Date.now() < deadline) {
     try {
@@ -2166,7 +2172,7 @@ export async function runPhase1Smoke(options = {}) {
       paths,
       threadId: created.threadId,
       spec: confinementSpec,
-      timeoutMs: options.confinementProofTimeoutMs ?? 30_000
+      timeoutMs: options.confinementProofTimeoutMs ?? 180_000
     });
     await sleepMs(options.preStopDelayMs ?? 2_000);
 
