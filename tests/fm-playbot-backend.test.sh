@@ -140,12 +140,15 @@ for call in "fm_backend_playbot_kill playbot:thread-complete" \
 done
 INTERRUPT_PROOF=$(
   fm_backend_playbot_tool_check() { return 0; }
+  # Bash 3.2 cannot parse nested case inside command substitution; use if/elif.
   fm_backend_playbot_lane() {
-    case "${1:-}" in
-      stop) return 0 ;;
-      busy-state) printf 'idle\n' ;;
-      *) return 1 ;;
-    esac
+    if [ "${1:-}" = stop ]; then
+      return 0
+    elif [ "${1:-}" = busy-state ]; then
+      printf 'idle\n'
+    else
+      return 1
+    fi
   }
   fm_backend_playbot_interrupt playbot:thread-complete be-ep "$STATE/be-ep.meta"
 ) || fail "interrupt must accept an exact idle postcondition"
@@ -154,16 +157,16 @@ printf '0\n' > "$TMP_ROOT/interrupt-polls"
 INTERRUPT_PROOF=$(
   fm_backend_playbot_tool_check() { return 0; }
   fm_backend_playbot_lane() {
-    case "${1:-}" in
-      stop) return 0 ;;
-      busy-state)
-        poll_count=$(cat "$TMP_ROOT/interrupt-polls")
-        poll_count=$((poll_count + 1))
-        printf '%s\n' "$poll_count" > "$TMP_ROOT/interrupt-polls"
-        if [ "$poll_count" -gt 20 ]; then printf 'idle\n'; else printf 'busy\n'; fi
-        ;;
-      *) return 1 ;;
-    esac
+    if [ "${1:-}" = stop ]; then
+      return 0
+    elif [ "${1:-}" = busy-state ]; then
+      poll_count=$(cat "$TMP_ROOT/interrupt-polls")
+      poll_count=$((poll_count + 1))
+      printf '%s\n' "$poll_count" > "$TMP_ROOT/interrupt-polls"
+      if [ "$poll_count" -gt 20 ]; then printf 'idle\n'; else printf 'busy\n'; fi
+    else
+      return 1
+    fi
   }
   sleep() { :; }
   fm_backend_playbot_interrupt playbot:thread-complete be-ep "$STATE/be-ep.meta"
@@ -173,15 +176,15 @@ if (
   printf '0\n' > "$TMP_ROOT/interrupt-timeout-polls"
   fm_backend_playbot_tool_check() { return 0; }
   fm_backend_playbot_lane() {
-    case "${1:-}" in
-      stop) return 0 ;;
-      busy-state)
-        poll_count=$(cat "$TMP_ROOT/interrupt-timeout-polls")
-        printf '%s\n' "$((poll_count + 1))" > "$TMP_ROOT/interrupt-timeout-polls"
-        printf 'busy\n'
-        ;;
-      *) return 1 ;;
-    esac
+    if [ "${1:-}" = stop ]; then
+      return 0
+    elif [ "${1:-}" = busy-state ]; then
+      poll_count=$(cat "$TMP_ROOT/interrupt-timeout-polls")
+      printf '%s\n' "$((poll_count + 1))" > "$TMP_ROOT/interrupt-timeout-polls"
+      printf 'busy\n'
+    else
+      return 1
+    fi
   }
   sleep() { SECONDS=1000; }
   fm_backend_playbot_interrupt playbot:thread-complete be-ep "$STATE/be-ep.meta"
