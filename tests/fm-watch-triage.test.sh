@@ -121,7 +121,13 @@ record_pi_busy() {  # <state-dir> <id>
     --source pi-ext --event agent-start
 }
 
-reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
+reap() {
+  local pid=$1
+  kill -TERM "$pid" 2>/dev/null || true
+  # EXIT cleanup can block on recovery-marker locks. Keep intentional fixture
+  # shutdown bounded, matching the shared helper used by watch-arm tests.
+  wait_for_exit "$pid" 10 || true
+}
 
 # --- pure classifier predicates (fm-classify-lib.sh) ------------------------
 

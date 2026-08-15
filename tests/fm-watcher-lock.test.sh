@@ -62,9 +62,9 @@ test_singleton_start() {
     i=$((i + 1))
   done
   grep -h 'watcher: already running pid ' "$out1" "$out2" >/dev/null || fail "second watcher did not report existing singleton"
-  kill "$pid1" "$pid2" 2>/dev/null || true
-  wait "$pid1" 2>/dev/null || true
-  wait "$pid2" 2>/dev/null || true
+  kill -TERM "$pid1" "$pid2" 2>/dev/null || true
+  wait_for_exit "$pid1" 10 || true
+  wait_for_exit "$pid2" 10 || true
   pass "simultaneous watcher starts leave exactly one live process"
 }
 
@@ -95,8 +95,8 @@ test_stale_watch_lock_reclaimed() {
   done
   [ "$live" -eq 1 ] || fail "watcher did not reclaim stale lock and stay alive"
   [ "$lock_pid" != "$dead_pid" ] || fail "stale watch lock pid was not replaced"
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+  kill -TERM "$pid" 2>/dev/null || true
+  wait_for_exit "$pid" 10 || true
   pass "killed watcher stale lock is reclaimed"
 }
 
