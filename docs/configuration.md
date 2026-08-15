@@ -59,7 +59,7 @@ Zellij, Orca, and Playbot are never auto-detected and never become the home defa
 There is no automatic captain phrase trigger for Playbot.
 Any value other than `tmux`, `herdr`, `zellij`, `orca`, `cmux`, or `playbot` is rejected until another adapter is implemented and verified.
 `fm-spawn.sh` accepts `tmux`, `herdr`, `zellij`, `orca`, `cmux`, and `playbot` for ship and scout tasks; `backend=orca`, `backend=cmux`, and `backend=playbot` all refuse `--secondmate` until secondmate ownership is designed and proved for each.
-Live `backend=playbot` dispatch remains phase-gated in `fm_backend_validate_spawn` until Phase 1/2 native gates pass (workspace create, send acceptance, stop, archive/cleanup, confinement); hermetic fixture tests may set `FM_PLAYBOT_NATIVE_SPAWN=1` only.
+Live `backend=playbot` dispatch is phase-gated by the adapter runtime check until native readiness passes (workspace create, send acceptance, stop, archive/cleanup, confinement, and read-only runtime health).
 Playbot v1 supports scout and ship `local-only` only; ship `direct-PR` and `no-mistakes` are refused.
 `codex-app` is not an accepted runtime backend yet; [`docs/codex-app-backend.md`](codex-app-backend.md) owns the Codex App boundary.
 The session-start secondmate liveness sweep uses the recovery-grade `fm_backend_agent_state` classifier where verified.

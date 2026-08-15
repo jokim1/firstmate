@@ -30,8 +30,8 @@ Per-operation `mutationEvidence` starts at `PHASE1-EVIDENCE-REQUIRED`.
 Only the `smoke` command may extend the overlay under `docs/verification/playbot-mutation-evidence/`:
 
 - each evidence record is a dated JSON file under `records/<release>/<smokeRunId>/`;
-- `overlay.v1.json` stores relative pointers plus `contentSha256`;
-- `loadCompatibilityManifest` re-hashes every pointed file and refuses mismatched or hand-edited bodies (the op stays refused).
+- `overlay.v1.json` stores relative pointers plus `contentSha256` and carries a detached smoke-writer signature;
+- `loadCompatibilityManifest` verifies the pinned signer and every pointed file, refusing unsigned coordinated edits and mismatched bodies (the op stays refused).
 
 ```sh
 # Operator-only live command (not a CI step). Requires an idle Playbot, no courier-run.py driver,
@@ -44,13 +44,9 @@ It never targets MAIN `ws_00159507e225` or any pre-existing non-smoke workspace.
 
 ## Confinement (gate-8 re-scope) {#confinement-gate-8-re-scope}
 
-Captain ruling 2026-08-14 re-scopes the confinement gate for native operability:
+Authoritative rationale: `data/fm-playbot-phase1-smoke/report.md#gate-8-confinement-re-scope` (captain-private).
 
-- the smoke **runs** the FM_HOME canary probe and **records** the honest result (read allowed, write denied on current releases);
-- **write denial is required** for native enablement; write success or ambiguous write outcome yields the supported `courier-only-confinement` state and blocks native mutations;
-- **read-allowed does not block** spawn/steer/observe evidence or native enablement when write denial holds.
-
-Do not restate the full audit narrative here; the private confinement audit and phase1 smoke reports remain the chronological evidence owners.
+Operator contract: write denial must be explicitly proved; read allowance does not block native operation when write denial is proved. Ambiguous evidence blocks native operation.
 
 ## Operating states
 

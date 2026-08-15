@@ -242,29 +242,43 @@ pass "CDP transport rejects on close/timeout, skips dead targets, and serializes
 
 EVIDENCE_ROOT="$TMP_ROOT/mutation-evidence"
 OVERLAY="$EVIDENCE_ROOT/overlay.v1.json"
+SIGNING_KEY="$EVIDENCE_ROOT/test-signer"
+ALLOWED_SIGNERS="$EVIDENCE_ROOT/allowed_signers"
+mkdir -p "$EVIDENCE_ROOT"
+ssh-keygen -q -t ed25519 -N '' -f "$SIGNING_KEY" || fail "could not create hermetic evidence signing key"
+printf 'jokim1 %s\n' "$(cat "$SIGNING_KEY.pub")" > "$ALLOWED_SIGNERS"
+ALLOWED_SIGNERS_SHA=$(shasum -a 256 "$ALLOWED_SIGNERS" | awk '{print $1}')
 export FM_PLAYBOT_EVIDENCE_ROOT="$EVIDENCE_ROOT"
 export FM_PLAYBOT_EVIDENCE_OVERLAY="$OVERLAY"
-node --input-type=module - "$ROOT/bin/fm-playbot-lanes.mjs" "$EVIDENCE_ROOT" "$OVERLAY" <<'NODE'
+node --input-type=module - "$ROOT/bin/fm-playbot-lanes.mjs" "$EVIDENCE_ROOT" "$OVERLAY" "$SIGNING_KEY" "$ALLOWED_SIGNERS" "$ALLOWED_SIGNERS_SHA" "$FIX/playbot.db" <<'NODE'
 import { pathToFileURL } from 'node:url';
 import { writeFileSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 const lanesUrl = pathToFileURL(process.argv[2]).href;
 const {
   loadCompatibilityManifest,
   mutationEvidenceState,
   nativeDispatchState,
+  ready,
   writeEvidenceRecord,
   writeEvidenceOverlay,
   normalizeIpcEvaluateResult,
   validateWorkspaceCreateResult,
   validateThreadSendResult,
   mintNativeThreadId,
-  buildMutationEvaluateExpression
+  buildMutationEvaluateExpression,
+  parseConfinementProbeProof,
+  assertWorkspaceMutationTarget
 } = await import(lanesUrl);
 
 const evidenceRoot = process.argv[3];
 const overlayPath = process.argv[4];
+const signingKey = process.argv[5];
+const allowedSignersPath = process.argv[6];
+const allowedSignersSha256 = process.argv[7];
+const applicationDb = process.argv[8];
+const attestation = { signingKey, allowedSignersPath, allowedSignersSha256 };
 const env = { FM_PLAYBOT_EVIDENCE_ROOT: evidenceRoot, FM_PLAYBOT_EVIDENCE_OVERLAY: overlayPath };
 const ops = [
   'workspace:create',
@@ -283,8 +297,12 @@ for (const operation of ops) {
     appVersion: '0.92.0',
     smokeRunId: 'hermetic-fixture',
     recordedAt: new Date().toISOString(),
-    readAllowed: true,
-    writeDenied: true,
+    probe: {
+      readAttempted: true,
+      writeAttempted: true,
+      readOutcome: 'allowed',
+      writeOutcome: 'denied'
+    },
     rationalePointer: 'docs/playbot-lanes.md#confinement-gate-8-re-scope',
     note: 'hermetic fixture'
   }, { env, evidenceRoot });
@@ -299,8 +317,8 @@ const overlay = {
     }
   }
 };
-writeEvidenceOverlay(overlay, { env, evidenceRoot, overlayPath });
-const loaded = loadCompatibilityManifest({ env, evidenceRoot, overlayPath });
+writeEvidenceOverlay(overlay, { env, evidenceRoot, overlayPath, ...attestation });
+const loaded = loadCompatibilityManifest({ env, evidenceRoot, overlayPath, ...attestation });
 const native = nativeDispatchState(loaded.manifest, '0.92.0');
 if (!native.allowed || native.operatingState !== 'native-enabled') {
   throw new Error(`expected native-enabled, got ${native.operatingState}: ${native.reason}`);
@@ -308,15 +326,51 @@ if (!native.allowed || native.operatingState !== 'native-enabled') {
 if (!mutationEvidenceState(loaded.manifest, '0.92.0', 'threads:send').allowed) {
   throw new Error('threads:send should be allowed with verified evidence');
 }
+if (mutationEvidenceState(loaded.manifest, '0.92.0', 'workspace:archive').allowed) {
+  throw new Error('workspace:archive must stay gated without successful live evidence');
+}
+const fixtureRoot = dirname(applicationDb);
+const deadPortFile = resolve(fixtureRoot, 'DeadDevToolsActivePort');
+writeFileSync(deadPortFile, '1\n');
+const unhealthyNative = await ready({
+  appVersion: '0.92.0',
+  manifest: loaded.manifest,
+  stateDir: resolve(fixtureRoot, 'unhealthy-state'),
+  paths: {
+    appVersion: '0.92.0',
+    applicationDb,
+    codexDb: resolve(fixtureRoot, 'harness/state_5.sqlite'),
+    appRunState: resolve(fixtureRoot, 'playbot-app-run-state.json'),
+    devToolsPortFile: deadPortFile,
+    appBundle: resolve(fixtureRoot, 'fixture-app.asar')
+  }
+});
+if (unhealthyNative.ready || !/reachability/.test(unhealthyNative.reason)) {
+  throw new Error('native readiness must require read-only runtime health');
+}
 // Tamper: rewrite evidence body without updating the overlay hash.
 const sendPath = resolve(evidenceRoot, pointers['threads:send'].recordRelPath);
 writeFileSync(sendPath, `${readFileSync(sendPath, 'utf8')} `);
-const tampered = loadCompatibilityManifest({ env, evidenceRoot, overlayPath });
+const tampered = loadCompatibilityManifest({ env, evidenceRoot, overlayPath, ...attestation });
 if (mutationEvidenceState(tampered.manifest, '0.92.0', 'threads:send').allowed) {
   throw new Error('tampered evidence must keep threads:send refused');
 }
 if (!tampered.integrity.refused.some((item) => item.scope.includes('threads:send'))) {
   throw new Error('tamper must appear in integrity.refused');
+}
+const editedBody = `${JSON.stringify({
+  schema: 'firstmate.playbot.mutation-evidence.v1',
+  operation: 'threads:send',
+  appVersion: '0.92.0',
+  smokeRunId: 'hand-edited',
+  recordedAt: new Date().toISOString()
+}, null, 2)}\n`;
+writeFileSync(sendPath, editedBody);
+overlay.releases['0.92.0'].mutationEvidence['threads:send'].contentSha256 = (await import('node:crypto')).createHash('sha256').update(editedBody).digest('hex');
+writeFileSync(overlayPath, `${JSON.stringify(overlay, null, 2)}\n`);
+const coordinated = loadCompatibilityManifest({ env, evidenceRoot, overlayPath, ...attestation });
+if (!coordinated.integrity.refused.some((item) => item.scope === 'overlay' && item.reason.includes('attestation'))) {
+  throw new Error('coordinated overlay and record edits must fail attestation');
 }
 // Shape parsers (offline; no live Playbot).
 const createEnv = normalizeIpcEvaluateResult(JSON.stringify({
@@ -331,6 +385,26 @@ validateThreadSendResult({ threadId: 'chat-1-1', phase: { kind: 'ready' } });
 if (!/^chat-1-\d+$/.test(mintNativeThreadId(42))) throw new Error('native thread id format');
 const expr = buildMutationEvaluateExpression('threads:stop', { threadId: 'chat-1-1' });
 if (!expr.includes('"threads:stop"') || !expr.includes('"chat-1-1"')) throw new Error('IPC expression must JSON-serialize');
+if (assertWorkspaceMutationTarget(applicationDb, 'workspace-task').kind !== 'worktree') throw new Error('worktree mutation target should pass');
+try {
+  assertWorkspaceMutationTarget(applicationDb, 'workspace-main', 'workspace:delete');
+  throw new Error('MAIN workspace mutation must fail');
+} catch (error) {
+  if (!/MAIN\/local/.test(error.message)) throw error;
+}
+const proof = parseConfinementProbeProof(JSON.stringify({
+  schema: 'firstmate.playbot.confinement-probe.v1',
+  smokeRunId: 'proof-fixture',
+  read: { attempted: true, outcome: 'allowed' },
+  write: { attempted: true, outcome: 'denied' }
+}), 'proof-fixture');
+if (!proof.readAttempted || !proof.writeAttempted || proof.writeOutcome !== 'denied') throw new Error('explicit confinement proof parser');
+try {
+  parseConfinementProbeProof('{"schema":"firstmate.playbot.confinement-probe.v1","smokeRunId":"proof-fixture","read":{"attempted":true,"outcome":"allowed"}}', 'proof-fixture');
+  throw new Error('ambiguous confinement proof must fail');
+} catch (error) {
+  if (!/both attempts/.test(error.message)) throw error;
+}
 // Write-denial failure is courier-only-confinement even when mutations are present.
 const denyRoot = resolve(evidenceRoot, 'write-deny');
 const denyOverlay = resolve(denyRoot, 'overlay.v1.json');
@@ -343,8 +417,12 @@ for (const operation of ops) {
     appVersion: '0.92.0',
     smokeRunId: 'write-deny-fixture',
     recordedAt: new Date().toISOString(),
-    readAllowed: true,
-    writeDenied: operation === 'confinement' ? false : true,
+    probe: {
+      readAttempted: true,
+      writeAttempted: true,
+      readOutcome: 'allowed',
+      writeOutcome: operation === 'confinement' ? 'allowed' : 'denied'
+    },
     rationalePointer: 'docs/playbot-lanes.md#confinement-gate-8-re-scope'
   }, { env: denyEnv, evidenceRoot: denyRoot });
 }
@@ -357,8 +435,8 @@ writeEvidenceOverlay({
       confinement: denyPointers.confinement
     }
   }
-}, { env: denyEnv, evidenceRoot: denyRoot, overlayPath: denyOverlay });
-const blocked = nativeDispatchState(loadCompatibilityManifest({ env: denyEnv }).manifest, '0.92.0');
+}, { env: denyEnv, evidenceRoot: denyRoot, overlayPath: denyOverlay, ...attestation });
+const blocked = nativeDispatchState(loadCompatibilityManifest({ env: denyEnv, evidenceRoot: denyRoot, overlayPath: denyOverlay, ...attestation }).manifest, '0.92.0');
 if (blocked.operatingState !== 'courier-only-confinement' || blocked.allowed) {
   throw new Error(`write-deny must be courier-only-confinement, got ${blocked.operatingState}`);
 }

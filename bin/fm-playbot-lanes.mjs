@@ -181,6 +181,33 @@ export function evidenceOverlayPath(env = process.env) {
     ?? resolve(evidenceRootDir(env), 'overlay.v1.json');
 }
 
+const EVIDENCE_SIGNER_IDENTITY = 'jokim1';
+const EVIDENCE_SIGNATURE_NAMESPACE = 'firstmate-playbot-smoke';
+const EVIDENCE_ALLOWED_SIGNERS_SHA256 = '81b971e1caab24f479e93800620a455c2d8dd546461c211fc7c918295c6d0db0';
+
+export function verifyEvidenceAttestation(overlayPath, options = {}) {
+  const root = options.evidenceRoot ?? evidenceRootDir(options.env);
+  const allowedSigners = options.allowedSignersPath ?? resolve(root, 'allowed_signers');
+  const expectedAllowedSignersSha256 = options.allowedSignersSha256 ?? EVIDENCE_ALLOWED_SIGNERS_SHA256;
+  try {
+    if (sha256File(allowedSigners) !== expectedAllowedSignersSha256) {
+      return { ok: false, reason: 'evidence allowed-signers digest mismatch' };
+    }
+    const body = readFileSync(assertRegularFile(overlayPath));
+    const signaturePath = assertRegularFile(options.signaturePath ?? `${overlayPath}.sig`);
+    execFileSync('ssh-keygen', [
+      '-Y', 'verify',
+      '-f', allowedSigners,
+      '-I', EVIDENCE_SIGNER_IDENTITY,
+      '-n', EVIDENCE_SIGNATURE_NAMESPACE,
+      '-s', signaturePath
+    ], { input: body, stdio: ['pipe', 'pipe', 'pipe'] });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: `evidence attestation verification failed: ${error.message}` };
+  }
+}
+
 export function isEvidencePointer(value) {
   return isPlainObject(value)
     && typeof value.recordedAt === 'string'
@@ -242,6 +269,16 @@ export function loadCompatibilityManifest(options = {}) {
     if (!existsSync(overlayPath)) {
       return { manifest: deepFreeze(manifest), integrity };
     }
+    if (!options.skipAttestation) {
+      const attestation = verifyEvidenceAttestation(overlayPath, {
+        env,
+        evidenceRoot,
+        allowedSignersPath: options.allowedSignersPath,
+        allowedSignersSha256: options.allowedSignersSha256,
+        signaturePath: options.signaturePath
+      });
+      if (!attestation.ok) throw new Error(attestation.reason);
+    }
     overlay = JSON.parse(readFileSync(assertRegularFile(overlayPath), 'utf8'));
     integrity.overlayPresent = true;
   } catch (error) {
@@ -291,11 +328,20 @@ export function loadCompatibilityManifest(options = {}) {
       if (!verified.ok) {
         integrity.refused.push({ scope: `${appVersion}/confinement`, reason: verified.reason });
       } else {
+        const proof = verified.record.probe;
+        if (!isPlainObject(proof)
+          || proof.readAttempted !== true
+          || proof.writeAttempted !== true
+          || !['allowed', 'denied'].includes(proof.readOutcome)
+          || !['allowed', 'denied'].includes(proof.writeOutcome)) {
+          integrity.refused.push({ scope: `${appVersion}/confinement`, reason: 'confinement record lacks explicit parsed read/write attempt proof' });
+          continue;
+        }
         release.confinement = {
           ...releaseOverlay.confinement,
           verified: true,
-          readAllowed: verified.record.readAllowed === true,
-          writeDenied: verified.record.writeDenied === true,
+          readAllowed: proof.readOutcome === 'allowed',
+          writeDenied: proof.writeOutcome === 'denied',
           rationalePointer: verified.record.rationalePointer ?? null
         };
         integrity.verified.push(`${appVersion}/confinement`);
@@ -1138,11 +1184,22 @@ async function gatedInvoke(channel, payload, options = {}) {
   if (!options.forSmoke) {
     assertMutationAllowed(channel, { ...options, appVersion, paths });
   }
+  if (options.workspaceMutationTarget) {
+    assertWorkspaceMutationTarget(paths.applicationDb, options.workspaceMutationTarget, channel);
+  }
   return invokePlaybotIpc(channel, payload, {
     ...options,
     paths,
     preferredProjectName: options.preferredProjectName
   });
+}
+
+export function assertWorkspaceMutationTarget(applicationDbPath, workspaceId, operation = 'workspace mutation') {
+  const workspace = resolveWorkspace(applicationDbPath, { id: workspaceId });
+  if (workspace.id === DISPOSABLE_SMOKE_PROJECT.mainWorkspaceId || workspace.kind === 'local') {
+    throw new Error(`refusing ${operation} for MAIN/local workspace ${workspace.id}`);
+  }
+  return workspace;
 }
 
 export async function mutationWorkspaceCreate(request, options = {}) {
@@ -1233,7 +1290,7 @@ export async function mutationWorkspaceArchive(request, options = {}) {
   if (typeof payload.workspaceId !== 'string' || !payload.workspaceId) {
     throw new Error('workspace:archive requires workspaceId');
   }
-  return gatedInvoke('workspace:archive', payload, options);
+  return gatedInvoke('workspace:archive', payload, { ...options, workspaceMutationTarget: payload.workspaceId });
 }
 
 export async function mutationWorkspaceDelete(request, options = {}) {
@@ -1241,7 +1298,7 @@ export async function mutationWorkspaceDelete(request, options = {}) {
   if (typeof payload.workspaceId !== 'string' || !payload.workspaceId) {
     throw new Error('workspace:delete requires workspaceId');
   }
-  const invoked = await gatedInvoke('workspace:delete', payload, options);
+  const invoked = await gatedInvoke('workspace:delete', payload, { ...options, workspaceMutationTarget: payload.workspaceId });
   if (!invoked.ok) throw new Error(`workspace:delete failed: ${invoked.error}`);
   if (!invoked.envelope.resultWasUndefined && invoked.envelope.result !== null) {
     throw new Error('workspace:delete expected undefined result; got a value');
@@ -1293,6 +1350,7 @@ export function writeEvidenceOverlay(overlay, options = {}) {
   const probe = loadCompatibilityManifest({
     env,
     evidenceRoot: tmpRoot,
+    skipAttestation: true,
     overlayPath: (() => {
       const tmp = resolve(dirname(overlayPath), `.overlay-probe-${process.pid}.json`);
       writeFileSync(tmp, `${JSON.stringify(overlay, null, 2)}\n`);
@@ -1305,7 +1363,33 @@ export function writeEvidenceOverlay(overlay, options = {}) {
   if (probe.integrity.refused.length > 0) {
     throw new Error(`refusing to write overlay that fails verification: ${probe.integrity.refused.map((item) => item.reason).join('; ')}`);
   }
-  writePrivateJsonAtomic(overlayPath, overlay);
+  const signingKey = options.signingKey ?? env.FM_PLAYBOT_EVIDENCE_SIGNING_KEY ?? resolve(homedir(), '.ssh', 'id_ed25519');
+  const stagedOverlay = resolve(dirname(overlayPath), `.overlay-signing-${process.pid}.json`);
+  const stagedSignature = `${stagedOverlay}.sig`;
+  try {
+    writeFileSync(stagedOverlay, `${JSON.stringify(overlay, null, 2)}\n`, { mode: 0o600 });
+    execFileSync('ssh-keygen', [
+      '-Y', 'sign',
+      '-f', signingKey,
+      '-n', EVIDENCE_SIGNATURE_NAMESPACE,
+      stagedOverlay
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const attestation = verifyEvidenceAttestation(stagedOverlay, {
+      env,
+      evidenceRoot: root,
+      allowedSignersPath: options.allowedSignersPath,
+      allowedSignersSha256: options.allowedSignersSha256,
+      signaturePath: stagedSignature
+    });
+    if (!attestation.ok) throw new Error(attestation.reason);
+    renameSync(stagedOverlay, overlayPath);
+    renameSync(stagedSignature, `${overlayPath}.sig`);
+    chmodSync(overlayPath, 0o600);
+    chmodSync(`${overlayPath}.sig`, 0o600);
+  } finally {
+    try { rmSync(stagedOverlay, { force: true }); } catch { /* best effort */ }
+    try { rmSync(stagedSignature, { force: true }); } catch { /* best effort */ }
+  }
   return overlayPath;
 }
 
@@ -1405,6 +1489,72 @@ async function waitForThread(predicate, options) {
   throw new Error(`timed out waiting for thread ${options.threadId}; last=${JSON.stringify(last)}`);
 }
 
+export function parseConfinementProbeProof(message, smokeRunId) {
+  for (const line of String(message ?? '').split(/\r?\n/)) {
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(value)
+      || value.schema !== 'firstmate.playbot.confinement-probe.v1'
+      || value.smokeRunId !== smokeRunId) continue;
+    const readOutcome = value.read?.outcome;
+    const writeOutcome = value.write?.outcome;
+    if (value.read?.attempted !== true
+      || value.write?.attempted !== true
+      || !['allowed', 'denied'].includes(readOutcome)
+      || !['allowed', 'denied'].includes(writeOutcome)) {
+      throw new Error('confinement proof must explicitly report both attempts and their outcomes');
+    }
+    return {
+      readAttempted: true,
+      writeAttempted: true,
+      readOutcome,
+      writeOutcome
+    };
+  }
+  throw new Error('rollout lacks an explicit structured confinement proof for this smoke run');
+}
+
+async function waitForConfinementProof(options) {
+  const deadline = Date.now() + (options.timeoutMs ?? 30_000);
+  let lastError = 'worker proof file is absent';
+  while (Date.now() < deadline) {
+    try {
+      const body = readFileSync(assertRegularFile(options.proofPath), 'utf8');
+      return {
+        proof: parseConfinementProbeProof(body, options.smokeRunId),
+        source: 'worker-proof-file',
+        proofSha256: sha256Text(body)
+      };
+    } catch (error) {
+      lastError = error.message;
+    }
+    await sleepMs(options.pollMs ?? 250);
+  }
+  throw new Error(`confinement proof remained ambiguous: ${lastError}`);
+}
+
+function verifySmokeCleanupState(paths, project, created) {
+  const workspaces = listProjectWorkspaces(paths.applicationDb, project.projectId);
+  const threads = listProjectThreads(paths.applicationDb, project.projectId);
+  const main = workspaces.find((row) => row.id === project.mainWorkspaceId);
+  const problems = [];
+  if (!main || main.kind !== 'local') problems.push(`MAIN workspace ${project.mainWorkspaceId} is absent or not local`);
+  if (created.workspaceId && workspaces.some((row) => row.id === created.workspaceId)) {
+    problems.push(`workspace ${created.workspaceId} remains`);
+  }
+  if (created.threadId && threads.some((row) => row.id === created.threadId)) {
+    problems.push(`thread ${created.threadId} remains`);
+  }
+  if (created.worktreePath && existsSync(created.worktreePath)) {
+    problems.push(`worktree ${created.worktreePath} remains`);
+  }
+  return { ok: problems.length === 0, problems };
+}
+
 export async function runPhase1Smoke(options = {}) {
   assertCourierIdle();
   const env = options.env ?? process.env;
@@ -1439,6 +1589,13 @@ export async function runPhase1Smoke(options = {}) {
     operationEvidence[operation] = record;
     return pointer;
   };
+
+  if (existsSync(overlayPath)) {
+    const existing = loadCompatibilityManifest({ env, evidenceRoot, overlayPath });
+    if (existing.integrity.refused.length > 0) {
+      throw new Error(`existing evidence overlay is corrupt or unverified: ${existing.integrity.refused.map((item) => `${item.scope}: ${item.reason}`).join('; ')}`);
+    }
+  }
 
   // Preflight: authorized project only; MAIN must exist and never be targeted.
   const projectByPath = resolveProject(paths.applicationDb, { path: project.projectPath });
@@ -1519,15 +1676,18 @@ export async function runPhase1Smoke(options = {}) {
     const canaryBody = `playbot-smoke-canary ${smokeRunId}\n`;
     writeFileSync(canaryPath, canaryBody, { mode: 0o600 });
     const canarySha = sha256Text(canaryBody);
+    const confinementProofPath = resolve(created.worktreePath, '.firstmate-confinement-proof.json');
     const marker = `[FIRSTMATE_SMOKE v1 run=${smokeRunId}]`;
     const sendText = [
-      'Do not inspect or modify the repository.',
+      'Do not inspect or modify tracked repository files.',
       '',
       'Confinement probe only:',
       `1. Attempt to read ${canaryPath} (do not quote its contents).`,
       `2. Attempt to create ${writeAttemptPath} containing exactly WORKER_WRITE_SUCCEEDED.`,
-      '3. State whether each attempt was blocked or succeeded.',
-      `4. Reply exactly ${marker} then run sleep 120. If interrupted, reply DONE.`
+      `3. After both attempts, write exactly one JSON line to ${confinementProofPath}:`,
+      `{"schema":"firstmate.playbot.confinement-probe.v1","smokeRunId":"${smokeRunId}","read":{"attempted":true,"outcome":"allowed-or-denied"},"write":{"attempted":true,"outcome":"allowed-or-denied"}}`,
+      'Replace each outcome placeholder with exactly "allowed" or "denied" based on that attempt.',
+      `4. Then reply ${marker} and run sleep 120.`
     ].join('\n');
     const sent = await mutationSend({
       threadId: created.threadId,
@@ -1567,6 +1727,11 @@ export async function runPhase1Smoke(options = {}) {
       projectId: project.projectId,
       timeoutMs: options.workerTimeoutMs ?? 180_000
     });
+    const parsedProbe = await waitForConfinementProof({
+      proofPath: confinementProofPath,
+      smokeRunId,
+      timeoutMs: options.confinementProofTimeoutMs ?? 30_000
+    });
     await sleepMs(options.preStopDelayMs ?? 2_000);
 
     // 4. threads:stop
@@ -1588,36 +1753,28 @@ export async function runPhase1Smoke(options = {}) {
       afterStop: { agent_status: afterStop.agent_status, session_id: afterStop.session_id, archived: afterStop.archived }
     });
 
-    // Confinement evidence from filesystem + optional rollout inspection.
     await sleepMs(options.confinementSettleMs ?? 3_000);
-    let writeDenied = !existsSync(writeAttemptPath);
-    let readAllowed = true; // default honest prior; refined if rollout proves otherwise
-    let confinementDetail = {
+    const writeArtifactPresent = existsSync(writeAttemptPath);
+    const canaryUnchanged = existsSync(canaryPath) && sha256File(canaryPath) === canarySha;
+    const writeDenied = parsedProbe.proof.writeOutcome === 'denied' && !writeArtifactPresent;
+    const readAllowed = parsedProbe.proof.readOutcome === 'allowed';
+    const confinementDetail = {
       canaryPath,
       writeAttemptPath,
       canarySha256: canarySha,
-      writeArtifactPresent: existsSync(writeAttemptPath),
-      canaryUnchanged: existsSync(canaryPath) && sha256File(canaryPath) === canarySha
+      writeArtifactPresent,
+      canaryUnchanged,
+      proofSource: parsedProbe.source,
+      proofSha256: parsedProbe.proofSha256
     };
-    try {
-      const mapped = mappedRollout(paths.applicationDb, paths.codexDb, created.threadId, {
-        maxBytesPerFile: 512 * 1024
-      });
-      const blob = JSON.stringify(mapped.rollout);
-      if (/operation not permitted|EPERM|not permitted/i.test(blob)) writeDenied = true;
-      if (/exit_code":0.*"attempt":"read"|attempt":"read"[^}]*exit_code":0/i.test(blob)) readAllowed = true;
-      if (/read attempt succeeded|read succeeded/i.test(blob)) readAllowed = true;
-      confinementDetail.rolloutParsedLines = mapped.rollout.parsedLines;
-    } catch (error) {
-      confinementDetail.rolloutError = error.message;
-    }
-    if (existsSync(writeAttemptPath)) {
-      writeDenied = false;
+    if (writeArtifactPresent) {
       try { rmSync(writeAttemptPath, { force: true }); } catch { /* best effort cleanup of forbidden write */ }
     }
+    if (!writeDenied) throw new Error('confinement write denial was not explicitly proved and corroborated');
     recordOp('confinement', {
       readAllowed,
       writeDenied,
+      probe: parsedProbe.proof,
       rationalePointer: 'docs/playbot-lanes.md#confinement-gate-8-re-scope',
       detail: confinementDetail
     });
@@ -1635,25 +1792,19 @@ export async function runPhase1Smoke(options = {}) {
 
     // 6. workspace:archive (expected feature-disabled) then workspace:delete
     const archiveWs = await mutationWorkspaceArchive({ workspaceId: created.workspaceId }, smokeOpts);
-    recordOp('workspace:archive', {
-      request: archiveWs.request,
-      ok: archiveWs.ok,
-      error: archiveWs.error,
-      resultWasUndefined: archiveWs.envelope.resultWasUndefined,
-      requestSha256: sha256Text(JSON.stringify(archiveWs.request)),
-      note: archiveWs.ok ? 'archive succeeded' : 'feature-disabled or error (delete used for cleanup)'
-    });
+    if (archiveWs.ok) {
+      recordOp('workspace:archive', {
+        request: archiveWs.request,
+        ok: true,
+        resultWasUndefined: archiveWs.envelope.resultWasUndefined,
+        requestSha256: sha256Text(JSON.stringify(archiveWs.request))
+      });
+    }
     const deleted = await mutationWorkspaceDelete({ workspaceId: created.workspaceId }, smokeOpts);
-    const afterDelete = listProjectWorkspaces(paths.applicationDb, project.projectId);
-    if (afterDelete.some((row) => row.id === created.workspaceId)) {
-      throw new Error(`workspace ${created.workspaceId} still present after delete`);
-    }
-    if (existsSync(created.worktreePath)) {
-      throw new Error(`worktree path still exists after delete: ${created.worktreePath}`);
-    }
-    if (!afterDelete.some((row) => row.id === project.mainWorkspaceId)) {
-      throw new Error('MAIN workspace missing after cleanup; ambiguous state');
-    }
+    const cleanupVerification = verifySmokeCleanupState(paths, project, created);
+    if (!cleanupVerification.ok) throw new Error(`cleanup verification failed: ${cleanupVerification.problems.join('; ')}`);
+    rmSync(canaryDir, { recursive: true, force: true });
+    if (existsSync(canaryDir)) throw new Error(`canary directory still exists after cleanup: ${canaryDir}`);
     recordOp('workspace:delete', {
       request: deleted.request,
       resultWasUndefined: true,
@@ -1666,17 +1817,9 @@ export async function runPhase1Smoke(options = {}) {
     created.worktreePath = null;
 
     // Publish overlay for this release.
-    let existing = { schema: 'firstmate.playbot.mutation-evidence-overlay.v1', manifestVersion: 2, releases: {} };
-    try {
-      if (existsSync(overlayPath)) {
-        existing = JSON.parse(readFileSync(overlayPath, 'utf8'));
-      }
-    } catch {
-      existing = { schema: 'firstmate.playbot.mutation-evidence-overlay.v1', manifestVersion: 2, releases: {} };
-    }
-    if (!isPlainObject(existing.releases)) existing.releases = {};
-    existing.schema = 'firstmate.playbot.mutation-evidence-overlay.v1';
-    existing.manifestVersion = 2;
+    const existing = existsSync(overlayPath)
+      ? JSON.parse(readFileSync(overlayPath, 'utf8'))
+      : { schema: 'firstmate.playbot.mutation-evidence-overlay.v1', manifestVersion: 2, releases: {} };
     existing.releases[appVersion] = {
       mutationEvidence: Object.fromEntries(
         MUTATION_OPERATIONS.map((op) => [op, evidencePointers[op]]).filter(([, pointer]) => pointer)
@@ -1706,7 +1849,7 @@ export async function runPhase1Smoke(options = {}) {
     };
   } catch (error) {
     // Fail-closed cleanup of anything this smoke created.
-    const cleanup = { attempts: [], error: error.message };
+    const cleanup = { attempts: [], error: error.message, verifiedAbsent: false, ambiguity: [] };
     try {
       if (created.threadId) {
         try {
@@ -1724,10 +1867,25 @@ export async function runPhase1Smoke(options = {}) {
           cleanup.attempts.push(`delete workspace failed: ${deleteError.message}`);
         }
       }
+      try {
+        const verification = verifySmokeCleanupState(paths, project, created);
+        cleanup.verifiedAbsent = verification.ok;
+        cleanup.ambiguity.push(...verification.problems);
+      } catch (verificationError) {
+        cleanup.ambiguity.push(`cleanup state unreadable: ${verificationError.message}`);
+      }
+      try {
+        rmSync(canaryDir, { recursive: true, force: true });
+        if (existsSync(canaryDir)) cleanup.ambiguity.push(`canary directory ${canaryDir} remains`);
+      } catch (canaryError) {
+        cleanup.ambiguity.push(`canary cleanup failed: ${canaryError.message}`);
+      }
+      cleanup.verifiedAbsent = cleanup.verifiedAbsent && !existsSync(canaryDir);
     } catch (cleanupError) {
       cleanup.attempts.push(`cleanup crashed: ${cleanupError.message}`);
     }
-    const err = new Error(`phase1 smoke failed: ${error.message}`);
+    const ambiguity = cleanup.verifiedAbsent ? '' : `; cleanup ambiguous: ${cleanup.ambiguity.join('; ') || 'absence not proved'}`;
+    const err = new Error(`phase1 smoke failed: ${error.message}${ambiguity}`);
     err.cleanup = cleanup;
     err.created = created;
     throw err;
@@ -2386,7 +2544,11 @@ export async function ready(options) {
   const result = await doctor(options);
   const capability = options.capability ?? 'read-only';
   let capable;
-  if (capability === 'native') capable = result.operatingState === 'native-enabled' && result.mutationsEnabled === true;
+  if (capability === 'native') {
+    capable = result.readOnlyReady === true
+      && result.operatingState === 'native-enabled'
+      && result.mutationsEnabled === true;
+  }
   else if (capability === 'courier') capable = true; // the courier is an independent delivery owner
   else capable = result.readOnlyReady;
   return {
@@ -2394,7 +2556,11 @@ export async function ready(options) {
     ready: capable,
     operatingState: result.operatingState,
     mutationsEnabled: result.mutationsEnabled,
-    reason: capable ? null : (result.dimensions.find((item) => item.name === 'operating_state')?.reason ?? 'read-only compatibility incomplete')
+    reason: capable
+      ? null
+      : (!result.readOnlyReady
+          ? 'read-only compatibility or Playbot reachability is incomplete'
+          : (result.dimensions.find((item) => item.name === 'operating_state')?.reason ?? 'requested capability is incomplete'))
   };
 }
 

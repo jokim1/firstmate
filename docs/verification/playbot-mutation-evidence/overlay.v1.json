@@ -29,21 +29,11 @@
           "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/threads:archiveThread.json",
           "contentSha256": "781706d289a8e1b85f5c2a7799f8c342cdd8f11babcd3e15db60b698ad4baa0a"
         },
-        "workspace:archive": {
-          "recordedAt": "2026-08-15T06:30:39.629Z",
-          "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/workspace:archive.json",
-          "contentSha256": "c637bc722175752bed805349b5b79761a134eabf122a353a4a222876a149527c"
-        },
         "workspace:delete": {
           "recordedAt": "2026-08-15T06:30:39.836Z",
           "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/workspace:delete.json",
           "contentSha256": "4940aac91cdd08885c8a51b24d1fc12fc23f4a2693fbef1cb4d95e2b77d10290"
         }
-      },
-      "confinement": {
-        "recordedAt": "2026-08-15T06:30:39.605Z",
-        "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/confinement.json",
-        "contentSha256": "cdce4647c41c2b073bf3577ad7b672877bae544a90dbec68e059c00cd5ca0e5e"
       }
     }
   }

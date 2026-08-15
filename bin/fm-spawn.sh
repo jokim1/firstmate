@@ -50,7 +50,7 @@
 #   orca, cmux, playbot. Orca/playbot own worktree+endpoint (no treehouse get);
 #   cmux is session-provider-only like herdr/zellij. Auto-detect: herdr/cmux
 #   loud, tmux silent; zellij/orca/playbot never auto-detected. Live playbot
-#   is phase-gated (FM_PLAYBOT_NATIVE_SPAWN=1 hermetic only), refuses secondmate
+#   is phase-gated by the adapter's native readiness check, refuses secondmate
 #   and non-local-only ship. codex-app unknown (docs/codex-app-backend.md).
 #   Default tmux omits backend=; cmux refuses --secondmate. Backend refusals are
 #   terminal (no silent retry).
@@ -857,10 +857,19 @@ spawn_abort_cleanup() {
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
   fi
   if [ "$PLAYBOT_ABORT_CLEANUP" = 1 ]; then
-    # Keep txn for same-id re-entry (V2SIM-4); best-effort external cleanup only.
+    local playbot_cleanup_ok=1 playbot_txn
     PLAYBOT_ABORT_CLEANUP=0
-    [ -z "${PLAYBOT_THREAD_ID:-}" ] || fm_backend_kill playbot "playbot:$PLAYBOT_THREAD_ID" 2>/dev/null || true
-    [ -z "${PLAYBOT_WORKSPACE_ID:-}" ] || fm_backend_remove_worktree playbot "$PLAYBOT_WORKSPACE_ID" 2>/dev/null || true
+    [ -z "${PLAYBOT_THREAD_ID:-}" ] || fm_backend_kill playbot "playbot:$PLAYBOT_THREAD_ID" 2>/dev/null || playbot_cleanup_ok=0
+    [ -z "${PLAYBOT_WORKSPACE_ID:-}" ] || fm_backend_remove_worktree playbot "$PLAYBOT_WORKSPACE_ID" 2>/dev/null || playbot_cleanup_ok=0
+    if [ "$playbot_cleanup_ok" = 1 ]; then
+      playbot_txn=$(playbot_txn_path "$ID")
+      rm -f -- "$playbot_txn"
+      PLAYBOT_TXN_STATE=
+      PLAYBOT_WORKSPACE_ID=
+      PLAYBOT_THREAD_ID=
+    else
+      echo "warning: Playbot abort cleanup was incomplete; transaction retained for explicit reconciliation" >&2
+    fi
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0

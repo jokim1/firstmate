@@ -51,8 +51,9 @@ pass "target parsing accepts only exact playbot:<thread-id>"
 if fm_backend_playbot_runtime_check > /dev/null 2>"$TMP_ROOT/rtc.err"; then
   fail "runtime check must refuse before Phase 1 evidence exists"
 fi
-grep -q 'PHASE1-EVIDENCE-REQUIRED' "$TMP_ROOT/rtc.err" || fail "runtime check refusal must carry the phase marker"
-pass "runtime check refuses spawn intake with PHASE1-EVIDENCE-REQUIRED"
+grep -Eq 'PHASE1-EVIDENCE-REQUIRED|read-only compatibility|reachability' "$TMP_ROOT/rtc.err" \
+  || fail "runtime check refusal must name the evidence or runtime-health gate"
+pass "runtime check refuses spawn intake until evidence and runtime health pass"
 
 # --- send semantics (plan 4.1) --------------------------------------------------
 

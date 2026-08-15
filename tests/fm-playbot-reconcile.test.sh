@@ -215,7 +215,7 @@ pass "corrupt or unverifiable records are a visible failure, never silently filt
 
 write_task_fixture rc-txn thread-complete workspace-task worktrees/task ship
 mkdir -p "$STATE/.playbot-dispatch"
-printf '{"state":"accepted","taskId":"rc-txn"}\n' > "$STATE/.playbot-dispatch/rc-txn.txn"
+printf 'task_id=rc-txn\nstate=accepted\nworkspace_id=workspace-task\nthread_id=thread-complete\n' > "$STATE/.playbot-dispatch/rc-txn.txn"
 touch -t 202001010000 "$STATE/.playbot-dispatch/rc-txn.txn"
 RC=0
 OUT=$(FM_PLAYBOT_TXN_DEADLINE_SECS=600 node "$RECONCILE" check rc-txn --check-key-queued 0 2>/dev/null) || RC=$?
