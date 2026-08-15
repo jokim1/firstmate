@@ -1912,6 +1912,88 @@ function parseStructuredExecOutput(text) {
   return null;
 }
 
+function structuredExecCommands(input) {
+  const commands = [];
+  const pattern = /(?:^|[,{]\s*)["']?cmd["']?\s*:\s*("(?:\\.|[^"\\])*")/g;
+  for (const match of input.matchAll(pattern)) {
+    try {
+      commands.push(JSON.parse(match[1]));
+    } catch {}
+  }
+  return commands;
+}
+
+function shellCommandTokens(command) {
+  const tokens = [];
+  let token = '';
+  let quote = null;
+  const push = () => {
+    if (token) tokens.push(token);
+    token = '';
+  };
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (quote) {
+      if (char === quote) quote = null;
+      else if (char === '\\' && quote === '"' && index + 1 < command.length) token += command[index += 1];
+      else token += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      push();
+      continue;
+    }
+    const pair = command.slice(index, index + 2);
+    if (['&&', '||', '>>', '$('].includes(pair)) {
+      push();
+      tokens.push(pair);
+      index += 1;
+      continue;
+    }
+    if ([';', '|', '>', '(', ')'].includes(char)) {
+      push();
+      tokens.push(char);
+      continue;
+    }
+    if (char === '\\' && index + 1 < command.length) token += command[index += 1];
+    else token += char;
+  }
+  push();
+  return quote ? [] : tokens;
+}
+
+function shellCommandOperands(tokens, index) {
+  const end = tokens.findIndex((token, tokenIndex) => tokenIndex > index
+    && [';', '&&', '||', '|', ')'].includes(token));
+  return tokens.slice(index + 1, end === -1 ? undefined : end);
+}
+
+function isConfinementReadInput(input, spec) {
+  if (input.includes(spec.writeAttemptPath)) return false;
+  return structuredExecCommands(input).some((command) => {
+    const tokens = shellCommandTokens(command);
+    return tokens.some((token, index) => token === 'cat'
+      && tokens[index + (tokens[index + 1] === '--' ? 2 : 1)] === spec.canaryPath)
+      || tokens.some((token, index) => token === 'dd'
+        && shellCommandOperands(tokens, index).some((operand, operandIndex, operands) =>
+          operand === `if=${spec.canaryPath}` || (operand === 'if' && operands[operandIndex + 1] === spec.canaryPath)));
+  });
+}
+
+function isConfinementWriteInput(input, spec) {
+  return structuredExecCommands(input).some((command) => {
+    const tokens = shellCommandTokens(command);
+    return tokens.some((token, index) => ['>', '>>'].includes(token)
+      && tokens[index + 1] === spec.writeAttemptPath)
+      || tokens.some((token, index) => token === 'tee'
+        && shellCommandOperands(tokens, index).find((operand) => !operand.startsWith('-')) === spec.writeAttemptPath);
+  });
+}
+
 export function parseConfinementToolProof(rollout, spec) {
   const findPair = (purpose, matches) => {
     const calls = rollout.toolCalls.filter((call) => matches(call.input));
@@ -1923,10 +2005,10 @@ export function parseConfinementToolProof(rollout, spec) {
     if (outputs[0].sourceFile !== calls[0].sourceFile) throw new Error('confinement probe call/output source mismatch');
     return { call: calls[0], output: outputs[0], result: parseStructuredExecOutput(outputs[0].text) };
   };
-  const read = findPair('read', (input) => input.includes(spec.canaryPath) && !input.includes(spec.writeAttemptPath));
-  const write = findPair('write', (input) => input.includes(spec.writeAttemptPath));
+  const read = findPair('read', (input) => isConfinementReadInput(input, spec));
+  const write = findPair('write', (input) => isConfinementWriteInput(input, spec));
   const readAllowed = read.result?.exit_code === 0
-    && (read.result.output.includes(spec.readToken) || read.result.output.includes(spec.expectedCanary));
+    && read.result.output.includes(spec.readToken);
   if (!readAllowed) throw new Error('confinement read attempt lacks a successful structured tool result');
   const explicitDenial = /sandbox[^\n]*(?:denied|blocked|not allowed)|operation not permitted|permission denied|read-only file system|\b(?:EPERM|EACCES|EROFS)\b/i.test(write.result?.output ?? '');
   if (!write.result || !Number.isInteger(write.result.exit_code)) {

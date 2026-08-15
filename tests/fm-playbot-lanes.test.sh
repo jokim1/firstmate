@@ -519,6 +519,36 @@ const proof = parseConfinementToolProof({
 }, probeSpec);
 if (!proof.readAttempted || !proof.writeAttempted || proof.writeOutcome !== 'denied') throw new Error('explicit confinement proof parser');
 try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(`printf '%s' "cat -- '${probeSpec.canaryPath}'"`)} };`, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(`printf x > '${probeSpec.writeAttemptPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 1, output: 'operation not permitted\n' })
+    ]
+  }, probeSpec);
+  throw new Error('path-only read claim must fail');
+} catch (error) {
+  if (!/structured read tool call/.test(error.message)) throw error;
+}
+try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(`cat -- '${probeSpec.canaryPath}'`)} };`, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(`printf '%s' "printf x > '${probeSpec.writeAttemptPath}'"`)} };`, sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 1, output: 'EACCES\n' })
+    ]
+  }, probeSpec);
+  throw new Error('path-only write denial claim must fail');
+} catch (error) {
+  if (!/structured write tool call/.test(error.message)) throw error;
+}
+try {
   parseConfinementToolProof({ toolCalls: [], toolOutputs: [] }, probeSpec);
   throw new Error('ambiguous confinement proof must fail');
 } catch (error) {
