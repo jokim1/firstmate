@@ -51,17 +51,17 @@ Refresh this record after each smoke run and after every Playbot release's read-
 
 Host: macOS, Playbot 0.92.0, disposable project `project_07474ac1d119` only.
 Command: `node bin/fm-playbot-lanes.mjs smoke --json`
-Historical smoke run id: `2026-08-15T07-57-31-273Z`.
-That evidence is retained but is not enabling because its receipt is bound to a previous lanes-script digest.
+Smoke run id: `2026-08-15T08-19-52-693Z` (bound to HEAD `8890285b` lanes digest).
+Result: `operatingState: native-enabled`, confinement `readAllowed=true` / `writeDenied=true` via fixed worktree probe scripts + structured tool proof.
 
-Current acceptance state: blocked pending a new operator smoke against the current script.
+Post-smoke:
 
 ```text
 node bin/fm-playbot-lanes.mjs doctor --json
-# appVersion 0.92.0, operatingState phase1-evidence-required, readOnlyReady true, mutationsEnabled false
+# appVersion 0.92.0, operatingState native-enabled, readOnlyReady true, mutationsEnabled true
 
 node bin/fm-playbot-lanes.mjs ready --json --capability native
-# ready false, operatingState phase1-evidence-required, mutationsEnabled false
+# ready true, operatingState native-enabled, mutationsEnabled true, reason null
 ```
 
 Disposable workspace/thread created by the smoke were archived/deleted and verified absent; MAIN and the pre-existing ground-tile worktree were not targeted.
