@@ -138,6 +138,35 @@ for call in "fm_backend_playbot_kill playbot:thread-complete" \
   fi
   grep -q 'PHASE1-EVIDENCE-REQUIRED' "$TMP_ROOT/lc.err" || fail "'$call' must refuse with the phase marker"
 done
+INTERRUPT_PROOF=$(
+  fm_backend_playbot_tool_check() { return 0; }
+  fm_backend_playbot_lane() {
+    case "${1:-}" in
+      stop) return 0 ;;
+      busy-state) printf 'idle\n' ;;
+      *) return 1 ;;
+    esac
+  }
+  fm_backend_playbot_interrupt playbot:thread-complete be-ep "$STATE/be-ep.meta"
+) || fail "interrupt must accept an exact idle postcondition"
+[ "$INTERRUPT_PROOF" = stopped ] || fail "interrupt must print stopped only after idle proof"
+if (
+  fm_backend_playbot_tool_check() { return 0; }
+  fm_backend_playbot_lane() {
+    case "${1:-}" in
+      stop) return 0 ;;
+      busy-state) printf 'busy\n' ;;
+      *) return 1 ;;
+    esac
+  }
+  sleep() { :; }
+  fm_backend_playbot_interrupt playbot:thread-complete be-ep "$STATE/be-ep.meta"
+) >/dev/null 2>"$TMP_ROOT/interrupt-unverified.err"; then
+  fail "interrupt must refuse when the exact thread never becomes idle"
+fi
+grep -q 'stop was not verified' "$TMP_ROOT/interrupt-unverified.err" \
+  || fail "unverified interrupt must name the missing stop postcondition"
+pass "interrupt reports success only after exact idle-state proof"
 # workspace_create and send_initial fail at binding/file preflight or the gate.
 if fm_backend_playbot_workspace_create /tmp/whatever fm-some-task HEAD some-task >/dev/null 2>"$TMP_ROOT/lc.err"; then
   fail "workspace_create must refuse without a binding/evidence"

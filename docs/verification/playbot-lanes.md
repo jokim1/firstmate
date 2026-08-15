@@ -52,7 +52,10 @@ Refresh this record after each smoke run and after every Playbot release's read-
 Host: macOS, Playbot 0.92.0, disposable project `project_07474ac1d119` only.
 Command: `node bin/fm-playbot-lanes.mjs smoke --json`
 Historical result: the disposable mutation sequence completed and cleaned up, but its confinement record did not contain explicit parsed proof of both attempts. That confinement pointer and the failed `workspace:archive` pointer are no longer enabling evidence.
-Current post-fix state pending a new live smoke. This correction run did not execute it because the review worktree boundary forbids writes to the external Playbot database and disposable-project path:
+
+Current acceptance state (2026-08-15): BLOCKED.
+The required corrected live smoke cannot run under worktree-only execution because it writes the external Playbot database and disposable-project path.
+The Phase 1 native-enabled acceptance check remains failing and must not be reported as enabled:
 
 ```text
 node bin/fm-playbot-lanes.mjs doctor --json

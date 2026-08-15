@@ -30,9 +30,10 @@ Per-operation `mutationEvidence` starts at `PHASE1-EVIDENCE-REQUIRED`.
 Only the `smoke` command may extend the overlay under `docs/verification/playbot-mutation-evidence/`:
 
 - each evidence record is a dated JSON file under `records/<release>/<smokeRunId>/`;
-- `overlay.v1.json` stores relative pointers plus `contentSha256`;
+- `overlay.v1.json` atomically points to one versioned publication whose overlay body stores relative evidence pointers plus `contentSha256`;
 - the smoke-only publisher writes a signed receipt binding the overlay digest, record digest root, release, disposable-project identity, and current lanes-script digest;
-- `loadCompatibilityManifest` verifies the receipt, pinned signer, script digest, and every pointed file, refusing coordinated edits and mismatched bodies (the op stays refused).
+- each smoke writes a complete versioned publication directory, then atomically replaces the pointer file;
+- `loadCompatibilityManifest` resolves that pointer and verifies the receipt, pinned signer, script digest, and every pointed file, refusing coordinated edits and mismatched bodies (the op stays refused).
 
 The receipt prevents ordinary overlay/record editing and use of the test publisher against the production evidence root. It does not create a privilege boundary against a same-UID operator who can modify the smoke program and use the configured signing key; live smoke provenance remains an operator-controlled trust boundary.
 

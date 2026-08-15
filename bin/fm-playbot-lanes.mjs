@@ -198,6 +198,38 @@ function evidenceReceiptPath(overlayPath) {
   return `${overlayPath}.receipt.json`;
 }
 
+function resolveEvidencePublication(overlayPath) {
+  const document = JSON.parse(readFileSync(assertRegularFile(overlayPath), 'utf8'));
+  if (document.schema !== 'firstmate.playbot.evidence-publication-pointer.v1') {
+    return {
+      overlayPath,
+      receiptPath: evidenceReceiptPath(overlayPath),
+      signaturePath: `${evidenceReceiptPath(overlayPath)}.sig`,
+      publicationRelPath: null,
+      overlay: document
+    };
+  }
+  if (typeof document.publicationRelPath !== 'string'
+    || !document.publicationRelPath
+    || isAbsolute(document.publicationRelPath)
+    || document.publicationRelPath.split('/').includes('..')) {
+    throw new Error('evidence publication pointer path is malformed');
+  }
+  const root = resolve(dirname(overlayPath));
+  const publicationDir = resolve(root, document.publicationRelPath);
+  if (publicationDir !== root && !publicationDir.startsWith(`${root}/`)) {
+    throw new Error('evidence publication pointer escapes its root');
+  }
+  const resolvedOverlayPath = resolve(publicationDir, 'overlay.v1.json');
+  return {
+    overlayPath: resolvedOverlayPath,
+    receiptPath: evidenceReceiptPath(resolvedOverlayPath),
+    signaturePath: `${evidenceReceiptPath(resolvedOverlayPath)}.sig`,
+    publicationRelPath: document.publicationRelPath,
+    overlay: JSON.parse(readFileSync(assertRegularFile(resolvedOverlayPath), 'utf8'))
+  };
+}
+
 const EVIDENCE_SIGNER_IDENTITY = 'jokim1';
 const EVIDENCE_SIGNATURE_NAMESPACE = 'firstmate-playbot-smoke';
 const EVIDENCE_ALLOWED_SIGNERS_SHA256 = '81b971e1caab24f479e93800620a455c2d8dd546461c211fc7c918295c6d0db0';
@@ -233,6 +265,9 @@ export function verifyEvidenceAttestation(overlayPath, options = {}) {
       || typeof receipt.appVersion !== 'string' || !receipt.appVersion) {
       throw new Error('evidence receipt identity is malformed');
     }
+    if ((options.publicationRelPath ?? null) !== (receipt.publicationRelPath ?? null)) {
+      throw new Error('evidence receipt publication pointer mismatch');
+    }
     const fixtureAllowed = options.env?.FM_PLAYBOT_SMOKE_FIXTURE === '1';
     if (receipt.fixture === true && !fixtureAllowed) throw new Error('fixture evidence receipt is disabled');
     if (receipt.fixture !== true) {
@@ -241,7 +276,10 @@ export function verifyEvidenceAttestation(overlayPath, options = {}) {
       }
     }
     if (receipt.overlaySha256 !== sha256File(overlayPath)) throw new Error('evidence receipt overlay digest mismatch');
-    if (receipt.lanesSha256 !== sha256File(fileURLToPath(import.meta.url))) throw new Error('evidence receipt lanes binary digest mismatch');
+    if (!options.ignoreLanesSha256
+      && receipt.lanesSha256 !== sha256File(fileURLToPath(import.meta.url))) {
+      throw new Error('evidence receipt lanes binary digest mismatch');
+    }
     const overlay = JSON.parse(readFileSync(assertRegularFile(overlayPath), 'utf8'));
     if (!isPlainObject(overlay.releases?.[receipt.appVersion])) throw new Error('evidence receipt release is absent from overlay');
     const recordDigests = evidenceRecordDigests(overlay);
@@ -264,6 +302,31 @@ function verifyLegacyEvidenceAttestation(overlayPath, options = {}) {
     if (sha256File(overlayPath) !== LEGACY_EVIDENCE_OVERLAY_SHA256) return false;
     verifySignedFile(overlayPath, `${overlayPath}.sig`, allowedSigners, expected);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function verifyPriorEvidenceForSmoke(overlayPath, options = {}) {
+  try {
+    const publication = resolveEvidencePublication(overlayPath);
+    if (publication.publicationRelPath === null) {
+      return verifyLegacyEvidenceAttestation(overlayPath, options);
+    }
+    const attestation = verifyEvidenceAttestation(publication.overlayPath, {
+      ...options,
+      receiptPath: publication.receiptPath,
+      signaturePath: publication.signaturePath,
+      publicationRelPath: publication.publicationRelPath,
+      ignoreLanesSha256: true
+    });
+    if (!attestation.ok) return false;
+    const structural = loadCompatibilityManifest({
+      ...options,
+      overlayPath: publication.overlayPath,
+      skipAttestation: true
+    });
+    return structural.integrity.refused.length === 0;
   } catch {
     return false;
   }
@@ -341,18 +404,20 @@ export function loadCompatibilityManifest(options = {}) {
     if (!existsSync(overlayPath)) {
       return { manifest: deepFreeze(manifest), integrity };
     }
+    const publication = resolveEvidencePublication(overlayPath);
     if (!options.skipAttestation) {
-      const attestation = verifyEvidenceAttestation(overlayPath, {
+      const attestation = verifyEvidenceAttestation(publication.overlayPath, {
         env,
         evidenceRoot,
         allowedSignersPath: options.allowedSignersPath,
         allowedSignersSha256: options.allowedSignersSha256,
-        signaturePath: options.signaturePath,
-        receiptPath: options.receiptPath
+        signaturePath: options.signaturePath ?? publication.signaturePath,
+        receiptPath: options.receiptPath ?? publication.receiptPath,
+        publicationRelPath: publication.publicationRelPath
       });
       if (!attestation.ok) throw new Error(attestation.reason);
     }
-    overlay = JSON.parse(readFileSync(assertRegularFile(overlayPath), 'utf8'));
+    overlay = publication.overlay;
     integrity.overlayPresent = true;
   } catch (error) {
     integrity.refused.push({ scope: 'overlay', reason: error.message });
@@ -1272,7 +1337,7 @@ export async function invokePlaybotIpc(channel, payload, options = {}) {
   throw new Error(`IPC invoke failed on every page target: ${errors.join('; ')}`);
 }
 
-export function validateWorkspaceCreateResult(result) {
+export function validateWorkspaceCreateResult(result, expectedProjectId = null) {
   if (!isPlainObject(result)) throw new Error('workspace:create result must be an object');
   for (const key of ['id', 'projectId', 'kind', 'archiveState']) {
     if (typeof result[key] !== 'string' || !result[key]) {
@@ -1280,13 +1345,19 @@ export function validateWorkspaceCreateResult(result) {
     }
   }
   if (result.kind === 'local') throw new Error('workspace:create returned a MAIN/local workspace');
+  if (expectedProjectId !== null && result.projectId !== expectedProjectId) {
+    throw new Error(`workspace:create returned project ${result.projectId}; expected ${expectedProjectId}`);
+  }
   return result;
 }
 
-export function validateThreadSendResult(result) {
+export function validateThreadSendResult(result, expectedThreadId = null, operation = 'threads:send') {
   if (!isPlainObject(result)) throw new Error('threads:send result must be a thread snapshot object');
   if (typeof result.threadId !== 'string' || !result.threadId) {
     throw new Error('threads:send result missing threadId');
+  }
+  if (expectedThreadId !== null && result.threadId !== expectedThreadId) {
+    throw new Error(`${operation} returned thread ${result.threadId}; expected ${expectedThreadId}`);
   }
   return result;
 }
@@ -1320,6 +1391,40 @@ export function assertWorkspaceMutationTarget(applicationDbPath, workspaceId, op
   return workspace;
 }
 
+export function assertProjectMutationTarget(applicationDbPath, projectId, projectRootId) {
+  const db = openReadonlyDatabase(applicationDbPath);
+  try {
+    return exactlyOne(db.prepare(`
+      SELECT p.id AS project_id, p.deletion_state, pr.id AS project_root_id
+      FROM projects p
+      JOIN project_roots pr ON pr.project_id = p.id
+      WHERE p.id = ? AND p.deletion_state = 'active' AND pr.id = ?
+    `).all(projectId, projectRootId), 'workspace:create project/root');
+  } finally {
+    db.close();
+  }
+}
+
+export function assertThreadMutationTarget(applicationDbPath, threadId, operation = 'thread mutation') {
+  const thread = findThreadRow(applicationDbPath, threadId);
+  if (!thread) throw new Error(`${operation} thread ${threadId} is absent`);
+  if (Number(thread.archived) !== 0) throw new Error(`${operation} thread ${threadId} is archived`);
+  const workspace = assertWorkspaceMutationTarget(applicationDbPath, thread.workspace_id, operation);
+  if (workspace.archive_state !== 'active') {
+    throw new Error(`${operation} workspace ${workspace.id} is not active`);
+  }
+  return { thread, workspace };
+}
+
+function assertThreadIdentityStable(before, after, expectedThreadId, operation) {
+  if (!after) throw new Error(`${operation} thread ${expectedThreadId} disappeared`);
+  if (after.id !== expectedThreadId
+    || after.workspace_id !== before.workspace_id) {
+    throw new Error(`${operation} changed the requested thread identity`);
+  }
+  return after;
+}
+
 export async function mutationWorkspaceCreate(request, options = {}) {
   const payload = {
     strategy: 'quick',
@@ -1335,9 +1440,19 @@ export async function mutationWorkspaceCreate(request, options = {}) {
       throw new Error(`workspace:create requires ${key}`);
     }
   }
-  const invoked = await gatedInvoke('workspace:create', payload, options);
+  const paths = options.paths ?? playbotPaths(options.env);
+  assertProjectMutationTarget(paths.applicationDb, payload.projectId, payload.projectRootId);
+  const invoked = await gatedInvoke('workspace:create', payload, { ...options, paths });
   if (!invoked.ok) throw new Error(`workspace:create failed: ${invoked.error}`);
-  const result = validateWorkspaceCreateResult(invoked.envelope.result);
+  const result = validateWorkspaceCreateResult(invoked.envelope.result, payload.projectId);
+  const persisted = assertWorkspaceMutationTarget(paths.applicationDb, result.id, 'workspace:create');
+  if (persisted.project_id !== payload.projectId
+    || persisted.project_root_id !== payload.projectRootId
+    || persisted.archive_state !== 'active'
+    || persisted.archive_state !== result.archiveState
+    || persisted.kind !== result.kind) {
+    throw new Error('workspace:create persisted workspace identity does not match the request and result');
+  }
   return { ...invoked, result };
 }
 
@@ -1356,11 +1471,19 @@ export async function mutationOpenThread(request, options = {}) {
   if (!/^chat-[1-9][0-9]*-[1-9][0-9]*$/.test(payload.id)) {
     throw new Error('threads:openThread id must use the native chat-N-N format');
   }
-  const invoked = await gatedInvoke('threads:openThread', payload, options);
+  const paths = options.paths ?? playbotPaths(options.env);
+  const workspace = assertWorkspaceMutationTarget(paths.applicationDb, payload.workspaceId, 'threads:openThread');
+  if (workspace.archive_state !== 'active') throw new Error(`threads:openThread workspace ${workspace.id} is not active`);
+  const invoked = await gatedInvoke('threads:openThread', payload, { ...options, paths });
   if (!invoked.ok) throw new Error(`threads:openThread failed: ${invoked.error}`);
   // Live shape: JavaScript undefined; acceptance is the persisted row.
   if (!invoked.envelope.resultWasUndefined && invoked.envelope.result !== null) {
     throw new Error('threads:openThread expected undefined result; got a value');
+  }
+  const persisted = findThreadRow(paths.applicationDb, payload.id);
+  if (!persisted || persisted.id !== payload.id || persisted.workspace_id !== payload.workspaceId
+    || Number(persisted.archived) !== 0) {
+    throw new Error('threads:openThread persisted thread identity does not match the request');
   }
   return { ...invoked, threadId: payload.id, result: null };
 }
@@ -1375,18 +1498,24 @@ export async function mutationSend(request, options = {}) {
   };
   if (typeof payload.threadId !== 'string' || !payload.threadId) throw new Error('threads:send requires threadId');
   if (typeof payload.text !== 'string' || !payload.text) throw new Error('threads:send requires text');
-  const invoked = await gatedInvoke('threads:send', payload, options);
+  const paths = options.paths ?? playbotPaths(options.env);
+  const before = assertThreadMutationTarget(paths.applicationDb, payload.threadId, 'threads:send').thread;
+  const invoked = await gatedInvoke('threads:send', payload, { ...options, paths });
   if (!invoked.ok) throw new Error(`threads:send failed: ${invoked.error}`);
-  const result = validateThreadSendResult(invoked.envelope.result);
+  const result = validateThreadSendResult(invoked.envelope.result, payload.threadId, 'threads:send');
+  assertThreadIdentityStable(before, findThreadRow(paths.applicationDb, payload.threadId), payload.threadId, 'threads:send');
   return { ...invoked, result };
 }
 
 export async function mutationStop(request, options = {}) {
   const payload = { threadId: request.threadId };
   if (typeof payload.threadId !== 'string' || !payload.threadId) throw new Error('threads:stop requires threadId');
-  const invoked = await gatedInvoke('threads:stop', payload, options);
+  const paths = options.paths ?? playbotPaths(options.env);
+  const before = assertThreadMutationTarget(paths.applicationDb, payload.threadId, 'threads:stop').thread;
+  const invoked = await gatedInvoke('threads:stop', payload, { ...options, paths });
   if (!invoked.ok) throw new Error(`threads:stop failed: ${invoked.error}`);
-  const result = validateThreadSendResult(invoked.envelope.result);
+  const result = validateThreadSendResult(invoked.envelope.result, payload.threadId, 'threads:stop');
+  assertThreadIdentityStable(before, findThreadRow(paths.applicationDb, payload.threadId), payload.threadId, 'threads:stop');
   return { ...invoked, result };
 }
 
@@ -1395,11 +1524,20 @@ export async function mutationArchiveThread(request, options = {}) {
   if (typeof payload.threadId !== 'string' || !payload.threadId) {
     throw new Error('threads:archiveThread requires threadId');
   }
-  const invoked = await gatedInvoke('threads:archiveThread', payload, options);
+  const paths = options.paths ?? playbotPaths(options.env);
+  const before = assertThreadMutationTarget(paths.applicationDb, payload.threadId, 'threads:archiveThread').thread;
+  const invoked = await gatedInvoke('threads:archiveThread', payload, { ...options, paths });
   if (!invoked.ok) throw new Error(`threads:archiveThread failed: ${invoked.error}`);
   if (!invoked.envelope.resultWasUndefined && invoked.envelope.result !== null) {
     throw new Error('threads:archiveThread expected undefined result; got a value');
   }
+  const persisted = assertThreadIdentityStable(
+    before,
+    findThreadRow(paths.applicationDb, payload.threadId),
+    payload.threadId,
+    'threads:archiveThread'
+  );
+  if (Number(persisted.archived) !== 1) throw new Error(`threads:archiveThread did not archive ${payload.threadId}`);
   return { ...invoked, result: null };
 }
 
@@ -1408,7 +1546,25 @@ export async function mutationWorkspaceArchive(request, options = {}) {
   if (typeof payload.workspaceId !== 'string' || !payload.workspaceId) {
     throw new Error('workspace:archive requires workspaceId');
   }
-  return gatedInvoke('workspace:archive', payload, { ...options, workspaceMutationTarget: payload.workspaceId });
+  const paths = options.paths ?? playbotPaths(options.env);
+  const before = assertWorkspaceMutationTarget(paths.applicationDb, payload.workspaceId, 'workspace:archive');
+  const invoked = await gatedInvoke('workspace:archive', payload, {
+    ...options,
+    paths,
+    workspaceMutationTarget: payload.workspaceId
+  });
+  if (!invoked.ok) return invoked;
+  if (!invoked.envelope.resultWasUndefined && invoked.envelope.result !== null) {
+    throw new Error('workspace:archive expected undefined result; got a value');
+  }
+  const persisted = findWorkspaceRow(paths.applicationDb, payload.workspaceId);
+  if (!persisted || persisted.id !== before.id
+    || persisted.project_id !== before.project_id
+    || persisted.project_root_id !== before.project_root_id
+    || persisted.archive_state !== 'archived') {
+    throw new Error('workspace:archive persisted workspace identity or archive state does not match the request');
+  }
+  return invoked;
 }
 
 export async function mutationWorkspaceDelete(request, options = {}) {
@@ -1493,10 +1649,19 @@ function writeEvidenceOverlay(overlay, options = {}, capability) {
     throw new Error(`refusing to write overlay that fails verification: ${probe.integrity.refused.map((item) => item.reason).join('; ')}`);
   }
   const signingKey = options.signingKey ?? env.FM_PLAYBOT_EVIDENCE_SIGNING_KEY ?? resolve(homedir(), '.ssh', 'id_ed25519');
-  const stagedOverlay = resolve(dirname(overlayPath), `.overlay-signing-${process.pid}.json`);
+  if (!/^[a-zA-Z0-9._-]+$/.test(options.smokeRunId ?? '')) throw new Error('smokeRunId is unsafe for evidence publication');
+  const publicationRelPath = `publications/${options.smokeRunId}`;
+  const publicationRoot = resolve(dirname(overlayPath), 'publications');
+  const finalPublicationDir = resolve(dirname(overlayPath), publicationRelPath);
+  const stagedPublicationDir = resolve(dirname(overlayPath), `.publication-${options.smokeRunId}-${process.pid}`);
+  const stagedOverlay = resolve(stagedPublicationDir, 'overlay.v1.json');
   const stagedReceipt = `${stagedOverlay}.receipt.json`;
   const stagedSignature = `${stagedReceipt}.sig`;
+  const stagedPointer = resolve(dirname(overlayPath), `.publication-pointer-${process.pid}.json`);
   try {
+    if (existsSync(finalPublicationDir)) throw new Error(`evidence publication already exists for ${options.smokeRunId}`);
+    mkdirSync(publicationRoot, { recursive: true });
+    mkdirSync(stagedPublicationDir, { mode: 0o700 });
     writeFileSync(stagedOverlay, `${JSON.stringify(overlay, null, 2)}\n`, { mode: 0o600 });
     const receipt = {
       schema: 'firstmate.playbot.smoke-receipt.v1',
@@ -1505,6 +1670,7 @@ function writeEvidenceOverlay(overlay, options = {}, capability) {
       recordedAt: options.recordedAt ?? new Date().toISOString(),
       project: options.project,
       fixture: options.fixture === true,
+      publicationRelPath,
       overlaySha256: sha256File(stagedOverlay),
       recordRootSha256: sha256Text(JSON.stringify(evidenceRecordDigests(overlay))),
       lanesSha256: sha256File(fileURLToPath(import.meta.url))
@@ -1525,19 +1691,24 @@ function writeEvidenceOverlay(overlay, options = {}, capability) {
       allowedSignersPath: options.allowedSignersPath,
       allowedSignersSha256: options.allowedSignersSha256,
       receiptPath: stagedReceipt,
-      signaturePath: stagedSignature
+      signaturePath: stagedSignature,
+      publicationRelPath
     });
     if (!attestation.ok) throw new Error(attestation.reason);
-    renameSync(stagedReceipt, evidenceReceiptPath(overlayPath));
-    renameSync(stagedSignature, `${evidenceReceiptPath(overlayPath)}.sig`);
-    renameSync(stagedOverlay, overlayPath);
+    chmodSync(stagedOverlay, 0o600);
+    chmodSync(stagedReceipt, 0o600);
+    chmodSync(stagedSignature, 0o600);
+    renameSync(stagedPublicationDir, finalPublicationDir);
+    if (options.publicationFailpoint === 'before-pointer') throw new Error('fixture publication failpoint before pointer');
+    writeFileSync(stagedPointer, `${JSON.stringify({
+      schema: 'firstmate.playbot.evidence-publication-pointer.v1',
+      publicationRelPath
+    }, null, 2)}\n`, { mode: 0o600 });
+    renameSync(stagedPointer, overlayPath);
     chmodSync(overlayPath, 0o600);
-    chmodSync(evidenceReceiptPath(overlayPath), 0o600);
-    chmodSync(`${evidenceReceiptPath(overlayPath)}.sig`, 0o600);
   } finally {
-    try { rmSync(stagedOverlay, { force: true }); } catch { /* best effort */ }
-    try { rmSync(stagedReceipt, { force: true }); } catch { /* best effort */ }
-    try { rmSync(stagedSignature, { force: true }); } catch { /* best effort */ }
+    try { rmSync(stagedPublicationDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    try { rmSync(stagedPointer, { force: true }); } catch { /* best effort */ }
   }
   return overlayPath;
 }
@@ -1725,10 +1896,14 @@ export function parseConfinementToolProof(rollout, spec) {
   const write = findPair(spec.writeInput);
   const readAllowed = read.result?.exit_code === 0 && read.result.output.trim() === spec.readToken;
   if (!readAllowed) throw new Error('confinement read attempt lacks an exact successful structured tool result');
-  const runtimeDenied = /sandbox denied|operation not permitted|permission denied|not allowed/i.test(write.output.text);
-  const writeDenied = write.result
-    ? Number.isInteger(write.result.exit_code) && write.result.exit_code !== 0
-    : runtimeDenied;
+  const explicitDenial = /sandbox[^\n]*(?:denied|blocked|not allowed)|operation not permitted|permission denied|read-only file system|\b(?:EPERM|EACCES|EROFS)\b/i.test(write.result?.output ?? '');
+  if (!write.result || !Number.isInteger(write.result.exit_code)) {
+    throw new Error('confinement write attempt lacks a structured exit result');
+  }
+  if (write.result.exit_code !== 0 && !explicitDenial) {
+    throw new Error('confinement write attempt failed ambiguously without an explicit permission denial');
+  }
+  const writeDenied = write.result.exit_code !== 0 && explicitDenial;
   return {
     readAttempted: true,
     writeAttempted: true,
@@ -1827,9 +2002,9 @@ export async function runPhase1Smoke(options = {}) {
 
   if (existsSync(overlayPath)) {
     const existing = loadCompatibilityManifest({ env, evidenceRoot, overlayPath });
-    const legacySigned = existing.integrity.refused.length > 0
-      && verifyLegacyEvidenceAttestation(overlayPath, { env, evidenceRoot });
-    if (existing.integrity.refused.length > 0 && !legacySigned) {
+    const priorVerified = existing.integrity.refused.length > 0
+      && verifyPriorEvidenceForSmoke(overlayPath, { env, evidenceRoot });
+    if (existing.integrity.refused.length > 0 && !priorVerified) {
       throw new Error(`existing evidence overlay is corrupt or unverified: ${existing.integrity.refused.map((item) => `${item.scope}: ${item.reason}`).join('; ')}`);
     }
   }
@@ -2053,7 +2228,7 @@ export async function runPhase1Smoke(options = {}) {
 
     // Publish overlay for this release.
     const existing = existsSync(overlayPath)
-      ? JSON.parse(readFileSync(overlayPath, 'utf8'))
+      ? resolveEvidencePublication(overlayPath).overlay
       : { schema: 'firstmate.playbot.mutation-evidence-overlay.v1', manifestVersion: 2, releases: {} };
     existing.releases[appVersion] = {
       mutationEvidence: Object.fromEntries(

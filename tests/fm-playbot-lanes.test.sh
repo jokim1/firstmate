@@ -278,6 +278,8 @@ const {
   buildMutationEvaluateExpression,
   buildConfinementProbeSpec,
   parseConfinementToolProof,
+  assertProjectMutationTarget,
+  assertThreadMutationTarget,
   assertWorkspaceMutationTarget,
   resolveWorkspaceIncludingArchived,
   verifyPlaybotRetirement
@@ -291,6 +293,11 @@ const allowedSignersSha256 = process.argv[7];
 const applicationDb = process.argv[8];
 const attestation = { signingKey, allowedSignersPath, allowedSignersSha256 };
 const env = { FM_PLAYBOT_EVIDENCE_ROOT: evidenceRoot, FM_PLAYBOT_EVIDENCE_OVERLAY: overlayPath, FM_PLAYBOT_SMOKE_FIXTURE: '1' };
+const publicationFiles = (pointerPath) => {
+  const pointer = JSON.parse(readFileSync(pointerPath, 'utf8'));
+  const overlay = resolve(dirname(pointerPath), pointer.publicationRelPath, 'overlay.v1.json');
+  return { overlay, receipt: `${overlay}.receipt.json` };
+};
 const ops = [
   'workspace:create',
   'threads:openThread',
@@ -342,6 +349,24 @@ if (!mutationEvidenceState(loaded.manifest, '0.92.0', 'threads:send').allowed) {
 if (mutationEvidenceState(loaded.manifest, '0.92.0', 'workspace:archive').allowed) {
   throw new Error('workspace:archive must stay gated without successful live evidence');
 }
+try {
+  writeFixtureEvidenceOverlay(overlay, {
+    env,
+    evidenceRoot,
+    overlayPath,
+    smokeRunId: 'interrupted-fixture',
+    appVersion: '0.92.0',
+    publicationFailpoint: 'before-pointer',
+    ...attestation
+  });
+  throw new Error('publication failpoint must interrupt before pointer replacement');
+} catch (error) {
+  if (!/fixture publication failpoint/.test(error.message)) throw error;
+}
+const afterInterruptedPublication = loadCompatibilityManifest({ env, evidenceRoot, overlayPath, ...attestation });
+if (!nativeDispatchState(afterInterruptedPublication.manifest, '0.92.0').allowed) {
+  throw new Error('interrupted publication must leave the prior pointer valid');
+}
 const fixtureRoot = dirname(applicationDb);
 const deadPortFile = resolve(fixtureRoot, 'DeadDevToolsActivePort');
 writeFileSync(deadPortFile, '1\n');
@@ -380,7 +405,7 @@ const editedBody = `${JSON.stringify({
 }, null, 2)}\n`;
 writeFileSync(sendPath, editedBody);
 overlay.releases['0.92.0'].mutationEvidence['threads:send'].contentSha256 = (await import('node:crypto')).createHash('sha256').update(editedBody).digest('hex');
-writeFileSync(overlayPath, `${JSON.stringify(overlay, null, 2)}\n`);
+writeFileSync(publicationFiles(overlayPath).overlay, `${JSON.stringify(overlay, null, 2)}\n`);
 const coordinated = loadCompatibilityManifest({ env, evidenceRoot, overlayPath, ...attestation });
 if (!coordinated.integrity.refused.some((item) => item.scope === 'overlay' && item.reason.includes('attestation'))) {
   throw new Error('coordinated overlay and record edits must fail attestation');
@@ -395,10 +420,28 @@ const createEnv = normalizeIpcEvaluateResult(JSON.stringify({
 }));
 validateWorkspaceCreateResult(createEnv.result);
 validateThreadSendResult({ threadId: 'chat-1-1', phase: { kind: 'ready' } });
+try {
+  validateWorkspaceCreateResult(createEnv.result, 'wrong-project');
+  throw new Error('workspace:create project mismatch must fail');
+} catch (error) {
+  if (!/expected wrong-project/.test(error.message)) throw error;
+}
+try {
+  validateThreadSendResult({ threadId: 'chat-1-2' }, 'chat-1-1', 'threads:stop');
+  throw new Error('thread result identity mismatch must fail');
+} catch (error) {
+  if (!/expected chat-1-1/.test(error.message)) throw error;
+}
 if (!/^chat-1-\d+$/.test(mintNativeThreadId(42))) throw new Error('native thread id format');
 const expr = buildMutationEvaluateExpression('threads:stop', { threadId: 'chat-1-1' });
 if (!expr.includes('"threads:stop"') || !expr.includes('"chat-1-1"')) throw new Error('IPC expression must JSON-serialize');
 if (assertWorkspaceMutationTarget(applicationDb, 'workspace-task').kind !== 'worktree') throw new Error('worktree mutation target should pass');
+if (assertProjectMutationTarget(applicationDb, 'project-alpha', 'root-alpha').project_root_id !== 'root-alpha') {
+  throw new Error('exact project/root mutation target should pass');
+}
+if (assertThreadMutationTarget(applicationDb, 'thread-complete', 'threads:send').workspace.id !== 'workspace-task') {
+  throw new Error('exact thread/workspace mutation target should pass');
+}
 try {
   assertWorkspaceMutationTarget(applicationDb, 'workspace-main', 'workspace:delete');
   throw new Error('MAIN workspace mutation must fail');
@@ -454,6 +497,21 @@ try {
 } catch (error) {
   if (!/structured tool call/.test(error.message)) throw error;
 }
+try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: probeSpec.readInput, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: probeSpec.writeInput, sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 127, output: 'working directory missing\n' })
+    ]
+  }, probeSpec);
+  throw new Error('generic write failure must remain ambiguous');
+} catch (error) {
+  if (!/failed ambiguously/.test(error.message)) throw error;
+}
 // Write-denial failure is courier-only-confinement even when mutations are present.
 const denyRoot = resolve(evidenceRoot, 'write-deny');
 const denyOverlay = resolve(denyRoot, 'overlay.v1.json');
@@ -503,7 +561,7 @@ try {
 } catch (error) {
   if (!/confinement write denial failed/.test(error.message)) throw error;
 }
-chmodSync(`${denyOverlay}.receipt.json`, 0o666);
+chmodSync(publicationFiles(denyOverlay).receipt, 0o666);
 const wrongMode = loadCompatibilityManifest({ env: denyEnv, evidenceRoot: denyRoot, overlayPath: denyOverlay, ...attestation });
 if (!wrongMode.integrity.refused.some((item) => item.scope === 'overlay' && item.reason.includes('group/world writable'))) {
   throw new Error('writable smoke receipt must be refused');
