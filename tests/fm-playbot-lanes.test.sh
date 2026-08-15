@@ -33,6 +33,16 @@ export FM_PLAYBOT_APP_VERSION="0.90.0"
 export FM_PLAYBOT_EVIDENCE_ROOT="$TMP_ROOT/empty-evidence"
 export FM_PLAYBOT_EVIDENCE_OVERLAY="$TMP_ROOT/empty-evidence/overlay.v1.json"
 
+
+file_mode() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %Lp "$1"
+  else
+    stat -c %a "$1"
+  fi
+}
+
+
 # Start a fake CDP server and point the fixture DevToolsActivePort at it.
 node "$ROOT/tests/playbot-fixtures/fake-cdp.mjs" ok > "$TMP_ROOT/cdp-port" &
 CDP_PID=$!
@@ -219,7 +229,7 @@ LEASE_GEN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.a
 node "$LANES" bind-controller --thread-id thread-complete >/dev/null || fail "re-bind must succeed for the lock owner"
 LEASE_GEN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).generation)' "$STATE/.playbot-controller.lease")
 [ "$LEASE_GEN" = 2 ] || fail "second lease generation must be 2, got $LEASE_GEN"
-[ "$(stat -f %Lp "$STATE/.playbot-controller.lease")" = 600 ] || fail "controller lease must be mode 0600"
+[ "$(file_mode "$STATE/.playbot-controller.lease")" = 600 ] || fail "controller lease must be mode 0600"
 rm -f "$STATE/.lock"
 if node "$LANES" bind-controller --thread-id thread-complete >/dev/null 2>&1; then
   fail "bind-controller without a live session lock must refuse"
