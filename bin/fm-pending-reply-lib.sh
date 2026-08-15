@@ -453,16 +453,31 @@ fm_pending_reply_retire_resolved() {  # <state-dir> <corr_id>
   return 0
 }
 
-fm_pending_reply_beat_loop() {  # <beat-path> <interval> <owner-pid>
-  local beat_path=$1 interval=$2 owner_pid=$3 sleeper=
+fm_pending_reply_touch_if_owner() {  # <beat-path> <owner-pid> <state-dir> <watch-path> <home>
+  (
+    local beat_path=$1 owner_pid=$2 state=$3 watch_path=$4 owner_home=$5
+    local FM_HOME=$owner_home FM_STATE_OVERRIDE=$state STATE=$state
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
+    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$owner_pid" ] \
+      && fm_watcher_lock_matches_pid "$state" "$watch_path" "$owner_pid" "$owner_home" \
+      && touch "$beat_path" 2>/dev/null
+  )
+}
+
+fm_pending_reply_beat_loop() {  # <beat-path> <interval> <owner-pid> <state-dir> <watch-path> <home>
+  local beat_path=$1 interval=$2 owner_pid=$3 state=$4 watch_path=$5 owner_home=$6 sleeper=
+  local FM_HOME=$owner_home FM_STATE_OVERRIDE=$state STATE=$state
   trap '[ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null; exit 0' TERM INT
-  while kill -0 "$owner_pid" 2>/dev/null; do
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
+  while [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$owner_pid" ] \
+    && fm_watcher_lock_matches_pid "$state" "$watch_path" "$owner_pid" "$owner_home"; do
+    touch "$beat_path" 2>/dev/null || true
     sleep "$interval" &
     sleeper=$!
     wait "$sleeper" || return 0
     sleeper=
-    kill -0 "$owner_pid" 2>/dev/null || return 0
-    touch "$beat_path" 2>/dev/null || true
   done
 }
 
@@ -1169,19 +1184,22 @@ fm_pending_reply_tick_one() {  # <state-dir> <corr_id> <busy_state> [secondmate-
 # state, and optional secondmate-home wrong-home path checks.
 # Optional second argument is a liveness-beacon path the watcher may touch at
 # bounded intervals during a large walk so a healthy poll cannot starve grace.
-fm_pending_reply_tick() {  # <state-dir> [beat-path] [beat-interval]
+fm_pending_reply_tick() {  # <state-dir> [beat-path] [beat-interval] [owner-pid] [watch-path] [owner-home]
   local state=$1 beat_path=${2-} beat_interval=${3:-${FM_PENDING_REPLY_BEAT_INTERVAL:-30}}
+  local owner_pid=${4-} watch_path=${5-} owner_home=${6-}
   local dir rec corr task_id phase delivered meta backend target label busy sm_home harness remote_host
   local observation observation_task found i beat_pid=
   local -a observation_tasks=() observation_values=()
   dir=$(fm_pending_reply_dir "$state")
   [ -d "$dir" ] || return 0
-  if [ -n "$beat_path" ]; then
+  if [ -n "$beat_path" ] && [ -n "$owner_pid" ] && [ -n "$watch_path" ] && [ -n "$owner_home" ]; then
     if ! awk -v interval="$beat_interval" 'BEGIN { exit !((interval + 0) > 0) }'; then
       beat_interval=30
     fi
-    touch "$beat_path" 2>/dev/null || true
-    fm_pending_reply_beat_loop "$beat_path" "$beat_interval" "${BASHPID:-$$}" &
+    fm_pending_reply_touch_if_owner "$beat_path" "$owner_pid" \
+      "$state" "$watch_path" "$owner_home" || true
+    fm_pending_reply_beat_loop "$beat_path" "$beat_interval" "$owner_pid" \
+      "$state" "$watch_path" "$owner_home" &
     beat_pid=$!
   fi
   for rec in "$dir"/*; do
@@ -1301,7 +1319,6 @@ fm_pending_reply_tick() {  # <state-dir> [beat-path] [beat-interval]
   if [ -n "$beat_pid" ]; then
     kill "$beat_pid" 2>/dev/null || true
     wait "$beat_pid" 2>/dev/null || true
-    touch "$beat_path" 2>/dev/null || true
   fi
   return 0
 }

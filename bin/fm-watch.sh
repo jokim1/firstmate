@@ -861,7 +861,8 @@ while :; do
   # retire answered records so the poll cannot accumulate settled files.
   # Pass the liveness beacon so a large walk cannot starve grace mid-iteration.
   # No conversation scraping; unresolved records are never silently expired.
-  fm_pending_reply_tick "$STATE" "$STATE/.last-watcher-beat" "$PENDING_REPLY_BEAT_INTERVAL" || true
+  fm_pending_reply_tick "$STATE" "$STATE/.last-watcher-beat" "$PENDING_REPLY_BEAT_INTERVAL" \
+    "$WATCHER_PID" "$WATCH_PATH" "$FM_HOME" || true
 
   # Process-to-event liveness repair. This never discovers a result by polling:
   # each registered source has its own child blocking on that source, and this

@@ -81,6 +81,16 @@ setup_parent() {  # <name> -> home
   printf '%s\n' "$home"
 }
 
+setup_beat_owner() {  # <state> <home> <watch-path> <pid>
+  local state=$1 home=$2 watch_path=$3 pid=$4 lock="$1/.watch.lock" identity
+  identity=$(fm_test_pid_identity "$pid") || fail "could not identify beacon owner"
+  mkdir -p "$lock"
+  printf '%s\n' "$pid" > "$lock/pid"
+  printf '%s\n' "$home" > "$lock/fm-home"
+  printf '%s\n' "$watch_path" > "$lock/watcher-path"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
+}
+
 run_send() {
   local fb=$1 home=$2 log=$3; shift 3
   : > "$log"
@@ -1051,12 +1061,15 @@ test_failed_send_discards_undelivered_expectation() {
 # while the watcher was still alive. Resolved records must retire; unresolved
 # must stay; a large walk must keep a passed-in beacon fresh.
 test_large_resolved_population_retires_and_keeps_beacon_fresh() {
-  local home state dir beat open_corr open_rec i corr rec mtime now after open_left resolved_left
+  local home state dir beat watch_path owner_pid open_corr open_rec i corr rec mtime now after open_left resolved_left
   home=$(setup_parent large-retire)
   state="$home/state"
   dir=$(fm_pending_reply_dir "$state")
   beat="$state/.last-watcher-beat"
+  watch_path="$ROOT/bin/fm-watch.sh"
+  owner_pid=${BASHPID:-$$}
   export FM_PENDING_REPLY_NOW=11000
+  setup_beat_owner "$state" "$home" "$watch_path" "$owner_pid"
 
   # Seed a backlog shaped like the live home: many resolved, one still open.
   mkdir -p "$dir" || fail "could not create pending-replies fixture dir"
@@ -1115,7 +1128,8 @@ EOF
       || fail "fixture could not age the beacon"
   fi
 
-  fm_pending_reply_tick "$state" "$beat" || fail "large-population tick failed"
+  fm_pending_reply_tick "$state" "$beat" 0.2 "$owner_pid" "$watch_path" "$home" \
+    || fail "large-population tick failed"
 
   resolved_left=0
   for rec in "$dir"/*; do
@@ -1151,13 +1165,16 @@ EOF
 
 test_single_slow_observation_keeps_beacon_fresh_mid_poll() {
   (
-    local home state beat checkpoint probe corr tick_pid i
+    local home state beat checkpoint probe watch_path owner_pid replacement corr tick_pid i
     home=$(setup_parent slow-observation-beat)
     state="$home/state"
     beat="$state/.last-watcher-beat"
     checkpoint="$home/beat-checkpoint"
     probe="$home/observation-started"
+    watch_path="$ROOT/bin/fm-watch.sh"
+    owner_pid=${BASHPID:-$$}
     export FM_PENDING_REPLY_NOW=11500
+    setup_beat_owner "$state" "$home" "$watch_path" "$owner_pid"
     corr=$(fm_pending_reply_create "$home" "$state" hibit "slow backend observation")
     fm_pending_reply_mark_delivered "$state" "$corr"
     fm_write_secondmate_meta "$state/hibit.meta" "$home/hibit" "sess:fm-hibit"
@@ -1166,7 +1183,7 @@ test_single_slow_observation_keeps_beacon_fresh_mid_poll() {
       sleep 3
       printf 'busy'
     }
-    fm_pending_reply_tick "$state" "$beat" 0.2 &
+    fm_pending_reply_tick "$state" "$beat" 0.2 "$owner_pid" "$watch_path" "$home" &
     tick_pid=$!
     i=0
     while [ "$i" -lt 40 ] && [ ! -f "$probe" ]; do
@@ -1179,9 +1196,20 @@ test_single_slow_observation_keeps_beacon_fresh_mid_poll() {
     kill -0 "$tick_pid" 2>/dev/null || fail "tick ended before the slow observation completed"
     [ "$beat" -nt "$checkpoint" ] \
       || fail "beacon was not refreshed while one record observation was still blocked"
+    sleep 5 &
+    replacement=$!
+    setup_beat_owner "$state" "$home" "$watch_path" "$replacement"
+    sleep 0.5
+    touch "$checkpoint"
+    sleep 0.8
+    kill -0 "$tick_pid" 2>/dev/null || fail "tick ended before lock-loss behavior was observed"
+    [ ! "$beat" -nt "$checkpoint" ] \
+      || fail "former owner refreshed the beacon after losing its watcher lock"
     wait "$tick_pid" || fail "slow-observation tick failed"
+    kill "$replacement" 2>/dev/null || true
+    wait "$replacement" 2>/dev/null || true
   ) || fail "single slow observation beacon regression failed"
-  pass "single slow observation refreshes the beacon mid-poll"
+  pass "single slow observation beats only while its watcher owns the lock"
 }
 
 test_tick_retires_record_that_resolves_mid_poll() {
