@@ -23,8 +23,8 @@ Covered guarantees:
 
 - doctor fails closed on an unknown release and on a malformed schema, and reports `mutationsEnabled: false` until verified smoke evidence exists.
 - every mutation CLI and adapter function refuses with `PHASE1-EVIDENCE-REQUIRED` before any IPC call when evidence is absent or hash-mismatched.
-- smoke-written mutation evidence is content-hash-bound and signed by the pinned smoke writer; hand-edited overlay/record pairs stay refused; write-denial failure yields `courier-only-confinement`.
-- confinement evidence requires explicit parsed proof that both read and write were attempted; absence of a write artifact alone is ambiguous and cannot enable native operation.
+- smoke-written mutation evidence has a signed receipt binding the overlay, record-root, release, disposable-project identity, and lanes-script digest; hand-edited overlay/record pairs stay refused; write-denial failure yields `courier-only-confinement`.
+- confinement evidence requires exact paired runtime tool-call records for both attempts; worker-authored prose or files and absence of a write artifact alone cannot enable native operation.
 - strict per-line JSONL rollout parsing rejects a forged `task_complete` embedded in worker-controlled text (V2SIM-3).
 - the outbox state machine is replay-safe (`pending` reprints without a queued key, stays silent with one, and only the recorded live lock owner can acknowledge).
 - the reconciler touches `state/<id>.turn-ended` for each newly completed turn and never otherwise (amendment 1A wedge-timer regression; the watcher half is covered by the unchanged `tests/fm-watch-triage.test.sh` suite).
@@ -52,7 +52,7 @@ Refresh this record after each smoke run and after every Playbot release's read-
 Host: macOS, Playbot 0.92.0, disposable project `project_07474ac1d119` only.
 Command: `node bin/fm-playbot-lanes.mjs smoke --json`
 Historical result: the disposable mutation sequence completed and cleaned up, but its confinement record did not contain explicit parsed proof of both attempts. That confinement pointer and the failed `workspace:archive` pointer are no longer enabling evidence.
-Current post-fix state pending a new live smoke:
+Current post-fix state pending a new live smoke. This correction run did not execute it because the review worktree boundary forbids writes to the external Playbot database and disposable-project path:
 
 ```text
 node bin/fm-playbot-lanes.mjs doctor --json

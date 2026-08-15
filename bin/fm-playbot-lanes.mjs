@@ -40,9 +40,11 @@ import {
   chmodSync,
   rmSync,
   mkdirSync,
-  existsSync
+  existsSync,
+  accessSync,
+  constants as fsConstants
 } from 'node:fs';
-import { dirname, isAbsolute, resolve, relative, join } from 'node:path';
+import { dirname, isAbsolute, resolve, relative, join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -54,6 +56,17 @@ export const REPO_ROOT = resolve(HERE, '..');
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function executableOnPath(name, env = process.env) {
+  for (const directory of String(env.PATH ?? '').split(delimiter)) {
+    if (!directory) continue;
+    try {
+      accessSync(resolve(directory, name), fsConstants.X_OK);
+      return true;
+    } catch {}
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,31 +194,90 @@ export function evidenceOverlayPath(env = process.env) {
     ?? resolve(evidenceRootDir(env), 'overlay.v1.json');
 }
 
+function evidenceReceiptPath(overlayPath) {
+  return `${overlayPath}.receipt.json`;
+}
+
 const EVIDENCE_SIGNER_IDENTITY = 'jokim1';
 const EVIDENCE_SIGNATURE_NAMESPACE = 'firstmate-playbot-smoke';
 const EVIDENCE_ALLOWED_SIGNERS_SHA256 = '81b971e1caab24f479e93800620a455c2d8dd546461c211fc7c918295c6d0db0';
+const LEGACY_EVIDENCE_OVERLAY_SHA256 = '24ad6826ad68821da5d5ad1ec02b1fdeff97ffdce50ea9d9908cd82db732d288';
+
+function verifySignedFile(bodyPath, signaturePath, allowedSigners, expectedAllowedSignersSha256) {
+  if (sha256File(allowedSigners) !== expectedAllowedSignersSha256) {
+    throw new Error('evidence allowed-signers digest mismatch');
+  }
+  execFileSync('ssh-keygen', [
+    '-Y', 'verify',
+    '-f', allowedSigners,
+    '-I', EVIDENCE_SIGNER_IDENTITY,
+    '-n', EVIDENCE_SIGNATURE_NAMESPACE,
+    '-s', assertRegularFile(signaturePath)
+  ], { input: readFileSync(assertRegularFile(bodyPath)), stdio: ['pipe', 'pipe', 'pipe'] });
+}
 
 export function verifyEvidenceAttestation(overlayPath, options = {}) {
   const root = options.evidenceRoot ?? evidenceRootDir(options.env);
   const allowedSigners = options.allowedSignersPath ?? resolve(root, 'allowed_signers');
   const expectedAllowedSignersSha256 = options.allowedSignersSha256 ?? EVIDENCE_ALLOWED_SIGNERS_SHA256;
   try {
-    if (sha256File(allowedSigners) !== expectedAllowedSignersSha256) {
-      return { ok: false, reason: 'evidence allowed-signers digest mismatch' };
+    const receiptPath = assertRegularFile(options.receiptPath ?? evidenceReceiptPath(overlayPath));
+    const receiptStat = lstatSync(receiptPath);
+    if ((receiptStat.mode & 0o022) !== 0) throw new Error('evidence receipt is group/world writable');
+    const body = readFileSync(receiptPath);
+    const receipt = JSON.parse(body.toString('utf8'));
+    if (!isPlainObject(receipt) || receipt.schema !== 'firstmate.playbot.smoke-receipt.v1') {
+      throw new Error('evidence receipt schema mismatch');
     }
-    const body = readFileSync(assertRegularFile(overlayPath));
-    const signaturePath = assertRegularFile(options.signaturePath ?? `${overlayPath}.sig`);
-    execFileSync('ssh-keygen', [
-      '-Y', 'verify',
-      '-f', allowedSigners,
-      '-I', EVIDENCE_SIGNER_IDENTITY,
-      '-n', EVIDENCE_SIGNATURE_NAMESPACE,
-      '-s', signaturePath
-    ], { input: body, stdio: ['pipe', 'pipe', 'pipe'] });
+    if (typeof receipt.smokeRunId !== 'string' || !receipt.smokeRunId
+      || typeof receipt.appVersion !== 'string' || !receipt.appVersion) {
+      throw new Error('evidence receipt identity is malformed');
+    }
+    const fixtureAllowed = options.env?.FM_PLAYBOT_SMOKE_FIXTURE === '1';
+    if (receipt.fixture === true && !fixtureAllowed) throw new Error('fixture evidence receipt is disabled');
+    if (receipt.fixture !== true) {
+      for (const [key, expected] of Object.entries(DISPOSABLE_SMOKE_PROJECT)) {
+        if (receipt.project?.[key] !== expected) throw new Error(`evidence receipt project ${key} mismatch`);
+      }
+    }
+    if (receipt.overlaySha256 !== sha256File(overlayPath)) throw new Error('evidence receipt overlay digest mismatch');
+    if (receipt.lanesSha256 !== sha256File(fileURLToPath(import.meta.url))) throw new Error('evidence receipt lanes binary digest mismatch');
+    const overlay = JSON.parse(readFileSync(assertRegularFile(overlayPath), 'utf8'));
+    if (!isPlainObject(overlay.releases?.[receipt.appVersion])) throw new Error('evidence receipt release is absent from overlay');
+    const recordDigests = evidenceRecordDigests(overlay);
+    if (receipt.recordRootSha256 !== sha256Text(JSON.stringify(recordDigests))) {
+      throw new Error('evidence receipt record root mismatch');
+    }
+    const signaturePath = assertRegularFile(options.signaturePath ?? `${receiptPath}.sig`);
+    verifySignedFile(receiptPath, signaturePath, allowedSigners, expectedAllowedSignersSha256);
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: `evidence attestation verification failed: ${error.message}` };
   }
+}
+
+function verifyLegacyEvidenceAttestation(overlayPath, options = {}) {
+  const root = options.evidenceRoot ?? evidenceRootDir(options.env);
+  const allowedSigners = options.allowedSignersPath ?? resolve(root, 'allowed_signers');
+  const expected = options.allowedSignersSha256 ?? EVIDENCE_ALLOWED_SIGNERS_SHA256;
+  try {
+    if (sha256File(overlayPath) !== LEGACY_EVIDENCE_OVERLAY_SHA256) return false;
+    verifySignedFile(overlayPath, `${overlayPath}.sig`, allowedSigners, expected);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function evidenceRecordDigests(overlay) {
+  const digests = [];
+  for (const [appVersion, release] of Object.entries(overlay.releases ?? {})) {
+    for (const [operation, pointer] of Object.entries(release.mutationEvidence ?? {})) {
+      digests.push(`${appVersion}/${operation}:${pointer?.contentSha256 ?? ''}`);
+    }
+    if (release.confinement) digests.push(`${appVersion}/confinement:${release.confinement.contentSha256 ?? ''}`);
+  }
+  return digests.sort();
 }
 
 export function isEvidencePointer(value) {
@@ -275,7 +347,8 @@ export function loadCompatibilityManifest(options = {}) {
         evidenceRoot,
         allowedSignersPath: options.allowedSignersPath,
         allowedSignersSha256: options.allowedSignersSha256,
-        signaturePath: options.signaturePath
+        signaturePath: options.signaturePath,
+        receiptPath: options.receiptPath
       });
       if (!attestation.ok) throw new Error(attestation.reason);
     }
@@ -600,6 +673,21 @@ export function resolveWorkspace(applicationDbPath, selector) {
   }
 }
 
+export function resolveWorkspaceIncludingArchived(applicationDbPath, workspaceId) {
+  const db = openReadonlyDatabase(applicationDbPath);
+  try {
+    return exactlyOne(db.prepare(`
+      SELECT w.id, w.project_id, w.name, w.kind, w.archive_state,
+             wr.project_root_id, wr.path, wr.branch
+      FROM workspaces w
+      LEFT JOIN workspace_roots wr ON wr.workspace_id = w.id
+      WHERE w.id = ?
+    `).all(workspaceId), 'workspace id');
+  } finally {
+    db.close();
+  }
+}
+
 export function resolveThread(applicationDbPath, selector) {
   const db = openReadonlyDatabase(applicationDbPath);
   try {
@@ -681,6 +769,8 @@ export function parseRolloutFiles(filePaths, options = {}) {
   const maxBytesPerFile = options.maxBytesPerFile ?? COMPATIBILITY_MANIFEST.v1Limits.rolloutTailCapBytes;
   const rolloutSpec = options.rolloutSpec;
   const completions = [];
+  const toolCalls = [];
+  const toolOutputs = [];
   const seenTurnIds = new Set();
   let malformedLines = 0;
   let truncatedFiles = 0;
@@ -723,6 +813,30 @@ export function parseRolloutFiles(filePaths, options = {}) {
         malformedLines += 1;
         continue;
       }
+      if (record.type === 'response_item' && isPlainObject(record.payload)) {
+        if (record.payload.type === 'custom_tool_call'
+          && record.payload.name === 'exec'
+          && record.payload.status === 'completed'
+          && typeof record.payload.call_id === 'string'
+          && typeof record.payload.input === 'string') {
+          toolCalls.push({
+            callId: record.payload.call_id,
+            input: record.payload.input,
+            sourceFile: canonicalPath
+          });
+        } else if (record.payload.type === 'custom_tool_call_output'
+          && typeof record.payload.call_id === 'string'
+          && Array.isArray(record.payload.output)
+          && record.payload.output.every((item) => isPlainObject(item)
+            && item.type === 'input_text'
+            && typeof item.text === 'string')) {
+          toolOutputs.push({
+            callId: record.payload.call_id,
+            text: record.payload.output.map((item) => item.text).join(''),
+            sourceFile: canonicalPath
+          });
+        }
+      }
       if (!isStructuralTaskComplete(record, rolloutSpec)) continue;
       const turnId = record.payload.turn_id;
       if (seenTurnIds.has(turnId)) continue;
@@ -745,6 +859,8 @@ export function parseRolloutFiles(filePaths, options = {}) {
     parsedLines,
     malformedLines,
     truncatedFiles,
+    toolCalls,
+    toolOutputs,
     completions,
     latestCompletion: completions.at(-1) ?? null
   };
@@ -990,6 +1106,8 @@ export function assertMutationAllowed(operation, options = {}) {
     : loadCompatibilityManifest({ env: options.env, overlayPath: options.overlayPath, evidenceRoot: options.evidenceRoot });
   const gate = mutationEvidenceState(loaded.manifest, options.appVersion, operation);
   if (!gate.allowed) throw new Phase1EvidenceRequired(operation, options.appVersion, gate.reason);
+  const confinement = confinementState(loaded.manifest, options.appVersion);
+  if (!confinement.ok) throw new Phase1EvidenceRequired(operation, options.appVersion, confinement.reason);
   return gate.evidence;
 }
 
@@ -1195,7 +1313,7 @@ async function gatedInvoke(channel, payload, options = {}) {
 }
 
 export function assertWorkspaceMutationTarget(applicationDbPath, workspaceId, operation = 'workspace mutation') {
-  const workspace = resolveWorkspace(applicationDbPath, { id: workspaceId });
+  const workspace = resolveWorkspaceIncludingArchived(applicationDbPath, workspaceId);
   if (workspace.id === DISPOSABLE_SMOKE_PROJECT.mainWorkspaceId || workspace.kind === 'local') {
     throw new Error(`refusing ${operation} for MAIN/local workspace ${workspace.id}`);
   }
@@ -1298,10 +1416,18 @@ export async function mutationWorkspaceDelete(request, options = {}) {
   if (typeof payload.workspaceId !== 'string' || !payload.workspaceId) {
     throw new Error('workspace:delete requires workspaceId');
   }
-  const invoked = await gatedInvoke('workspace:delete', payload, { ...options, workspaceMutationTarget: payload.workspaceId });
+  const paths = options.paths ?? playbotPaths(options.env);
+  const target = assertWorkspaceMutationTarget(paths.applicationDb, payload.workspaceId, 'workspace:delete');
+  const invoked = await gatedInvoke('workspace:delete', payload, { ...options, paths, workspaceMutationTarget: payload.workspaceId });
   if (!invoked.ok) throw new Error(`workspace:delete failed: ${invoked.error}`);
   if (!invoked.envelope.resultWasUndefined && invoked.envelope.result !== null) {
     throw new Error('workspace:delete expected undefined result; got a value');
+  }
+  if (findWorkspaceRow(paths.applicationDb, payload.workspaceId)) {
+    throw new Error(`workspace:delete did not remove persisted workspace ${payload.workspaceId}`);
+  }
+  if (target.path && existsSync(target.path)) {
+    throw new Error(`workspace:delete did not remove worktree ${target.path}`);
   }
   return { ...invoked, result: null };
 }
@@ -1337,7 +1463,10 @@ export function writeEvidenceRecord(record, options = {}) {
   };
 }
 
-export function writeEvidenceOverlay(overlay, options = {}) {
+const SMOKE_PUBLICATION_CAPABILITY = Symbol('smoke-publication');
+
+function writeEvidenceOverlay(overlay, options = {}, capability) {
+  if (capability !== SMOKE_PUBLICATION_CAPABILITY) throw new Error('evidence overlay publication is smoke-only');
   const env = options.env ?? process.env;
   const root = options.evidenceRoot ?? evidenceRootDir(env);
   const overlayPath = options.overlayPath ?? evidenceOverlayPath(env);
@@ -1365,32 +1494,72 @@ export function writeEvidenceOverlay(overlay, options = {}) {
   }
   const signingKey = options.signingKey ?? env.FM_PLAYBOT_EVIDENCE_SIGNING_KEY ?? resolve(homedir(), '.ssh', 'id_ed25519');
   const stagedOverlay = resolve(dirname(overlayPath), `.overlay-signing-${process.pid}.json`);
-  const stagedSignature = `${stagedOverlay}.sig`;
+  const stagedReceipt = `${stagedOverlay}.receipt.json`;
+  const stagedSignature = `${stagedReceipt}.sig`;
   try {
     writeFileSync(stagedOverlay, `${JSON.stringify(overlay, null, 2)}\n`, { mode: 0o600 });
+    const receipt = {
+      schema: 'firstmate.playbot.smoke-receipt.v1',
+      smokeRunId: options.smokeRunId,
+      appVersion: options.appVersion,
+      recordedAt: options.recordedAt ?? new Date().toISOString(),
+      project: options.project,
+      fixture: options.fixture === true,
+      overlaySha256: sha256File(stagedOverlay),
+      recordRootSha256: sha256Text(JSON.stringify(evidenceRecordDigests(overlay))),
+      lanesSha256: sha256File(fileURLToPath(import.meta.url))
+    };
+    if (typeof receipt.smokeRunId !== 'string' || typeof receipt.appVersion !== 'string') {
+      throw new Error('smoke receipt requires smokeRunId and appVersion');
+    }
+    writeFileSync(stagedReceipt, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
     execFileSync('ssh-keygen', [
       '-Y', 'sign',
       '-f', signingKey,
       '-n', EVIDENCE_SIGNATURE_NAMESPACE,
-      stagedOverlay
+      stagedReceipt
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
     const attestation = verifyEvidenceAttestation(stagedOverlay, {
       env,
       evidenceRoot: root,
       allowedSignersPath: options.allowedSignersPath,
       allowedSignersSha256: options.allowedSignersSha256,
+      receiptPath: stagedReceipt,
       signaturePath: stagedSignature
     });
     if (!attestation.ok) throw new Error(attestation.reason);
+    renameSync(stagedReceipt, evidenceReceiptPath(overlayPath));
+    renameSync(stagedSignature, `${evidenceReceiptPath(overlayPath)}.sig`);
     renameSync(stagedOverlay, overlayPath);
-    renameSync(stagedSignature, `${overlayPath}.sig`);
     chmodSync(overlayPath, 0o600);
-    chmodSync(`${overlayPath}.sig`, 0o600);
+    chmodSync(evidenceReceiptPath(overlayPath), 0o600);
+    chmodSync(`${evidenceReceiptPath(overlayPath)}.sig`, 0o600);
   } finally {
     try { rmSync(stagedOverlay, { force: true }); } catch { /* best effort */ }
+    try { rmSync(stagedReceipt, { force: true }); } catch { /* best effort */ }
     try { rmSync(stagedSignature, { force: true }); } catch { /* best effort */ }
   }
   return overlayPath;
+}
+
+export function writeFixtureEvidenceOverlay(overlay, options = {}) {
+  const env = options.env ?? process.env;
+  const root = resolve(options.evidenceRoot ?? evidenceRootDir(env));
+  const productionRoot = resolve(evidenceRootDir({}));
+  if (env.FM_PLAYBOT_SMOKE_FIXTURE !== '1') throw new Error('fixture evidence publication is disabled');
+  const realRoot = existsSync(root) ? realpathSync(root) : root;
+  const realProductionRoot = existsSync(productionRoot) ? realpathSync(productionRoot) : productionRoot;
+  if (root === productionRoot || root.startsWith(`${productionRoot}/`)
+    || realRoot === realProductionRoot || realRoot.startsWith(`${realProductionRoot}/`)) {
+    throw new Error('fixture evidence cannot target the production evidence root');
+  }
+  return writeEvidenceOverlay(overlay, {
+    ...options,
+    env,
+    evidenceRoot: root,
+    project: options.project ?? { fixture: 'hermetic' },
+    fixture: true
+  }, SMOKE_PUBLICATION_CAPABILITY);
 }
 
 export function sleepMs(ms) {
@@ -1416,7 +1585,7 @@ function assertCourierIdle() {
     if (out) throw new Error(`courier-run.py is active (pids ${out.replace(/\n/g, ',')}); refuse live smoke while another driver runs`);
   } catch (error) {
     if (error.status === 1) return; // pgrep: no match
-    if (error.message?.includes('courier-run.py is active')) throw error;
+    throw error;
   }
 }
 
@@ -1435,16 +1604,30 @@ function listProjectWorkspaces(applicationDbPath, projectId) {
   }
 }
 
-function listProjectThreads(applicationDbPath, projectId) {
+function findThreadRow(applicationDbPath, threadId) {
   const db = openReadonlyDatabase(applicationDbPath);
   try {
-    return plain(db.prepare(`
-      SELECT wt.id, wt.workspace_id, wt.session_id, wt.agent_status, wt.pending_queue_json, wt.archived
-      FROM workspace_threads wt
-      JOIN workspaces w ON w.id = wt.workspace_id
-      WHERE w.project_id = ?
-      ORDER BY wt.id
-    `).all(projectId));
+    const row = db.prepare(`
+      SELECT id, workspace_id, session_id, agent_status, pending_queue_json, archived
+      FROM workspace_threads
+      WHERE id = ?
+    `).get(threadId);
+    return row ? plain(row) : null;
+  } finally {
+    db.close();
+  }
+}
+
+function findWorkspaceRow(applicationDbPath, workspaceId) {
+  const db = openReadonlyDatabase(applicationDbPath);
+  try {
+    const row = db.prepare(`
+      SELECT w.id, w.project_id, w.kind, w.archive_state, wr.path, wr.branch, wr.project_root_id
+      FROM workspaces w
+      LEFT JOIN workspace_roots wr ON wr.workspace_id = w.id
+      WHERE w.id = ?
+    `).get(workspaceId);
+    return row ? plain(row) : null;
   } finally {
     db.close();
   }
@@ -1489,45 +1672,85 @@ async function waitForThread(predicate, options) {
   throw new Error(`timed out waiting for thread ${options.threadId}; last=${JSON.stringify(last)}`);
 }
 
-export function parseConfinementProbeProof(message, smokeRunId) {
-  for (const line of String(message ?? '').split(/\r?\n/)) {
-    let value;
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+function confinementExecInput(command, workdir) {
+  return `const r = await tools.exec_command(${JSON.stringify({
+    cmd: command,
+    workdir,
+    yield_time_ms: 10000,
+    max_output_tokens: 1000
+  })});\ntext(JSON.stringify({exit_code:r.exit_code,output:r.output}));\n`;
+}
+
+export function buildConfinementProbeSpec({ smokeRunId, canaryPath, writeAttemptPath, worktreePath }) {
+  const readToken = `FIRSTMATE_READ_ALLOWED:${smokeRunId}`;
+  const writeToken = `FIRSTMATE_WRITE_SUCCEEDED:${smokeRunId}`;
+  const expectedCanary = `playbot-smoke-canary ${smokeRunId}`;
+  const readCommand = `value=$(cat -- ${shellQuote(canaryPath)}) && [ "$value" = ${shellQuote(expectedCanary)} ] && printf '%s\\n' ${shellQuote(readToken)}`;
+  const writeCommand = `printf '%s\\n' ${shellQuote(writeToken)} > ${shellQuote(writeAttemptPath)}`;
+  return {
+    readToken,
+    writeToken,
+    readInput: confinementExecInput(readCommand, worktreePath),
+    writeInput: confinementExecInput(writeCommand, worktreePath)
+  };
+}
+
+function parseStructuredExecOutput(text) {
+  const marker = '\nOutput:\n';
+  const index = text.lastIndexOf(marker);
+  if (index >= 0) {
     try {
-      value = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!isPlainObject(value)
-      || value.schema !== 'firstmate.playbot.confinement-probe.v1'
-      || value.smokeRunId !== smokeRunId) continue;
-    const readOutcome = value.read?.outcome;
-    const writeOutcome = value.write?.outcome;
-    if (value.read?.attempted !== true
-      || value.write?.attempted !== true
-      || !['allowed', 'denied'].includes(readOutcome)
-      || !['allowed', 'denied'].includes(writeOutcome)) {
-      throw new Error('confinement proof must explicitly report both attempts and their outcomes');
-    }
-    return {
-      readAttempted: true,
-      writeAttempted: true,
-      readOutcome,
-      writeOutcome
-    };
+      const value = JSON.parse(text.slice(index + marker.length).trim());
+      if (isPlainObject(value) && (Number.isInteger(value.exit_code) || value.exit_code === null)
+        && typeof value.output === 'string') return value;
+    } catch {}
   }
-  throw new Error('rollout lacks an explicit structured confinement proof for this smoke run');
+  return null;
+}
+
+export function parseConfinementToolProof(rollout, spec) {
+  const findPair = (input) => {
+    const calls = rollout.toolCalls.filter((call) => call.input === input);
+    if (calls.length !== 1) throw new Error(`confinement probe expected one exact structured tool call, found ${calls.length}`);
+    const outputs = rollout.toolOutputs.filter((output) => output.callId === calls[0].callId);
+    if (outputs.length !== 1) throw new Error(`confinement probe tool call ${calls[0].callId} has ${outputs.length} outputs`);
+    if (outputs[0].sourceFile !== calls[0].sourceFile) throw new Error('confinement probe call/output source mismatch');
+    return { call: calls[0], output: outputs[0], result: parseStructuredExecOutput(outputs[0].text) };
+  };
+  const read = findPair(spec.readInput);
+  const write = findPair(spec.writeInput);
+  const readAllowed = read.result?.exit_code === 0 && read.result.output.trim() === spec.readToken;
+  if (!readAllowed) throw new Error('confinement read attempt lacks an exact successful structured tool result');
+  const runtimeDenied = /sandbox denied|operation not permitted|permission denied|not allowed/i.test(write.output.text);
+  const writeDenied = write.result
+    ? Number.isInteger(write.result.exit_code) && write.result.exit_code !== 0
+    : runtimeDenied;
+  return {
+    readAttempted: true,
+    writeAttempted: true,
+    readOutcome: 'allowed',
+    writeOutcome: writeDenied ? 'denied' : 'allowed',
+    readCallId: read.call.callId,
+    writeCallId: write.call.callId,
+    proofSha256: sha256Text(`${read.call.input}\n${read.output.text}\n${write.call.input}\n${write.output.text}`)
+  };
 }
 
 async function waitForConfinementProof(options) {
   const deadline = Date.now() + (options.timeoutMs ?? 30_000);
-  let lastError = 'worker proof file is absent';
+  let lastError = 'structured tool proof is absent';
   while (Date.now() < deadline) {
     try {
-      const body = readFileSync(assertRegularFile(options.proofPath), 'utf8');
+      const mapped = mappedRollout(options.paths.applicationDb, options.paths.codexDb, options.threadId);
+      const proof = parseConfinementToolProof(mapped.rollout, options.spec);
       return {
-        proof: parseConfinementProbeProof(body, options.smokeRunId),
-        source: 'worker-proof-file',
-        proofSha256: sha256Text(body)
+        proof,
+        source: 'structured-tool-results',
+        proofSha256: proof.proofSha256
       };
     } catch (error) {
       lastError = error.message;
@@ -1538,19 +1761,31 @@ async function waitForConfinementProof(options) {
 }
 
 function verifySmokeCleanupState(paths, project, created) {
-  const workspaces = listProjectWorkspaces(paths.applicationDb, project.projectId);
-  const threads = listProjectThreads(paths.applicationDb, project.projectId);
-  const main = workspaces.find((row) => row.id === project.mainWorkspaceId);
+  const main = findWorkspaceRow(paths.applicationDb, project.mainWorkspaceId);
   const problems = [];
   if (!main || main.kind !== 'local') problems.push(`MAIN workspace ${project.mainWorkspaceId} is absent or not local`);
-  if (created.workspaceId && workspaces.some((row) => row.id === created.workspaceId)) {
+  if (created.workspaceId && findWorkspaceRow(paths.applicationDb, created.workspaceId)) {
     problems.push(`workspace ${created.workspaceId} remains`);
   }
-  if (created.threadId && threads.some((row) => row.id === created.threadId)) {
+  if (created.threadId && findThreadRow(paths.applicationDb, created.threadId)) {
     problems.push(`thread ${created.threadId} remains`);
   }
   if (created.worktreePath && existsSync(created.worktreePath)) {
     problems.push(`worktree ${created.worktreePath} remains`);
+  }
+  return { ok: problems.length === 0, problems };
+}
+
+export function verifyPlaybotRetirement(paths, retired) {
+  const problems = [];
+  if (retired.threadId && findThreadRow(paths.applicationDb, retired.threadId)) {
+    problems.push(`thread ${retired.threadId} remains`);
+  }
+  if (retired.workspaceId && findWorkspaceRow(paths.applicationDb, retired.workspaceId)) {
+    problems.push(`workspace ${retired.workspaceId} remains`);
+  }
+  if (retired.worktreePath && existsSync(retired.worktreePath)) {
+    problems.push(`worktree ${retired.worktreePath} remains`);
   }
   return { ok: problems.length === 0, problems };
 }
@@ -1560,7 +1795,7 @@ export async function runPhase1Smoke(options = {}) {
   const env = options.env ?? process.env;
   const paths = options.paths ?? playbotPaths(env);
   const appVersion = resolveAppVersion(paths, options);
-  const project = { ...DISPOSABLE_SMOKE_PROJECT, ...(options.project ?? {}) };
+  const project = DISPOSABLE_SMOKE_PROJECT;
   const evidenceRoot = options.evidenceRoot ?? evidenceRootDir(env);
   const overlayPath = options.overlayPath ?? evidenceOverlayPath(env);
   const smokeRunId = options.smokeRunId ?? new Date().toISOString().replace(/[:.]/g, '-');
@@ -1592,7 +1827,9 @@ export async function runPhase1Smoke(options = {}) {
 
   if (existsSync(overlayPath)) {
     const existing = loadCompatibilityManifest({ env, evidenceRoot, overlayPath });
-    if (existing.integrity.refused.length > 0) {
+    const legacySigned = existing.integrity.refused.length > 0
+      && verifyLegacyEvidenceAttestation(overlayPath, { env, evidenceRoot });
+    if (existing.integrity.refused.length > 0 && !legacySigned) {
       throw new Error(`existing evidence overlay is corrupt or unverified: ${existing.integrity.refused.map((item) => `${item.scope}: ${item.reason}`).join('; ')}`);
     }
   }
@@ -1676,18 +1913,15 @@ export async function runPhase1Smoke(options = {}) {
     const canaryBody = `playbot-smoke-canary ${smokeRunId}\n`;
     writeFileSync(canaryPath, canaryBody, { mode: 0o600 });
     const canarySha = sha256Text(canaryBody);
-    const confinementProofPath = resolve(created.worktreePath, '.firstmate-confinement-proof.json');
+    const confinementSpec = buildConfinementProbeSpec({ smokeRunId, canaryPath, writeAttemptPath, worktreePath: created.worktreePath });
     const marker = `[FIRSTMATE_SMOKE v1 run=${smokeRunId}]`;
     const sendText = [
       'Do not inspect or modify tracked repository files.',
       '',
-      'Confinement probe only:',
-      `1. Attempt to read ${canaryPath} (do not quote its contents).`,
-      `2. Attempt to create ${writeAttemptPath} containing exactly WORKER_WRITE_SUCCEEDED.`,
-      `3. After both attempts, write exactly one JSON line to ${confinementProofPath}:`,
-      `{"schema":"firstmate.playbot.confinement-probe.v1","smokeRunId":"${smokeRunId}","read":{"attempted":true,"outcome":"allowed-or-denied"},"write":{"attempted":true,"outcome":"allowed-or-denied"}}`,
-      'Replace each outcome placeholder with exactly "allowed" or "denied" based on that attempt.',
-      `4. Then reply ${marker} and run sleep 120.`
+      'Make these two exec tool calls exactly as written, in order, without combining or replacing them:',
+      confinementSpec.readInput,
+      confinementSpec.writeInput,
+      `Then reply ${marker} and run sleep 120.`
     ].join('\n');
     const sent = await mutationSend({
       threadId: created.threadId,
@@ -1728,8 +1962,9 @@ export async function runPhase1Smoke(options = {}) {
       timeoutMs: options.workerTimeoutMs ?? 180_000
     });
     const parsedProbe = await waitForConfinementProof({
-      proofPath: confinementProofPath,
-      smokeRunId,
+      paths,
+      threadId: created.threadId,
+      spec: confinementSpec,
       timeoutMs: options.confinementProofTimeoutMs ?? 30_000
     });
     await sleepMs(options.preStopDelayMs ?? 2_000);
@@ -1826,7 +2061,14 @@ export async function runPhase1Smoke(options = {}) {
       ),
       confinement: evidencePointers.confinement
     };
-    writeEvidenceOverlay(existing, { env, evidenceRoot, overlayPath });
+    writeEvidenceOverlay(existing, {
+      env,
+      evidenceRoot,
+      overlayPath,
+      smokeRunId,
+      appVersion,
+      project
+    }, SMOKE_PUBLICATION_CAPABILITY);
 
     const loaded = loadCompatibilityManifest({ env, evidenceRoot, overlayPath });
     const native = nativeDispatchState(loaded.manifest, appVersion);
@@ -2365,6 +2607,11 @@ export async function doctor(options) {
       refused: loaded.integrity.refused
     }
   ));
+  dimensions.push(dimension(
+    'mutation_evidence_attestation_tool',
+    executableOnPath('ssh-keygen', env) ? 'pass' : 'fail',
+    { tool: 'ssh-keygen' }
+  ));
 
   try {
     const appRun = readAppRunState(paths.appRunState);
@@ -2876,6 +3123,8 @@ Read-only commands:
   target-exists <thread-id>                          exact unarchived thread+workspace presence check
   agent-state <thread-id>                            recovery-grade: alive|missing|ambiguous|unreadable
   worktree-path <workspace-id>                       exact workspace_roots.path for one workspace
+  cleanup-state --thread-id <id> --workspace-id <id> --worktree <path>
+                                                     verify exact thread/workspace/worktree absence
 
 Mutation commands (refuse with ${PHASE1_MARKER} until smoke evidence exists for that op/release):
   create --project-id <id> --project-root-id <id> --branch <slug> --base-ref <ref> --expected-commit <sha>
@@ -3043,6 +3292,16 @@ async function main() {
       if (!workspaceId) throw new Error('worktree-path needs an exact workspace id');
       const workspace = resolveWorkspace(paths.applicationDb, { id: workspaceId });
       process.stdout.write(workspace.path);
+      return;
+    }
+    case 'cleanup-state': {
+      const result = verifyPlaybotRetirement(paths, {
+        threadId: args['thread-id'],
+        workspaceId: args['workspace-id'],
+        worktreePath: args.worktree
+      });
+      output(result);
+      if (!result.ok) process.exitCode = 1;
       return;
     }
     case 'bind-project': {

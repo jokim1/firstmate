@@ -321,7 +321,7 @@ fm_backend_required_tools() {  # <backend>
     zellij) printf '%s' 'zellij jq treehouse' ;;
     cmux)   printf '%s' 'cmux jq treehouse' ;;
     orca)   printf '%s' 'orca' ;;
-    playbot) printf '%s' 'node' ;;
+    playbot) printf '%s' 'node ssh-keygen' ;;
     *) return 1 ;;
   esac
 }

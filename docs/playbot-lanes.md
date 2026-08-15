@@ -30,8 +30,11 @@ Per-operation `mutationEvidence` starts at `PHASE1-EVIDENCE-REQUIRED`.
 Only the `smoke` command may extend the overlay under `docs/verification/playbot-mutation-evidence/`:
 
 - each evidence record is a dated JSON file under `records/<release>/<smokeRunId>/`;
-- `overlay.v1.json` stores relative pointers plus `contentSha256` and carries a detached smoke-writer signature;
-- `loadCompatibilityManifest` verifies the pinned signer and every pointed file, refusing unsigned coordinated edits and mismatched bodies (the op stays refused).
+- `overlay.v1.json` stores relative pointers plus `contentSha256`;
+- the smoke-only publisher writes a signed receipt binding the overlay digest, record digest root, release, disposable-project identity, and current lanes-script digest;
+- `loadCompatibilityManifest` verifies the receipt, pinned signer, script digest, and every pointed file, refusing coordinated edits and mismatched bodies (the op stays refused).
+
+The receipt prevents ordinary overlay/record editing and use of the test publisher against the production evidence root. It does not create a privilege boundary against a same-UID operator who can modify the smoke program and use the configured signing key; live smoke provenance remains an operator-controlled trust boundary.
 
 ```sh
 # Operator-only live command (not a CI step). Requires an idle Playbot, no courier-run.py driver,

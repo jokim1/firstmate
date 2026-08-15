@@ -51,7 +51,19 @@ fm_backend_playbot_target_thread() {  # <target> -> prints <thread-id>
 
 fm_backend_playbot_tool_check() {
   command -v node >/dev/null 2>&1 || { echo "error: backend=playbot requires node" >&2; return 1; }
+  command -v ssh-keygen >/dev/null 2>&1 || { echo "error: backend=playbot requires ssh-keygen" >&2; return 1; }
   [ -f "$FM_PLAYBOT_LANES" ] || { echo "error: backend=playbot but $FM_PLAYBOT_LANES is missing" >&2; return 1; }
+}
+
+fm_backend_playbot_abort_cleanup_confirmed() {  # <thread-id> <workspace-id> <worktree>
+  local thread_id=${1:-} workspace_id=${2:-} worktree=${3:-}
+  [ -n "$thread_id" ] || [ -n "$workspace_id" ] || { echo "error: missing Playbot cleanup identity" >&2; return 1; }
+  [ -z "$workspace_id" ] || [ -n "$worktree" ] || { echo "error: missing Playbot cleanup worktree path" >&2; return 1; }
+  fm_backend_playbot_tool_check || return 1
+  set -- cleanup-state
+  [ -z "$thread_id" ] || set -- "$@" --thread-id "$thread_id"
+  [ -z "$workspace_id" ] || set -- "$@" --workspace-id "$workspace_id" --worktree "$worktree"
+  fm_backend_playbot_lane "$@" >/dev/null
 }
 
 # fm_backend_playbot_runtime_check: runtime/compatibility gate for spawn

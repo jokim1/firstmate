@@ -861,14 +861,17 @@ spawn_abort_cleanup() {
     PLAYBOT_ABORT_CLEANUP=0
     [ -z "${PLAYBOT_THREAD_ID:-}" ] || fm_backend_kill playbot "playbot:$PLAYBOT_THREAD_ID" 2>/dev/null || playbot_cleanup_ok=0
     [ -z "${PLAYBOT_WORKSPACE_ID:-}" ] || fm_backend_remove_worktree playbot "$PLAYBOT_WORKSPACE_ID" 2>/dev/null || playbot_cleanup_ok=0
-    if [ "$playbot_cleanup_ok" = 1 ]; then
+    if [ "$playbot_cleanup_ok" = 1 ] \
+       && { { [ -z "${PLAYBOT_THREAD_ID:-}" ] && [ -z "${PLAYBOT_WORKSPACE_ID:-}" ]; } \
+            || fm_backend_playbot_abort_cleanup_confirmed \
+                 "${PLAYBOT_THREAD_ID:-}" "${PLAYBOT_WORKSPACE_ID:-}" "${WT:-}" 2>/dev/null; }; then
       playbot_txn=$(playbot_txn_path "$ID")
       rm -f -- "$playbot_txn"
       PLAYBOT_TXN_STATE=
       PLAYBOT_WORKSPACE_ID=
       PLAYBOT_THREAD_ID=
     else
-      echo "warning: Playbot abort cleanup was incomplete; transaction retained for explicit reconciliation" >&2
+      echo "warning: Playbot abort cleanup absence was not proved; transaction retained for explicit reconciliation" >&2
     fi
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then

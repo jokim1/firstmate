@@ -235,6 +235,13 @@ if FM_PLAYBOT_APP_DB="$TMP_ROOT/nonexistent.db" fm_backend_playbot_endpoint_conf
 fi
 pass "endpoint_confirmed_gone proves gone only from an authoritative inventory"
 
+if fm_backend_playbot_abort_cleanup_confirmed thread-complete workspace-task "$WORKTREE_TASK"; then
+  fail "abort cleanup confirmation must refuse persisted resources"
+fi
+fm_backend_playbot_abort_cleanup_confirmed thread-gone workspace-gone "$TMP_ROOT/missing-worktree" \
+  || fail "abort cleanup confirmation must accept independently proved absence"
+pass "abort cleanup confirmation requires thread, workspace, and worktree absence"
+
 TD_OUT=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-complete \
   "$WORKTREE_TASK" workspace-task thread-complete 2>"$TMP_ROOT/td.err") && TD_RC=0 || TD_RC=$?
 [ "$TD_RC" -ne 0 ] || fail "teardown must refuse a live endpoint when archive/stop cannot complete"
