@@ -21,8 +21,9 @@ Result: all three suites pass (last lines `fm-playbot-lanes: all tests passed`, 
 
 Covered guarantees:
 
-- doctor fails closed on an unknown release and on a malformed schema, and always reports `mutationsEnabled: false` in this phase.
-- every mutation CLI and adapter function refuses with `PHASE1-EVIDENCE-REQUIRED` before any IPC call.
+- doctor fails closed on an unknown release and on a malformed schema, and reports `mutationsEnabled: false` until verified smoke evidence exists.
+- every mutation CLI and adapter function refuses with `PHASE1-EVIDENCE-REQUIRED` before any IPC call when evidence is absent or hash-mismatched.
+- smoke-written mutation evidence is content-hash-bound; hand-edited evidence bodies stay refused; write-denial failure yields `courier-only-confinement`.
 - strict per-line JSONL rollout parsing rejects a forged `task_complete` embedded in worker-controlled text (V2SIM-3).
 - the outbox state machine is replay-safe (`pending` reprints without a queued key, stays silent with one, and only the recorded live lock owner can acknowledge).
 - the reconciler touches `state/<id>.turn-ended` for each newly completed turn and never otherwise (amendment 1A wedge-timer regression; the watcher half is covered by the unchanged `tests/fm-watch-triage.test.sh` suite).
@@ -36,17 +37,28 @@ Covered guarantees:
 The live Playbot 0.90.0 read-only compatibility gate passed on 2026-08-13; the full evidence is retained captain-privately at `data/playbot-lanes-lab/evidence/live-gate-2026-08-13.json` with the report at `data/playbot-phase0-lab/report.md`.
 The compatibility manifest embedded in `bin/fm-playbot-lanes.mjs` carries that proven 0.90.0 shape.
 
-## Pending live evidence (Phase 1 gate)
+## Phase 1 mutation evidence
 
-The following remain unproved and keep every mutation path refused:
+The landed smoke command (`bin/fm-playbot-lanes.mjs smoke`) records per-operation evidence under `docs/verification/playbot-mutation-evidence/`.
+IPC request/result shapes are frozen by the private phase1 smoke report; restart/V2SIM-7 delivery proof remains in that private lab evidence and is not re-required for overlay flips of the mutation ops that enable spawn/steer/observe.
+Confinement follows the gate-8 re-scope in `docs/playbot-lanes.md#confinement-gate-8-re-scope`.
+Per-thread MCP process identity remains unproved and continues to gate Phase 3 task-data tools only.
 
-1. `workspace:create` exact payload/result and fresh non-MAIN worktree creation.
-2. Native thread ID minting and exact session attachment.
-3. `threads:send` submission versus persisted acceptance versus worker start, including busy-queue delivery across a restart (V2SIM-7).
-4. `threads:stop` targeting the exact current turn.
-5. Archive/delete result shapes and safe cleanup.
-6. Restart reconciliation without duplicate mutation.
-7. The confinement negative test (failure yields the supported `courier-only-confinement` state).
-8. Per-thread MCP process identity (gates the Phase 3 cockpit's task-data tools).
+Refresh this record after each smoke run and after every Playbot release's read-only compatibility run.
 
-Refresh this record after each phase gate and after every Playbot release's read-only compatibility run.
+## Phase 1 live smoke (2026-08-14 / 2026-08-15)
+
+Host: macOS, Playbot 0.92.0, disposable project `project_07474ac1d119` only.
+Command: `node bin/fm-playbot-lanes.mjs smoke --json`
+Result: `operatingState: native-enabled`, confinement `readAllowed=true` / `writeDenied=true`, overlay under `docs/verification/playbot-mutation-evidence/`.
+Post-smoke:
+
+```text
+node bin/fm-playbot-lanes.mjs doctor --json
+# appVersion 0.92.0, operatingState native-enabled, readOnlyReady true, mutationsEnabled true
+
+node bin/fm-playbot-lanes.mjs ready --json --capability native
+# ready true, operatingState native-enabled, mutationsEnabled true
+```
+
+Disposable workspace/thread created by the smoke were archived/deleted and verified absent; MAIN and the pre-existing ground-tile worktree were not targeted.

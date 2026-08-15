@@ -13,16 +13,10 @@
 # Target string shape: playbot:<thread-id> - the exact Playbot worker thread,
 # matching the task meta's window= field (plan section 3.2).
 #
-# PHASE 1 GATE: the live mutation result shapes (workspace:create result,
-# native thread minting, threads:send acceptance evidence, threads:stop proof,
-# thread/workspace archive) are not yet proven - the Phase 1 disposable smoke
-# is pending. Every mutation-capable function here therefore refuses with a
-# PHASE1-EVIDENCE-REQUIRED diagnostic BEFORE any mutation, driven by the
-# compatibility manifest's mutationEvidence table in bin/fm-playbot-lanes.mjs.
-# Read-only functions (capture, busy state, composer state, target exists,
-# recovery-grade agent state, worktree path, endpoint validation, binding
-# resolution, endpoint-gone proof) and the home-local route-record write work
-# today against the exact persisted Playbot state.
+# PHASE 1 GATE: mutation-capable functions call bin/fm-playbot-lanes.mjs, which
+# refuses with PHASE1-EVIDENCE-REQUIRED until the Phase 1 disposable smoke has
+# recorded per-operation evidence for the live Playbot release. Read-only
+# functions and the home-local route-record write work without that evidence.
 
 FM_PLAYBOT_BACKEND_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 FM_PLAYBOT_LANES="${FM_PLAYBOT_LANES_OVERRIDE:-$FM_PLAYBOT_BACKEND_DIR/../fm-playbot-lanes.mjs}"
@@ -61,9 +55,8 @@ fm_backend_playbot_tool_check() {
 }
 
 # fm_backend_playbot_runtime_check: runtime/compatibility gate for spawn
-# intake. Native dispatch requires the manifest's Phase 1 mutation evidence,
-# which does not exist yet, so this refuses today with the phase marker; the
-# read-only compatibility dimensions stay available through `doctor`.
+# intake. Native dispatch requires verified Phase 1 mutation evidence plus
+# confinement write-denial on the live release (lanes ready --capability native).
 fm_backend_playbot_runtime_check() {
   fm_backend_playbot_tool_check || return 1
   local out
@@ -71,7 +64,7 @@ fm_backend_playbot_runtime_check() {
     return 0
   fi
   printf '%s\n' "$out" >&2
-  echo "error: backend=playbot is not spawn-capable: PHASE1-EVIDENCE-REQUIRED (native dispatch awaits the Phase 1 disposable smoke)" >&2
+  echo "error: backend=playbot is not spawn-capable until native readiness passes (see ready --capability native)" >&2
   return 1
 }
 
@@ -89,7 +82,7 @@ fm_backend_playbot_validate_endpoint() {  # <meta-file>
 # primitives (workspace_create + thread_create, plan section 3.4); retained as
 # a loud refusal so no caller can silently use the pre-seam shape.
 fm_backend_playbot_create() {  # <task-id> <project-path>
-  echo "error: PHASE1-EVIDENCE-REQUIRED: playbot workspace:create/thread minting awaits the Phase 1 disposable smoke; no workspace was created" >&2
+  echo "error: playbot create is split into workspace_create + thread_create; refused the pre-seam combined shape for task '${1:-}'" >&2
   return 1
 }
 
@@ -107,20 +100,56 @@ fm_backend_playbot_binding_resolve() {  # <canonical-project-path> -> <project-i
 
 # fm_backend_playbot_workspace_create: native workspace:create minting one
 # task-owned workspace whose slug embeds the task id (plan section 3.4 step 4).
-# On success it must print "workspace_id<TAB>canonical_worktree_path". Refused
-# before any mutation until Phase 1 evidence exists.
+# On success it must print "workspace_id<TAB>canonical_worktree_path". The lanes
+# CLI enforces the per-release evidence gate before IPC.
 fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id> -> <workspace-id>\t<worktree>
-  echo "error: PHASE1-EVIDENCE-REQUIRED: playbot workspace:create awaits the Phase 1 disposable smoke; no workspace was created for task '${4:-}'" >&2
-  return 1
+  local project_path=${1:-} slug=${2:-} base=${3:-} task_id=${4:-}
+  local project_id root_id binding_gen expected commit_out binding
+  [ -n "$project_path" ] && [ -n "$slug" ] && [ -n "$base" ] && [ -n "$task_id" ] || {
+    echo "error: playbot workspace_create needs <project-path> <slug> <base> <task-id>" >&2
+    return 1
+  }
+  case "$slug" in
+    *"$task_id"*) ;;
+    *)
+      echo "error: playbot workspace slug must embed the task id for unique binding (got '$slug' for task '$task_id')" >&2
+      return 1
+      ;;
+  esac
+  fm_backend_playbot_tool_check || return 1
+  binding=$(fm_backend_playbot_binding_resolve "$project_path") || return 1
+  IFS=$'\t' read -r project_id root_id binding_gen <<<"$binding"
+  [ -n "$project_id" ] && [ -n "$root_id" ] && [ -n "$binding_gen" ] || {
+    echo "error: playbot binding-resolve returned an incomplete project/root/generation triple" >&2
+    return 1
+  }
+  commit_out=$(git -C "$project_path" rev-parse "$base" 2>/dev/null) || {
+    echo "error: cannot resolve base ref '$base' in $project_path" >&2
+    return 1
+  }
+  expected=$commit_out
+  fm_backend_playbot_lane create \
+    --project-id "$project_id" \
+    --project-root-id "$root_id" \
+    --branch "$slug" \
+    --base-ref "$base" \
+    --expected-commit "$expected"
 }
 
 # fm_backend_playbot_thread_create: mint one least-privileged worker thread in
 # the exact task workspace (plan section 3.4 step 5). On success it must print
 # the exact persisted thread id, never inferred from newest or selected UI
-# state. Refused before any mutation until Phase 1 evidence exists.
+# state. The lanes CLI enforces the per-release evidence gate before IPC.
 fm_backend_playbot_thread_create() {  # <workspace-id> <task-id> <delivery-id> -> <thread-id>
-  echo "error: PHASE1-EVIDENCE-REQUIRED: playbot thread minting awaits the Phase 1 disposable smoke; no thread was created for task '${2:-}'" >&2
-  return 1
+  local workspace_id=${1:-} task_id=${2:-} delivery_id=${3:-}
+  [ -n "$workspace_id" ] && [ -n "$task_id" ] || {
+    echo "error: playbot thread_create needs <workspace-id> <task-id> [delivery-id]" >&2
+    return 1
+  }
+  fm_backend_playbot_tool_check || return 1
+  fm_backend_playbot_lane open-thread \
+    --workspace-id "$workspace_id" \
+    --title "firstmate:${task_id}${delivery_id:+:$delivery_id}"
 }
 
 # fm_backend_playbot_route_write: write the home-, task-, meta-, and
@@ -153,12 +182,20 @@ fm_backend_playbot_route_write() {  # <state-dir> <task-id> <spawn-gen> <route-g
 # 3.6's stable delivery marker; distinct from fm-send's one-line steer
 # contract). On success it must print exactly one verdict token
 # (accepted|empty); every pending, uncertain, rejected, or corrupt outcome is a
-# nonzero exit with a stable diagnostic on stderr. Refused until Phase 1.
+# nonzero exit with a stable diagnostic on stderr.
 fm_backend_playbot_send_initial() {  # <target> <brief-file> <delivery-id> <brief-digest> -> verdict
-  local thread
+  local thread brief=${2:-} delivery_id=${3:-}
   thread=$(fm_backend_playbot_target_thread "${1:-}") || return 1
+  [ -n "$brief" ] && [ -f "$brief" ] || {
+    echo "error: playbot send_initial needs a readable brief file" >&2
+    return 1
+  }
   fm_backend_playbot_tool_check || return 1
-  echo "error: PHASE1-EVIDENCE-REQUIRED: playbot initial brief delivery awaits the Phase 1 disposable smoke; nothing was sent to playbot:$thread (delivery '${3:-}')" >&2
+  if fm_backend_playbot_lane send --thread-id "$thread" --text-file "$brief" >/dev/null; then
+    printf 'accepted\n'
+    return 0
+  fi
+  echo "error: playbot initial brief delivery failed for playbot:$thread (delivery '${delivery_id}')" >&2
   return 1
 }
 
@@ -185,15 +222,20 @@ fm_backend_playbot_busy_state() {  # <target>
 # fm_backend_playbot_send_text_submit: plan section 4.1's fm-send-equivalent
 # contract. Only exact empty stdout with status 0 confirms acceptance; every
 # pending, uncertain, rejected, unavailable, or corrupt outcome is nonzero
-# with a stable nonempty diagnostic on stderr. Until Phase 1 proves send
-# acceptance evidence, every call refuses BEFORE mutation: a refusal is a
-# nonzero exit, which fm-send's enforcement (bin/fm-send.sh:603-619) already
-# treats as a loud send failure.
+# with a stable nonempty diagnostic on stderr. The lanes CLI enforces the
+# evidence gate; on success this adapter prints nothing (empty-success).
 fm_backend_playbot_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local thread
+  local thread text=${2:-}
   thread=$(fm_backend_playbot_target_thread "${1:-}") || return 1
+  [ -n "$text" ] || {
+    echo "error: playbot send_text_submit needs non-empty text" >&2
+    return 1
+  }
   fm_backend_playbot_tool_check || return 1
-  echo "error: PHASE1-EVIDENCE-REQUIRED: playbot threads:send acceptance evidence awaits the Phase 1 disposable smoke; text not sent to playbot:$thread" >&2
+  if fm_backend_playbot_lane send --thread-id "$thread" --text "$text" >/dev/null; then
+    return 0
+  fi
+  echo "error: playbot threads:send failed for playbot:$thread" >&2
   return 1
 }
 
@@ -220,11 +262,16 @@ fm_backend_playbot_composer_state() {  # <target> [expected-label]
 # task/thread/turn relation still matches, followed by rollout/current-state
 # proof - never a broad UI key click (plan sections 1.2 and 3.7). On success it
 # must print one proof token (stopped|turn-stopped|confirmed); every other
-# outcome is a nonzero exit. Refused until Phase 1.
+# outcome is a nonzero exit.
 fm_backend_playbot_interrupt() {  # <target> <task-id> <meta-file> -> proof
   local thread
   thread=$(fm_backend_playbot_target_thread "${1:-}") || return 1
-  echo "error: PHASE1-EVIDENCE-REQUIRED: playbot threads:stop awaits the Phase 1 disposable smoke; no stop was issued to playbot:$thread" >&2
+  fm_backend_playbot_tool_check || return 1
+  if fm_backend_playbot_lane stop --thread-id "$thread" >/dev/null; then
+    printf 'stopped\n'
+    return 0
+  fi
+  echo "error: playbot threads:stop failed for playbot:$thread" >&2
   return 1
 }
 
@@ -252,13 +299,16 @@ fm_backend_playbot_agent_state() {  # <target>
   fm_backend_playbot_lane agent-state "$thread" 2>/dev/null || printf 'unreadable'
 }
 
-# fm_backend_playbot_kill: endpoint retirement is archive-based and
-# Phase-1-gated. fm_backend_kill callers treat failure as best-effort, so the
-# refusal is reported on stderr for the supervisor while returning nonzero.
+# fm_backend_playbot_kill: archive the exact worker thread. fm_backend_kill
+# callers treat failure as best-effort.
 fm_backend_playbot_kill() {  # <target>
   local thread
   thread=$(fm_backend_playbot_target_thread "${1:-}") || return 1
-  echo "error: PHASE1-EVIDENCE-REQUIRED: playbot thread/workspace archive awaits the Phase 1 disposable smoke; playbot:$thread was not archived" >&2
+  fm_backend_playbot_tool_check || return 1
+  if fm_backend_playbot_lane archive --thread-id "$thread" >/dev/null; then
+    return 0
+  fi
+  echo "error: playbot thread archive failed for playbot:$thread" >&2
   return 1
 }
 
@@ -272,11 +322,20 @@ fm_backend_playbot_worktree_path() {  # <workspace-id>
   fm_backend_playbot_lane worktree-path "$workspace_id"
 }
 
-# fm_backend_playbot_remove_worktree: workspace archive/delete is a separately
-# verified Playbot IPC operation; until Phase 1 proves it, removal refuses and
-# cleanup must retain an explicit orphan/retention receipt (plan section 3.7).
+# fm_backend_playbot_remove_worktree: workspace delete through verified IPC
+# (plan section 3.7). workspace:archive is feature-disabled on current
+# releases; delete is the retirement path recorded by the Phase 1 smoke.
 fm_backend_playbot_remove_worktree() {  # <workspace-id>
-  echo "error: PHASE1-EVIDENCE-REQUIRED: playbot workspace archive/delete awaits the Phase 1 disposable smoke; workspace '${1:-}' was not removed" >&2
+  local workspace_id=${1:-}
+  [ -n "$workspace_id" ] || {
+    echo "error: playbot remove_worktree needs a workspace id" >&2
+    return 1
+  }
+  fm_backend_playbot_tool_check || return 1
+  if fm_backend_playbot_lane delete --workspace-id "$workspace_id" >/dev/null; then
+    return 0
+  fi
+  echo "error: playbot workspace delete failed for workspace '$workspace_id'" >&2
   return 1
 }
 
@@ -313,11 +372,32 @@ fm_backend_playbot_teardown() {  # <meta-file> <task-id> <target> <worktree> <wo
   state=$(fm_backend_playbot_lane agent-state "$thread_id" 2>/dev/null) || state=unreadable
   case "$state" in
     missing)
-      printf 'retained:thread-already-gone-workspace-removal-awaits-phase-1-evidence'
+      if fm_backend_playbot_remove_worktree "$workspace_id" >/dev/null 2>&1; then
+        printf 'retired'
+        return 0
+      fi
+      printf 'retained:workspace-removal-failed-after-thread-gone'
+      return 0
+      ;;
+    alive|ambiguous)
+      if ! fm_backend_playbot_lane stop --thread-id "$thread_id" >/dev/null 2>&1; then
+        # stop may fail if already idle; continue to archive
+        :
+      fi
+      if ! fm_backend_playbot_lane archive --thread-id "$thread_id" >/dev/null 2>&1; then
+        echo "error: playbot teardown could not archive playbot:$thread_id ($state)" >&2
+        printf 'refuse:thread-archive-failed'
+        return 1
+      fi
+      if ! fm_backend_playbot_remove_worktree "$workspace_id" >/dev/null 2>&1; then
+        printf 'retained:thread-archived-workspace-removal-failed'
+        return 0
+      fi
+      printf 'retired'
       return 0
       ;;
     *)
-      echo "error: PHASE1-EVIDENCE-REQUIRED: playbot turn stop/thread archive awaits the Phase 1 disposable smoke; endpoint playbot:$thread_id ($state) was not touched" >&2
+      echo "error: playbot teardown refuses unreadable endpoint playbot:$thread_id ($state)" >&2
       printf 'refuse:endpoint-%s-not-confirmed-gone' "$state"
       return 1
       ;;

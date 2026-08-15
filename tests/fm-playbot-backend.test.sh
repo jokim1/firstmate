@@ -121,19 +121,35 @@ WT_PATH=$(fm_backend_playbot_worktree_path workspace-task) || fail "worktree_pat
 if fm_backend_playbot_worktree_path no-such-ws >/dev/null 2>&1; then
   fail "worktree_path must fail for an unknown workspace"
 fi
+# Combined pre-seam create shape stays a loud refusal (not an evidence gate).
+if fm_backend_playbot_create some-task /tmp/whatever >/dev/null 2>"$TMP_ROOT/lc.err"; then
+  fail "combined create must refuse the pre-seam shape"
+fi
+grep -qi 'split into workspace_create' "$TMP_ROOT/lc.err" || fail "combined create must name the split seam"
+
+# Evidence-gated mutations refuse with the phase marker before any IPC.
 for call in "fm_backend_playbot_kill playbot:thread-complete" \
             "fm_backend_playbot_remove_worktree workspace-task" \
             "fm_backend_playbot_interrupt playbot:thread-complete be-ep $STATE/be-ep.meta" \
-            "fm_backend_playbot_create some-task /tmp/whatever" \
-            "fm_backend_playbot_workspace_create /tmp/whatever fm-some-task HEAD some-task" \
-            "fm_backend_playbot_thread_create workspace-task some-task delivery-x" \
-            "fm_backend_playbot_send_initial playbot:thread-complete /tmp/whatever.md delivery-x digest-x"; do
+            "fm_backend_playbot_thread_create workspace-task some-task delivery-x"; do
   if $call >/dev/null 2>"$TMP_ROOT/lc.err"; then
     fail "'$call' must refuse before Phase 1 evidence"
   fi
   grep -q 'PHASE1-EVIDENCE-REQUIRED' "$TMP_ROOT/lc.err" || fail "'$call' must refuse with the phase marker"
 done
-pass "kill/remove/interrupt/create/workspace-create/thread-create/send-initial all refuse with PHASE1-EVIDENCE-REQUIRED before mutation"
+# workspace_create and send_initial fail at binding/file preflight or the gate.
+if fm_backend_playbot_workspace_create /tmp/whatever fm-some-task HEAD some-task >/dev/null 2>"$TMP_ROOT/lc.err"; then
+  fail "workspace_create must refuse without a binding/evidence"
+fi
+[ -s "$TMP_ROOT/lc.err" ] || fail "workspace_create refusal must print a diagnostic"
+printf '%s' "$(cat "$TMP_ROOT/lc.err")" | grep -Eqi 'PHASE1-EVIDENCE-REQUIRED|binding|project|ENOENT|no such file|refuse|error' \
+  || fail "workspace_create refusal must be fail-closed"
+echo 'brief body' > "$TMP_ROOT/brief.md"
+if fm_backend_playbot_send_initial playbot:thread-complete "$TMP_ROOT/brief.md" delivery-x digest-x >/dev/null 2>"$TMP_ROOT/lc.err"; then
+  fail "send_initial must refuse before Phase 1 evidence"
+fi
+grep -q 'PHASE1-EVIDENCE-REQUIRED' "$TMP_ROOT/lc.err" || fail "send_initial must refuse with the phase marker"
+pass "lifecycle mutations refuse fail-closed before Phase 1 evidence; pre-seam create stays split"
 
 # --- binding resolution (plan 3.3; seam dispatch transaction step "prepared") ---
 
@@ -220,17 +236,16 @@ pass "endpoint_confirmed_gone proves gone only from an authoritative inventory"
 
 TD_OUT=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-complete \
   "$WORKTREE_TASK" workspace-task thread-complete 2>"$TMP_ROOT/td.err") && TD_RC=0 || TD_RC=$?
-[ "$TD_RC" -ne 0 ] || fail "teardown must refuse a live endpoint before Phase 1 evidence"
-case "$TD_OUT" in refuse:*) : ;; *) fail "teardown refusal must print a refuse:<reason> proof token" ;; esac
-grep -q 'PHASE1-EVIDENCE-REQUIRED' "$TMP_ROOT/td.err" || fail "teardown refusal must carry the phase marker"
+[ "$TD_RC" -ne 0 ] || fail "teardown must refuse a live endpoint when archive/stop cannot complete"
+case "$TD_OUT" in refuse:*) : ;; *) fail "teardown refusal must print a refuse:<reason> proof token, got $TD_OUT" ;; esac
 TD_RET=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-archived \
   "$WORKTREE_TASK" workspace-task thread-archived) \
-  || fail "an already-gone endpoint must report retained, not refuse"
-case "$TD_RET" in retained:*) : ;; *) fail "already-gone teardown must print retained:<reason>" ;; esac
+  || fail "an already-gone endpoint must report retained or retired, not refuse"
+case "$TD_RET" in retained:*|retired) : ;; *) fail "already-gone teardown must print retained:<reason> or retired, got $TD_RET" ;; esac
 TD_MM=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-complete \
   "$WORKTREE_TASK" workspace-task thread-OTHER 2>/dev/null) && TD_RC=0 || TD_RC=$?
 [ "$TD_RC" -ne 0 ] && [ "$TD_MM" = 'refuse:target-thread-mismatch' ] \
   || fail "teardown must refuse a target/thread identity mismatch"
-pass "teardown refuses live/mismatched endpoints and reports retained only for a confirmed-gone thread"
+pass "teardown refuses live/mismatched endpoints and reports retained/retired for a confirmed-gone thread"
 
 printf 'fm-playbot-backend: all tests passed\n'

@@ -1,0 +1,50 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence-overlay.v1",
+  "manifestVersion": 2,
+  "releases": {
+    "0.92.0": {
+      "mutationEvidence": {
+        "workspace:create": {
+          "recordedAt": "2026-08-15T06:30:33.910Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/workspace:create.json",
+          "contentSha256": "a4b790ac8c2a683add040e0b66b69cf38ae058113d41cf3f0b43a9ea3a0ece32"
+        },
+        "threads:openThread": {
+          "recordedAt": "2026-08-15T06:30:33.930Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/threads:openThread.json",
+          "contentSha256": "1a769b05bb5358ce7203b1a660a1b52ca70e5027c5f088baee3a2d404b46a652"
+        },
+        "threads:send": {
+          "recordedAt": "2026-08-15T06:30:34.064Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/threads:send.json",
+          "contentSha256": "856efcc23611ad5922155164ab36752e7b449cbf7a91c971473d963d154e6565"
+        },
+        "threads:stop": {
+          "recordedAt": "2026-08-15T06:30:36.601Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/threads:stop.json",
+          "contentSha256": "2ad3168448ba145f67b32eae676f15cd84c3d1acbe4bbfb7f51ba42b8727bf9f"
+        },
+        "threads:archiveThread": {
+          "recordedAt": "2026-08-15T06:30:39.620Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/threads:archiveThread.json",
+          "contentSha256": "781706d289a8e1b85f5c2a7799f8c342cdd8f11babcd3e15db60b698ad4baa0a"
+        },
+        "workspace:archive": {
+          "recordedAt": "2026-08-15T06:30:39.629Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/workspace:archive.json",
+          "contentSha256": "c637bc722175752bed805349b5b79761a134eabf122a353a4a222876a149527c"
+        },
+        "workspace:delete": {
+          "recordedAt": "2026-08-15T06:30:39.836Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/workspace:delete.json",
+          "contentSha256": "4940aac91cdd08885c8a51b24d1fc12fc23f4a2693fbef1cb4d95e2b77d10290"
+        }
+      },
+      "confinement": {
+        "recordedAt": "2026-08-15T06:30:39.605Z",
+        "recordRelPath": "records/0.92.0/2026-08-15T06-30-33-620Z/confinement.json",
+        "contentSha256": "cdce4647c41c2b073bf3577ad7b672877bae544a90dbec68e059c00cd5ca0e5e"
+      }
+    }
+  }
+}
