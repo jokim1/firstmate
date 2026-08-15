@@ -78,8 +78,8 @@
 #   FM_PENDING_REPLY_SEND_HOOK    optional command template for recovery delivery
 #                                 (tests); receives task_id and full message as args
 #   FM_PENDING_REPLY_NOW          optional fixed epoch for deterministic tests
-#   FM_PENDING_REPLY_BEAT_EVERY   records between optional mid-tick beacon touches
-#                                 (default 25; 0 disables mid-tick touches)
+#   FM_PENDING_REPLY_BEAT_INTERVAL seconds between mid-tick beacon touches
+#                                  (default 30)
 
 # shellcheck source=bin/fm-marker-lib.sh
 _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_PENDING_REPLY_LIB_DIR="."
@@ -453,20 +453,17 @@ fm_pending_reply_retire_resolved() {  # <state-dir> <corr_id>
   return 0
 }
 
-# Optional mid-tick liveness touch so a healthy watcher cannot look dead while
-# walking a large pending-replies population. beat_path empty is a no-op.
-fm_pending_reply_maybe_beat() {  # <beat-path> <n-records-seen>
-  local beat_path=$1 n=$2 every
-  [ -n "$beat_path" ] || return 0
-  every=${FM_PENDING_REPLY_BEAT_EVERY:-25}
-  case "$every" in
-    ''|*[!0-9]*) every=25 ;;
-  esac
-  [ "$every" -gt 0 ] || return 0
-  # Touch on the first record and every Nth thereafter.
-  if [ "$n" -eq 1 ] || [ $((n % every)) -eq 0 ]; then
+fm_pending_reply_beat_loop() {  # <beat-path> <interval> <owner-pid>
+  local beat_path=$1 interval=$2 owner_pid=$3 sleeper=
+  trap '[ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null; exit 0' TERM INT
+  while kill -0 "$owner_pid" 2>/dev/null; do
+    sleep "$interval" &
+    sleeper=$!
+    wait "$sleeper" || return 0
+    sleeper=
+    kill -0 "$owner_pid" 2>/dev/null || return 0
     touch "$beat_path" 2>/dev/null || true
-  fi
+  done
 }
 
 # 0 if a status line is a correlated acknowledgement for <corr_id>.
@@ -1172,19 +1169,26 @@ fm_pending_reply_tick_one() {  # <state-dir> <corr_id> <busy_state> [secondmate-
 # state, and optional secondmate-home wrong-home path checks.
 # Optional second argument is a liveness-beacon path the watcher may touch at
 # bounded intervals during a large walk so a healthy poll cannot starve grace.
-fm_pending_reply_tick() {  # <state-dir> [beat-path]
-  local state=$1 beat_path=${2-} dir rec corr task_id phase delivered meta backend target label busy sm_home harness remote_host
-  local observation observation_task found i seen=0
+fm_pending_reply_tick() {  # <state-dir> [beat-path] [beat-interval]
+  local state=$1 beat_path=${2-} beat_interval=${3:-${FM_PENDING_REPLY_BEAT_INTERVAL:-30}}
+  local dir rec corr task_id phase delivered meta backend target label busy sm_home harness remote_host
+  local observation observation_task found i beat_pid=
   local -a observation_tasks=() observation_values=()
   dir=$(fm_pending_reply_dir "$state")
   [ -d "$dir" ] || return 0
+  if [ -n "$beat_path" ]; then
+    if ! awk -v interval="$beat_interval" 'BEGIN { exit !((interval + 0) > 0) }'; then
+      beat_interval=30
+    fi
+    touch "$beat_path" 2>/dev/null || true
+    fm_pending_reply_beat_loop "$beat_path" "$beat_interval" "${BASHPID:-$$}" &
+    beat_pid=$!
+  fi
   for rec in "$dir"/*; do
     [ -f "$rec" ] || continue
     case "$(basename "$rec")" in
       .*) continue ;;
     esac
-    seen=$((seen + 1))
-    fm_pending_reply_maybe_beat "$beat_path" "$seen"
     corr=$(fm_pending_reply_get "$rec" corr_id)
     [ -n "$corr" ] || corr=$(basename "$rec")
     task_id=$(fm_pending_reply_get "$rec" task_id)
@@ -1294,8 +1298,9 @@ fm_pending_reply_tick() {  # <state-dir> [beat-path]
       fm_pending_reply_retire_resolved "$state" "$corr" || true
     fi
   done
-  # Final beat so a large walk that ended between intervals still looks alive.
-  if [ -n "$beat_path" ] && [ "$seen" -gt 0 ]; then
+  if [ -n "$beat_pid" ]; then
+    kill "$beat_pid" 2>/dev/null || true
+    wait "$beat_pid" 2>/dev/null || true
     touch "$beat_path" 2>/dev/null || true
   fi
   return 0

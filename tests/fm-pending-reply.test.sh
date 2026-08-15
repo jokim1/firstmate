@@ -1057,7 +1057,6 @@ test_large_resolved_population_retires_and_keeps_beacon_fresh() {
   dir=$(fm_pending_reply_dir "$state")
   beat="$state/.last-watcher-beat"
   export FM_PENDING_REPLY_NOW=11000
-  export FM_PENDING_REPLY_BEAT_EVERY=10
 
   # Seed a backlog shaped like the live home: many resolved, one still open.
   mkdir -p "$dir" || fail "could not create pending-replies fixture dir"
@@ -1150,6 +1149,41 @@ EOF
   pass "large resolved population retires and keeps the beacon fresh"
 }
 
+test_single_slow_observation_keeps_beacon_fresh_mid_poll() {
+  (
+    local home state beat checkpoint probe corr tick_pid i
+    home=$(setup_parent slow-observation-beat)
+    state="$home/state"
+    beat="$state/.last-watcher-beat"
+    checkpoint="$home/beat-checkpoint"
+    probe="$home/observation-started"
+    export FM_PENDING_REPLY_NOW=11500
+    corr=$(fm_pending_reply_create "$home" "$state" hibit "slow backend observation")
+    fm_pending_reply_mark_delivered "$state" "$corr"
+    fm_write_secondmate_meta "$state/hibit.meta" "$home/hibit" "sess:fm-hibit"
+    fm_backend_busy_state() {
+      : > "$probe"
+      sleep 3
+      printf 'busy'
+    }
+    fm_pending_reply_tick "$state" "$beat" 0.2 &
+    tick_pid=$!
+    i=0
+    while [ "$i" -lt 40 ] && [ ! -f "$probe" ]; do
+      sleep 0.05
+      i=$((i + 1))
+    done
+    [ -f "$probe" ] || fail "slow observation did not start"
+    touch "$checkpoint"
+    sleep 1
+    kill -0 "$tick_pid" 2>/dev/null || fail "tick ended before the slow observation completed"
+    [ "$beat" -nt "$checkpoint" ] \
+      || fail "beacon was not refreshed while one record observation was still blocked"
+    wait "$tick_pid" || fail "slow-observation tick failed"
+  ) || fail "single slow observation beacon regression failed"
+  pass "single slow observation refreshes the beacon mid-poll"
+}
+
 test_tick_retires_record_that_resolves_mid_poll() {
   local home state corr
   home=$(setup_parent mid-poll-retire)
@@ -1195,6 +1229,7 @@ test_correlations_reuse_only_for_matching_open_task
 test_tick_end_to_end_missed_then_escalate
 test_failed_send_discards_undelivered_expectation
 test_large_resolved_population_retires_and_keeps_beacon_fresh
+test_single_slow_observation_keeps_beacon_fresh_mid_poll
 test_tick_retires_record_that_resolves_mid_poll
 
 printf 'ok - all pending-reply tests passed\n'

@@ -243,6 +243,37 @@ test_arm_attaches_to_live_holder_with_stale_beacon() {
   pass "watch-arm: attaches to a live identity-matched holder even when the beacon is stale"
 }
 
+test_new_child_without_fresh_beacon_fails_confirmation() {
+  local dir state fakebin armout arm_pid status
+  dir=$(make_case new-child-no-beacon)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  cat > "$fakebin/touch" <<'SH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    */.last-watcher-beat) exit 0 ;;
+  esac
+done
+exec /usr/bin/touch "$@"
+SH
+  chmod +x "$fakebin/touch"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_ARM_CONFIRM_TIMEOUT=1 FM_GUARD_GRACE=1 FM_POLL=5 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  arm_pid=$!
+  wait_for_exit "$arm_pid" 100
+  status=$?
+  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] \
+    || fail "arm did not fail after its child withheld the first beacon (status $status)"
+  grep -qF 'watcher: FAILED - no live watcher with a fresh beacon' "$armout" \
+    || fail "arm did not report failed fresh-beacon confirmation: $(cat "$armout")"
+  ! grep -qF 'watcher: started' "$armout" \
+    || fail "arm reported its unconfirmed child as started: $(cat "$armout")"
+  pass "watch-arm: a newly started child requires a fresh beacon"
+}
+
 test_attached_arm_reports_the_delivered_wake_after_drain() {
   local dir state fakebin out armout status
   dir=$(make_case attached-drained-wake)
@@ -856,6 +887,7 @@ test_downtime_marker_does_not_follow_symlink() {
 
 test_attached_arm_reports_the_delivered_wake
 test_arm_attaches_to_live_holder_with_stale_beacon
+test_new_child_without_fresh_beacon_fails_confirmation
 test_attached_arm_reports_the_delivered_wake_after_drain
 test_attached_arm_still_fails_on_a_wake_it_did_not_deliver
 test_rearm_resurfaces_durable_queue_and_remote_open_decision

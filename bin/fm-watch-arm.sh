@@ -663,29 +663,9 @@ done
 
 trap - HUP TERM INT
 # Confirmation budget exhausted. Prefer attaching to a different live holder
-# with a starved beacon over a false FAILED, and if our own child still holds
-# the lock mid-poll treat it as a started cycle rather than killing it.
-if live_watcher_holder; then
-  if [ "$HEALTHY_PID" = "$child" ]; then
-    cycle_refresh_lock_before
-    if ! handling_generation=$(handling_successor_generation); then
-      cleanup_child
-      wait "$child" 2>/dev/null || true
-      cycle_log_append 1 none handling-handoff-failed none
-      echo "watcher: FAILED - established successor could not inspect handling state"
-      exit 1
-    fi
-    cycle_mark_predecessor_successor "started:$child"
-    if [ -n "$handling_generation" ]; then
-      echo "watcher: started pid=$child (beacon live) recovery-generation=$handling_generation"
-    else
-      echo "watcher: started pid=$child (beacon live)"
-    fi
-    wait "$child"
-    rc=$?
-    owned_child_finished "$rc"
-    exit $?
-  fi
+# with a starved beacon over a false FAILED. Our own child still requires the
+# fresh beacon checked above before it can be reported as started.
+if live_watcher_holder && [ "$HEALTHY_PID" != "$child" ]; then
   print_watch_output "$child_out"
   cleanup_child
   wait "$child" 2>/dev/null || true

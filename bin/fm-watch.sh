@@ -102,6 +102,11 @@ WATCHER_DOWNTIME_MARKER="$STATE/.watcher-down"
 # Defaults to the shared poll-derived grace (fm_guard_grace_seconds) so re-arm
 # stale detection stays calibrated with the guard/beacon contract.
 WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-$(fm_guard_grace_seconds)}
+PENDING_REPLY_BEAT_INTERVAL=$(awk -v grace="$WATCHER_STALE_GRACE" 'BEGIN {
+  interval = grace / 3
+  if (interval < 0.1) interval = 0.1
+  print interval
+}')
 # The singleton-lock acquisition, EXIT trap, and the blocking supervision loop
 # all live below the source guard at the very bottom of this file (see "Main
 # entry"). Sourcing this file for unit tests therefore loads the functions -
@@ -856,7 +861,7 @@ while :; do
   # retire answered records so the poll cannot accumulate settled files.
   # Pass the liveness beacon so a large walk cannot starve grace mid-iteration.
   # No conversation scraping; unresolved records are never silently expired.
-  fm_pending_reply_tick "$STATE" "$STATE/.last-watcher-beat" || true
+  fm_pending_reply_tick "$STATE" "$STATE/.last-watcher-beat" "$PENDING_REPLY_BEAT_INTERVAL" || true
 
   # Process-to-event liveness repair. This never discovers a result by polling:
   # each registered source has its own child blocking on that source, and this
