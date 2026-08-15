@@ -44,7 +44,7 @@ import {
   accessSync,
   constants as fsConstants
 } from 'node:fs';
-import { dirname, isAbsolute, resolve, relative, join, delimiter } from 'node:path';
+import { basename, dirname, isAbsolute, resolve, relative, join, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -1716,21 +1716,47 @@ function writeEvidenceOverlay(overlay, options = {}, capability) {
 export function writeFixtureEvidenceOverlay(overlay, options = {}) {
   const env = options.env ?? process.env;
   const root = resolve(options.evidenceRoot ?? evidenceRootDir(env));
-  const productionRoot = resolve(evidenceRootDir({}));
   if (env.FM_PLAYBOT_SMOKE_FIXTURE !== '1') throw new Error('fixture evidence publication is disabled');
-  const realRoot = existsSync(root) ? realpathSync(root) : root;
-  const realProductionRoot = existsSync(productionRoot) ? realpathSync(productionRoot) : productionRoot;
-  if (root === productionRoot || root.startsWith(`${productionRoot}/`)
-    || realRoot === realProductionRoot || realRoot.startsWith(`${realProductionRoot}/`)) {
-    throw new Error('fixture evidence cannot target the production evidence root');
-  }
+  const paths = assertFixtureEvidencePaths(root, options.overlayPath ?? evidenceOverlayPath(env));
   return writeEvidenceOverlay(overlay, {
     ...options,
     env,
-    evidenceRoot: root,
+    evidenceRoot: paths.evidenceRoot,
+    overlayPath: paths.overlayPath,
     project: options.project ?? { fixture: 'hermetic' },
     fixture: true
   }, SMOKE_PUBLICATION_CAPABILITY);
+}
+
+function canonicalPotentialPath(filePath) {
+  let existing = resolve(filePath);
+  const tail = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) break;
+    tail.unshift(basename(existing));
+    existing = parent;
+  }
+  return resolve(realpathSync(existing), ...tail);
+}
+
+function pathWithin(candidate, root) {
+  const rel = relative(root, candidate);
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+export function assertFixtureEvidencePaths(evidenceRoot, overlayPath) {
+  const productionRoot = canonicalPotentialPath(evidenceRootDir({}));
+  const root = canonicalPotentialPath(evidenceRoot);
+  const overlay = canonicalPotentialPath(overlayPath);
+  const publication = canonicalPotentialPath(resolve(dirname(overlayPath), 'publications'));
+  if ([root, overlay, publication].some((candidate) => pathWithin(candidate, productionRoot))) {
+    throw new Error('fixture evidence cannot target the production evidence root');
+  }
+  if (!pathWithin(overlay, root) || !pathWithin(publication, root)) {
+    throw new Error('fixture overlay and publication paths must stay within the fixture evidence root');
+  }
+  return { evidenceRoot: root, overlayPath: overlay, publicationRoot: publication };
 }
 
 export function sleepMs(ms) {

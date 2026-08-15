@@ -276,19 +276,19 @@ fm_backend_playbot_composer_state() {  # <target> [expected-label]
 # must print one proof token (stopped|turn-stopped|confirmed); every other
 # outcome is a nonzero exit.
 fm_backend_playbot_interrupt() {  # <target> <task-id> <meta-file> -> proof
-  local thread state attempt=0
+  local thread state attempt=0 max_attempts=300
   thread=$(fm_backend_playbot_target_thread "${1:-}") || return 1
   fm_backend_playbot_tool_check || return 1
   fm_backend_playbot_lane stop --thread-id "$thread" >/dev/null \
     || { echo "error: playbot threads:stop failed for playbot:$thread" >&2; return 1; }
-  while [ "$attempt" -lt 20 ]; do
+  while [ "$attempt" -lt "$max_attempts" ]; do
     state=$(fm_backend_playbot_lane busy-state "$thread" 2>/dev/null) || state=unknown
     if [ "$state" = idle ]; then
       printf 'stopped\n'
       return 0
     fi
     attempt=$((attempt + 1))
-    [ "$attempt" -ge 20 ] || sleep 0.1
+    [ "$attempt" -ge "$max_attempts" ] || sleep 0.1
   done
   echo "error: playbot stop was not verified for playbot:$thread (state=$state)" >&2
   return 1

@@ -150,6 +150,25 @@ INTERRUPT_PROOF=$(
   fm_backend_playbot_interrupt playbot:thread-complete be-ep "$STATE/be-ep.meta"
 ) || fail "interrupt must accept an exact idle postcondition"
 [ "$INTERRUPT_PROOF" = stopped ] || fail "interrupt must print stopped only after idle proof"
+printf '0\n' > "$TMP_ROOT/interrupt-polls"
+INTERRUPT_PROOF=$(
+  fm_backend_playbot_tool_check() { return 0; }
+  fm_backend_playbot_lane() {
+    case "${1:-}" in
+      stop) return 0 ;;
+      busy-state)
+        poll_count=$(cat "$TMP_ROOT/interrupt-polls")
+        poll_count=$((poll_count + 1))
+        printf '%s\n' "$poll_count" > "$TMP_ROOT/interrupt-polls"
+        if [ "$poll_count" -gt 20 ]; then printf 'idle\n'; else printf 'busy\n'; fi
+        ;;
+      *) return 1 ;;
+    esac
+  }
+  sleep() { :; }
+  fm_backend_playbot_interrupt playbot:thread-complete be-ep "$STATE/be-ep.meta"
+) || fail "interrupt must allow the native stop transition beyond two seconds"
+[ "$INTERRUPT_PROOF" = stopped ] || fail "slower verified interrupt must print stopped"
 if (
   fm_backend_playbot_tool_check() { return 0; }
   fm_backend_playbot_lane() {

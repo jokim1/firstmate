@@ -271,6 +271,7 @@ const {
   ready,
   writeEvidenceRecord,
   writeFixtureEvidenceOverlay,
+  assertFixtureEvidencePaths,
   normalizeIpcEvaluateResult,
   validateWorkspaceCreateResult,
   validateThreadSendResult,
@@ -293,6 +294,19 @@ const allowedSignersSha256 = process.argv[7];
 const applicationDb = process.argv[8];
 const attestation = { signingKey, allowedSignersPath, allowedSignersSha256 };
 const env = { FM_PLAYBOT_EVIDENCE_ROOT: evidenceRoot, FM_PLAYBOT_EVIDENCE_OVERLAY: overlayPath, FM_PLAYBOT_SMOKE_FIXTURE: '1' };
+const productionEvidenceRoot = resolve(dirname(process.argv[2]), '../docs/verification/playbot-mutation-evidence');
+try {
+  assertFixtureEvidencePaths(evidenceRoot, resolve(productionEvidenceRoot, 'overlay.v1.json'));
+  throw new Error('fixture production overlay path must fail');
+} catch (error) {
+  if (!/production evidence root/.test(error.message)) throw error;
+}
+try {
+  assertFixtureEvidencePaths(evidenceRoot, resolve(dirname(evidenceRoot), 'outside-fixture', 'overlay.v1.json'));
+  throw new Error('fixture overlay outside evidence root must fail');
+} catch (error) {
+  if (!/within the fixture evidence root/.test(error.message)) throw error;
+}
 const publicationFiles = (pointerPath) => {
   const pointer = JSON.parse(readFileSync(pointerPath, 'utf8'));
   const overlay = resolve(dirname(pointerPath), pointer.publicationRelPath, 'overlay.v1.json');
@@ -335,6 +349,19 @@ const overlay = {
     }
   }
 };
+try {
+  writeFixtureEvidenceOverlay(overlay, {
+    env,
+    evidenceRoot,
+    overlayPath: resolve(dirname(evidenceRoot), 'outside-fixture', 'overlay.v1.json'),
+    smokeRunId: 'outside-fixture',
+    appVersion: '0.92.0',
+    ...attestation
+  });
+  throw new Error('fixture publisher must refuse an overlay outside its evidence root');
+} catch (error) {
+  if (!/within the fixture evidence root/.test(error.message)) throw error;
+}
 writeFixtureEvidenceOverlay(overlay, {
   env, evidenceRoot, overlayPath, smokeRunId: 'hermetic-fixture', appVersion: '0.92.0', ...attestation
 });
