@@ -2,13 +2,13 @@
 
 Playbot lanes are an experimental Firstmate backend plus an optional read-only MCP cockpit, designed by plan v3 (`data/lanemcp-impl-plan/report.md`, captain-private).
 This page documents the additive tracked components and their current behavior.
-The backend is **not spawn-capable**: every mutation path refuses with `PHASE1-EVIDENCE-REQUIRED` until the supervised Phase 1 disposable smoke records live evidence on Playbot 0.90.0 for macOS.
+The backend is registered spawn-capable in `bin/fm-backend.sh`, but live dispatch stays phase-gated in `fm_backend_validate_spawn` and every mutation path refuses with `PHASE1-EVIDENCE-REQUIRED` until the supervised Phase 1 disposable smoke records live evidence on Playbot 0.90.0 for macOS.
 The courier remains the production Playbot delivery path.
 
 ## Components
 
-- `bin/fm-playbot-lanes.mjs` - read-only topology/rollout client, compatibility manifest and doctor, content-addressed stdio MCP server, controller lease validation, and the lock-owner setup CLI (`bind-project`, `bind-controller`).
-- `bin/backends/playbot.sh` - the `fm_backend_playbot_*` adapter interface the shared-core seam dispatches to; read-only operations work today, mutation operations refuse.
+- `bin/fm-playbot-lanes.mjs` - read-only topology/rollout client, compatibility manifest and doctor, content-addressed stdio MCP server, controller lease validation, the lock-owner setup CLI (`bind-project`, `bind-controller`), and the dispatch-transaction record writers (`binding-resolve`, `route-write`).
+- `bin/backends/playbot.sh` - the `fm_backend_playbot_*` adapter interface the landed shared-core seam dispatches to; read-only operations, binding resolution, the home-local route-record write, and the endpoint-gone proof work today, while mutation operations refuse and teardown reports `retained:`/`refuse:` per plan section 3.7.
 - `bin/fm-playbot-reconcile.mjs` - durable completion reconciliation driven only by the registered per-task custom check; owns the outbox state machine and the `state/<id>.turn-ended` touch.
 - `.agents/skills/playbot-lanes/SKILL.md` - the agent operating procedure.
 - `docs/verification/playbot-lanes.md` - the verification record.

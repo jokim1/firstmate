@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # tests/fm-playbot-backend.test.sh - hermetic contract tests for the Playbot
 # backend adapter bin/backends/playbot.sh (plan v3 section 1.2's adapter
-# table and 4.1's send semantics). The adapter is sourced directly because the
-# shared-core registration seam belongs to the parallel core-seam lane; every
-# function is exercised through the same names that seam will dispatch to.
+# table, 3.4's dispatch transaction, 3.7's control/cleanup integration, and
+# 4.1's send semantics). The adapter is sourced directly and every function is
+# exercised through the exact names the landed shared-core seam
+# (bin/fm-backend.sh, bin/fm-spawn.sh, bin/fm-teardown.sh) dispatches to.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -122,17 +123,47 @@ if fm_backend_playbot_worktree_path no-such-ws >/dev/null 2>&1; then
 fi
 for call in "fm_backend_playbot_kill playbot:thread-complete" \
             "fm_backend_playbot_remove_worktree workspace-task" \
-            "fm_backend_playbot_interrupt playbot:thread-complete" \
+            "fm_backend_playbot_interrupt playbot:thread-complete be-ep $STATE/be-ep.meta" \
             "fm_backend_playbot_create some-task /tmp/whatever" \
-            "fm_backend_playbot_send_initial some-task /tmp/whatever.md"; do
+            "fm_backend_playbot_workspace_create /tmp/whatever fm-some-task HEAD some-task" \
+            "fm_backend_playbot_thread_create workspace-task some-task delivery-x" \
+            "fm_backend_playbot_send_initial playbot:thread-complete /tmp/whatever.md delivery-x digest-x"; do
   if $call >/dev/null 2>"$TMP_ROOT/lc.err"; then
     fail "'$call' must refuse before Phase 1 evidence"
   fi
   grep -q 'PHASE1-EVIDENCE-REQUIRED' "$TMP_ROOT/lc.err" || fail "'$call' must refuse with the phase marker"
 done
-pass "kill/remove/interrupt/create/send-initial all refuse with PHASE1-EVIDENCE-REQUIRED before mutation"
+pass "kill/remove/interrupt/create/workspace-create/thread-create/send-initial all refuse with PHASE1-EVIDENCE-REQUIRED before mutation"
+
+# --- binding resolution (plan 3.3; seam dispatch transaction step "prepared") ---
+
+ALPHA_PATH=$(cd "$FIX/projects/alpha" && pwd -P)
+cat > "$STATE/.playbot-project-bindings.json" <<EOF
+{
+  "schema": "firstmate.playbot.project-bindings.v1",
+  "bindings": [
+    {
+      "canonicalProjectPath": "$ALPHA_PATH",
+      "playbotProjectId": "project-alpha",
+      "playbotRootId": "root-alpha",
+      "liveRootPath": "$ALPHA_PATH",
+      "bindingGeneration": 7,
+      "lastVerifiedAppVersion": "0.90.0"
+    }
+  ]
+}
+EOF
+RESOLVED=$(fm_backend_playbot_binding_resolve "$FIX/projects/alpha") || fail "binding_resolve failed for the bound project"
+[ "$RESOLVED" = "$(printf 'project-alpha\troot-alpha\t7')" ] \
+  || fail "binding_resolve must print the exact tab-separated project/root/generation triple"
+if fm_backend_playbot_binding_resolve "$FIX" >/dev/null 2>&1; then
+  fail "binding_resolve must refuse an unbound project path"
+fi
+pass "binding_resolve returns the exact bound triple and refuses unbound projects"
 
 # --- endpoint validation through the adapter ------------------------------------
+# The route record is written through the adapter's route_write, the same
+# function the seam's meta-published dispatch stage calls.
 
 WORKTREE_TASK=$(cd "$FIX/worktrees/task" && pwd -P)
 cat > "$STATE/be-ep.meta" <<EOF
@@ -156,29 +187,50 @@ playbot_thread_id=thread-complete
 playbot_route_gen=1
 playbot_delivery_id=delivery-be-ep
 EOF
-DIGEST=$(node "$ROOT/bin/fm-playbot-lanes.mjs" meta-digest --meta "$STATE/be-ep.meta")
-cat > "$STATE/be-ep.playbot-route.json" <<EOF
-{
-  "schema": "firstmate.playbot.route.v1",
-  "home": "$HOME_DIR",
-  "taskId": "be-ep",
-  "spawnGen": 1,
-  "routeGen": 1,
-  "metaDigest": "$DIGEST",
-  "threadId": "thread-complete",
-  "workspaceId": "workspace-task",
-  "projectId": "project-alpha",
-  "projectRootId": "root-alpha",
-  "playbotSessionId": null,
-  "worktree": "$WORKTREE_TASK"
-}
-EOF
-chmod 0600 "$STATE/be-ep.playbot-route.json"
+fm_backend_playbot_route_write "$STATE" be-ep 1 1 project-alpha root-alpha \
+  workspace-task thread-complete delivery-be-ep "$WORKTREE_TASK" \
+  || fail "route_write must accept the meta-consistent dispatch identity"
+[ -f "$STATE/be-ep.playbot-route.json" ] || fail "route_write must write state/<id>.playbot-route.json"
+if [ "$(uname)" = Darwin ]; then ROUTE_MODE=$(stat -f %Lp "$STATE/be-ep.playbot-route.json"); else ROUTE_MODE=$(stat -c %a "$STATE/be-ep.playbot-route.json"); fi
+[ "$ROUTE_MODE" = 600 ] || fail "route record must be mode 0600"
+cp "$STATE/be-ep.meta" "$STATE/be-bad.meta"
+if fm_backend_playbot_route_write "$STATE" be-bad 1 1 project-alpha root-alpha \
+  workspace-task thread-WRONG delivery-be-ep "$WORKTREE_TASK" >/dev/null 2>&1; then
+  fail "route_write must refuse a dispatch identity that disagrees with the published meta"
+fi
+[ ! -e "$STATE/be-bad.playbot-route.json" ] || fail "a refused route_write must not leave a record behind"
 fm_backend_playbot_validate_endpoint "$STATE/be-ep.meta" || fail "adapter endpoint validation must accept the bound endpoint"
 sed -i '' 's/window=playbot:thread-complete/window=session:window/' "$STATE/be-ep.meta"
 if fm_backend_playbot_validate_endpoint "$STATE/be-ep.meta" >/dev/null 2>&1; then
   fail "adapter endpoint validation must reject a non-playbot window shape"
 fi
-pass "endpoint validation enforces the exact playbot:<thread-id> window and bound route"
+pass "endpoint validation enforces the exact playbot:<thread-id> window and the route_write-bound route"
+
+# --- endpoint-gone proof and teardown retirement (plan 3.7) ----------------------
+
+fm_backend_playbot_endpoint_confirmed_gone playbot:thread-archived \
+  || fail "an archived thread must be confirmed gone"
+if fm_backend_playbot_endpoint_confirmed_gone playbot:thread-complete; then
+  fail "a live thread must NOT be confirmed gone"
+fi
+if FM_PLAYBOT_APP_DB="$TMP_ROOT/nonexistent.db" fm_backend_playbot_endpoint_confirmed_gone playbot:thread-complete; then
+  fail "an unreadable inventory must never confirm an endpoint gone"
+fi
+pass "endpoint_confirmed_gone proves gone only from an authoritative inventory"
+
+TD_OUT=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-complete \
+  "$WORKTREE_TASK" workspace-task thread-complete 2>"$TMP_ROOT/td.err") && TD_RC=0 || TD_RC=$?
+[ "$TD_RC" -ne 0 ] || fail "teardown must refuse a live endpoint before Phase 1 evidence"
+case "$TD_OUT" in refuse:*) : ;; *) fail "teardown refusal must print a refuse:<reason> proof token" ;; esac
+grep -q 'PHASE1-EVIDENCE-REQUIRED' "$TMP_ROOT/td.err" || fail "teardown refusal must carry the phase marker"
+TD_RET=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-archived \
+  "$WORKTREE_TASK" workspace-task thread-archived) \
+  || fail "an already-gone endpoint must report retained, not refuse"
+case "$TD_RET" in retained:*) : ;; *) fail "already-gone teardown must print retained:<reason>" ;; esac
+TD_MM=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-complete \
+  "$WORKTREE_TASK" workspace-task thread-OTHER 2>/dev/null) && TD_RC=0 || TD_RC=$?
+[ "$TD_RC" -ne 0 ] && [ "$TD_MM" = 'refuse:target-thread-mismatch' ] \
+  || fail "teardown must refuse a target/thread identity mismatch"
+pass "teardown refuses live/mismatched endpoints and reports retained only for a confirmed-gone thread"
 
 printf 'fm-playbot-backend: all tests passed\n'
