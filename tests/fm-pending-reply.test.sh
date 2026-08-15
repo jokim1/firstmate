@@ -582,15 +582,17 @@ test_delivery_confirmation_fallback_reconciles() {
       || fail "delivery-unknown escalation should publish once, got $escalations"
     printf 'done [corr=%s]: late report proves delivery\n' "$prepared_corr" >> "$state/hibit.status"
     fm_pending_reply_tick "$state" || fail "watcher should accept a late delivery report"
-    [ "$(phase_of "$state" "$prepared_corr")" = resolved ] \
-      || fail "late report should resolve escalated delivery-unknown"
-    [ "$(fm_pending_reply_get "$prepared_rec" delivered_epoch)" = 5760 ] \
-      || fail "late report should provide delivery evidence"
+    # Full tick retires answered records after closing any open escalation.
+    [ ! -f "$prepared_rec" ] \
+      || fail "late report should resolve and retire the escalated delivery-unknown record"
+    grep -Fq "resolved [key=pending-reply-$prepared_corr]: pending-reply-resolved:" \
+      "$state/hibit.status" \
+      || fail "late report should close the keyed delivery-unknown escalation"
     escalations=$(grep -Fc "blocked [key=pending-reply-$prepared_corr]:" "$state/hibit.status")
     [ "$escalations" = 1 ] || fail "late report must not re-escalate delivery-unknown"
-    fm_pending_reply_tick "$state" || fail "resolved late report should remain idempotent"
-    [ "$(phase_of "$state" "$prepared_corr")" = resolved ] \
-      || fail "late report resolution should remain durable"
+    fm_pending_reply_tick "$state" || fail "retired late report should remain idempotent"
+    [ ! -f "$prepared_rec" ] \
+      || fail "late report retirement must remain durable across a second tick"
     export FM_PENDING_REPLY_NOW=5800
     reported_corr=$(fm_pending_reply_create "$home" "$state" hibit "reported delivery")
     reported_rec=$(fm_pending_reply_path "$state" "$reported_corr")
@@ -934,6 +936,8 @@ test_tick_skips_terminal_and_reuses_target_observation() {
     rec=$(fm_pending_reply_path "$state" "$open2")
     [ "$(fm_pending_reply_get "$rec" turn_seen_busy)" = 1 ] \
       || fail "cached observation should update the second open record"
+    [ ! -f "$(fm_pending_reply_path "$state" "$resolved")" ] \
+      || fail "resolved records must be retired from the pending-replies directory"
     rec=$(fm_pending_reply_path "$state" "$escalated")
     snapshot=$(fm_pending_reply_get "$rec" wrong_home_scan_signature)
     [ -n "$snapshot" ] || fail "wrong-home scan should persist its file-set signature"
@@ -943,8 +947,10 @@ test_tick_skips_terminal_and_reuses_target_observation() {
       || fail "unchanged records should scan two open and one escalated status only once, got $scans"
     [ "$(fm_pending_reply_get "$rec" wrong_home_scan_signature)" = "$snapshot" ] \
       || fail "unchanged wrong-home logs should retain their scan signature"
+    [ -f "$(fm_pending_reply_path "$state" "$escalated")" ] \
+      || fail "unresolved escalated records must never be silently retired"
   ) || fail "terminal-skip and observation-cache regression failed"
-  pass "tick skips terminal records and reuses target observations"
+  pass "tick retires resolved records and reuses target observations"
 }
 
 test_correlations_reuse_only_for_matching_open_task() {
@@ -1039,6 +1045,125 @@ test_failed_send_discards_undelivered_expectation() {
   pass "failed transport discards undelivered expectation only"
 }
 
+# Regression for the 2026-08-14 watcher-down episode: hundreds of already-answered
+# pending-reply records remained on disk, so each poll walked them all, the
+# liveness beacon went stale mid-iteration, and guards raised false WATCHER DOWN
+# while the watcher was still alive. Resolved records must retire; unresolved
+# must stay; a large walk must keep a passed-in beacon fresh.
+test_large_resolved_population_retires_and_keeps_beacon_fresh() {
+  local home state dir beat open_corr open_rec i corr rec mtime now after open_left resolved_left
+  home=$(setup_parent large-retire)
+  state="$home/state"
+  dir=$(fm_pending_reply_dir "$state")
+  beat="$state/.last-watcher-beat"
+  export FM_PENDING_REPLY_NOW=11000
+  export FM_PENDING_REPLY_BEAT_EVERY=10
+
+  # Seed a backlog shaped like the live home: many resolved, one still open.
+  mkdir -p "$dir" || fail "could not create pending-replies fixture dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  for i in $(seq 1 120); do
+    corr=$(printf 'a%015x' "$i")
+    rec="$dir/$corr"
+    cat > "$rec" <<EOF || fail "could not seed resolved record $i"
+schema=fm-pending-reply.v1
+corr_id=$corr
+task_id=oldtask
+parent_home=$home
+parent_status=$state/oldtask.status
+parent_status_scan_signature=
+request_summary=settled request $i
+created_epoch=10000
+delivered_epoch=10001
+phase=resolved
+turn_seen_busy=1
+request_turn_completed_epoch=
+recovery_attempted_epoch=
+recovery_sender_pid=
+recovery_sender_identity=
+recovery_sent_epoch=
+recovery_delivery_outcome=
+recovery_turn_seen_busy=0
+recovery_turn_completed_epoch=
+escalated_epoch=
+resolved_epoch=10050
+resolved_via=status
+wrong_home_hits=0
+wrong_home_sightings=
+wrong_home_scan_signature=
+grace_secs=120
+EOF
+    chmod 600 "$rec" || fail "could not chmod resolved record $i"
+  done
+  resolved_left=0
+  for rec in "$dir"/*; do
+    [ -f "$rec" ] || continue
+    case "$(basename "$rec")" in .*) continue ;; esac
+    resolved_left=$((resolved_left + 1))
+  done
+  [ "$resolved_left" -eq 120 ] \
+    || fail "fixture must seed 120 resolved records before the tick, got $resolved_left"
+  open_corr=$(fm_pending_reply_create "$home" "$state" "hibit" "still open")
+  fm_pending_reply_mark_delivered "$state" "$open_corr"
+  open_rec=$(fm_pending_reply_path "$state" "$open_corr")
+  : > "$beat"
+  # Age the beacon so a non-touching tick would leave it older than a tight grace.
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    touch -t 202001010000 "$beat" 2>/dev/null \
+      || fail "fixture could not age the beacon on Darwin"
+  else
+    touch -d '2020-01-01 00:00:00' "$beat" 2>/dev/null \
+      || fail "fixture could not age the beacon"
+  fi
+
+  fm_pending_reply_tick "$state" "$beat" || fail "large-population tick failed"
+
+  resolved_left=0
+  for rec in "$dir"/*; do
+    [ -f "$rec" ] || continue
+    case "$(basename "$rec")" in .*) continue ;; esac
+    if [ "$(fm_pending_reply_get "$rec" phase)" = resolved ]; then
+      resolved_left=$((resolved_left + 1))
+    fi
+  done
+  [ "$resolved_left" -eq 0 ] \
+    || fail "resolved backlog must be retired, left $resolved_left"
+  [ -f "$open_rec" ] || fail "open unresolved record must survive the large tick"
+  [ "$(fm_pending_reply_get "$open_rec" phase)" = awaiting_report ] \
+    || fail "open record phase must remain awaiting_report"
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    mtime=$(stat -f %m "$beat")
+  else
+    mtime=$(stat -c %Y "$beat")
+  fi
+  now=$(date +%s)
+  after=$((now - mtime))
+  [ "$after" -lt 30 ] \
+    || fail "large pending-reply tick must refresh the beacon (age=${after}s)"
+  open_left=0
+  for rec in "$dir"/*; do
+    [ -f "$rec" ] || continue
+    case "$(basename "$rec")" in .*) continue ;; esac
+    open_left=$((open_left + 1))
+  done
+  [ "$open_left" -eq 1 ] || fail "exactly one open record should remain, got $open_left"
+  pass "large resolved population retires and keeps the beacon fresh"
+}
+
+test_tick_retires_record_that_resolves_mid_poll() {
+  local home state corr
+  home=$(setup_parent mid-poll-retire)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=12000
+  corr=$(fm_pending_reply_create "$home" "$state" "hibit" "lands during tick")
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  printf 'done [corr=%s]: answered mid-poll\n' "$corr" > "$state/hibit.status"
+  fm_pending_reply_tick "$state" || fail "tick should resolve and retire"
+  [ ! -f "$(fm_pending_reply_path "$state" "$corr")" ] \
+    || fail "record resolved during the tick must leave pending-replies"
+  pass "tick retires a record that resolves mid-poll"
+}
+
 # --- run --------------------------------------------------------------------
 
 test_normal_correlated_reply_resolves_once
@@ -1069,5 +1194,7 @@ test_tick_skips_terminal_and_reuses_target_observation
 test_correlations_reuse_only_for_matching_open_task
 test_tick_end_to_end_missed_then_escalate
 test_failed_send_discards_undelivered_expectation
+test_large_resolved_population_retires_and_keeps_beacon_fresh
+test_tick_retires_record_that_resolves_mid_poll
 
 printf 'ok - all pending-reply tests passed\n'

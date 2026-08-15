@@ -186,6 +186,63 @@ test_attached_arm_reports_the_delivered_wake() {
   pass "watch-arm: an attached arm reports the wake its cycle delivered instead of a false failure"
 }
 
+# Regression for the 2026-08-13/14 auto-arm episode: a live identity-matched
+# watcher mid long poll can present a beacon older than grace. Re-arm must
+# attach to that holder rather than failing or starting a second cycle.
+test_arm_attaches_to_live_holder_with_stale_beacon() {
+  local dir state fakebin out armout i
+  dir=$(make_case attach-stale-beacon)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  armout="$dir/arm.out"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  # Tiny grace so a deliberately aged beacon fails the healthy check.
+  start_seed_watcher "$state" "$fakebin" "$out"
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    touch -t 202001010000 "$state/.last-watcher-beat" 2>/dev/null \
+      || fail "could not age the seed watcher beacon on Darwin"
+  else
+    touch -d '2020-01-01 00:00:00' "$state/.last-watcher-beat" 2>/dev/null \
+      || fail "could not age the seed watcher beacon"
+  fi
+  # Confirm the seed still holds the lock while the aged beacon fails grace.
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$SEED_PID" ] \
+    || fail "seed watcher lost the lock before the stale-beacon arm"
+  is_live_non_zombie "$SEED_PID" || fail "seed watcher died before the stale-beacon arm"
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=2 FM_GUARD_GRACE=1 \
+    FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$WATCH_ARM" > "$armout" &
+  ARM_PID=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$SEED_PID" "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$SEED_PID" "$armout" \
+    || fail "arm did not attach to the live stale-beacon watcher: $(cat "$armout")"
+  ! grep -qF 'watcher: FAILED' "$armout" \
+    || fail "stale-beacon live holder must not be reported as FAILED: $(cat "$armout")"
+  ! grep -qF 'watcher: started' "$armout" \
+    || fail "stale-beacon live holder must not start a second watcher: $(cat "$armout")"
+  # Still the original singleton; a competing start would replace the lock pid.
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$SEED_PID" ] \
+    || fail "arm replaced the live stale-beacon holder instead of attaching"
+
+  printf 'resolved [key=fixture]: capacity freed\n' > "$state/demo.status"
+  wait_for_exit "$SEED_PID" 120
+  unset FM_FAKE_CREW_STATE
+  wait_for_exit "$ARM_PID" 120
+  ! grep -qF 'watcher: FAILED' "$armout" \
+    || fail "attached stale-beacon arm failed after the cycle delivered: $(cat "$armout")"
+  grep -qE '^(refill:|signal:)' "$armout" \
+    || fail "attached stale-beacon arm did not surface the delivered wake: $(cat "$armout")"
+  pass "watch-arm: attaches to a live identity-matched holder even when the beacon is stale"
+}
+
 test_attached_arm_reports_the_delivered_wake_after_drain() {
   local dir state fakebin out armout status
   dir=$(make_case attached-drained-wake)
@@ -798,6 +855,7 @@ test_downtime_marker_does_not_follow_symlink() {
 }
 
 test_attached_arm_reports_the_delivered_wake
+test_arm_attaches_to_live_holder_with_stale_beacon
 test_attached_arm_reports_the_delivered_wake_after_drain
 test_attached_arm_still_fails_on_a_wake_it_did_not_deliver
 test_rearm_resurfaces_durable_queue_and_remote_open_decision

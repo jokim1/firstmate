@@ -15,7 +15,10 @@
 # and escalate once if the recovery turn also completes without a correlated
 # report. Never loop, never repeatedly inject, never silently expire unresolved
 # records, and never treat wrong-home or structured-home heuristics as
-# acknowledgement.
+# acknowledgement. Resolved records (and only resolved records) are retired from
+# state/pending-replies/ once their escalation lifecycle is closed, so the
+# watcher tick cannot accumulate answered files until a single poll starves the
+# liveness beacon.
 #
 # Record location (parent FM_HOME):
 #   state/pending-replies/<corr_id>
@@ -75,6 +78,8 @@
 #   FM_PENDING_REPLY_SEND_HOOK    optional command template for recovery delivery
 #                                 (tests); receives task_id and full message as args
 #   FM_PENDING_REPLY_NOW          optional fixed epoch for deterministic tests
+#   FM_PENDING_REPLY_BEAT_EVERY   records between optional mid-tick beacon touches
+#                                 (default 25; 0 disables mid-tick touches)
 
 # shellcheck source=bin/fm-marker-lib.sh
 _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_PENDING_REPLY_LIB_DIR="."
@@ -422,6 +427,48 @@ fm_pending_reply_discard_undelivered() {  # <state-dir> <corr_id>
   rm -f "$rec"
 }
 
+# Retire a resolved pending-reply record after its escalation lifecycle is closed
+# (or never opened). Unresolved records always refuse and stay on disk.
+# Returns 0 when the record is gone (already or newly), 1 when it must remain.
+fm_pending_reply_retire_resolved() {  # <state-dir> <corr_id>
+  local state=$1 corr=$2 rec phase escalated closed marker
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  [ -f "$rec" ] || return 0
+  phase=$(fm_pending_reply_get "$rec" phase)
+  [ "$phase" = resolved ] || return 1
+  escalated=$(fm_pending_reply_get "$rec" escalated_epoch)
+  if [ -n "$escalated" ]; then
+    closed=$(fm_pending_reply_get "$rec" escalation_closed_epoch)
+    if [ -z "$closed" ]; then
+      fm_pending_reply_close_escalation "$state" "$corr" || return 1
+      # Re-read after close: a transient write failure must keep the record.
+      [ -f "$rec" ] || return 0
+      closed=$(fm_pending_reply_get "$rec" escalation_closed_epoch)
+      [ -n "$closed" ] || return 1
+    fi
+  fi
+  marker=$(fm_pending_reply_delivery_confirmation_path "$state" "$corr")
+  rm -f "$marker" 2>/dev/null || true
+  rm -f "$rec"
+  return 0
+}
+
+# Optional mid-tick liveness touch so a healthy watcher cannot look dead while
+# walking a large pending-replies population. beat_path empty is a no-op.
+fm_pending_reply_maybe_beat() {  # <beat-path> <n-records-seen>
+  local beat_path=$1 n=$2 every
+  [ -n "$beat_path" ] || return 0
+  every=${FM_PENDING_REPLY_BEAT_EVERY:-25}
+  case "$every" in
+    ''|*[!0-9]*) every=25 ;;
+  esac
+  [ "$every" -gt 0 ] || return 0
+  # Touch on the first record and every Nth thereafter.
+  if [ "$n" -eq 1 ] || [ $((n % every)) -eq 0 ]; then
+    touch "$beat_path" 2>/dev/null || true
+  fi
+}
+
 # 0 if a status line is a correlated acknowledgement for <corr_id>.
 # Accepts short status replies and status lines that point at a document.
 # Unrelated verbs without the token never match. Stale/wrong corr never match.
@@ -553,6 +600,9 @@ _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-o
   fm_pending_reply_set "$rec" resolved_via "$via" || return 1
   # The record is resolved either way; a failed close stays retryable from the
   # watcher tick rather than turning a settled request back into a failure.
+  # Retirement of answered files is owned by fm_pending_reply_tick so direct
+  # resolvers can still inspect the durable resolved record, and so a failed
+  # escalation close remains on disk for the next poll.
   _fm_pending_reply_close_escalation_locked "$state" "$corr" || true
   return 0
 }
@@ -1120,9 +1170,11 @@ fm_pending_reply_tick_one() {  # <state-dir> <corr_id> <busy_state> [secondmate-
 # Scan every pending record for this parent state. Safe to call every poll.
 # Never scrapes secondmate conversation; uses only parent status, backend busy
 # state, and optional secondmate-home wrong-home path checks.
-fm_pending_reply_tick() {  # <state-dir>
-  local state=$1 dir rec corr task_id phase delivered meta backend target label busy sm_home harness remote_host
-  local observation observation_task found i
+# Optional second argument is a liveness-beacon path the watcher may touch at
+# bounded intervals during a large walk so a healthy poll cannot starve grace.
+fm_pending_reply_tick() {  # <state-dir> [beat-path]
+  local state=$1 beat_path=${2-} dir rec corr task_id phase delivered meta backend target label busy sm_home harness remote_host
+  local observation observation_task found i seen=0
   local -a observation_tasks=() observation_values=()
   dir=$(fm_pending_reply_dir "$state")
   [ -d "$dir" ] || return 0
@@ -1131,14 +1183,16 @@ fm_pending_reply_tick() {  # <state-dir>
     case "$(basename "$rec")" in
       .*) continue ;;
     esac
+    seen=$((seen + 1))
+    fm_pending_reply_maybe_beat "$beat_path" "$seen"
     corr=$(fm_pending_reply_get "$rec" corr_id)
     [ -n "$corr" ] || corr=$(basename "$rec")
     task_id=$(fm_pending_reply_get "$rec" task_id)
     phase=$(fm_pending_reply_get "$rec" phase)
     if [ "$phase" = resolved ]; then
-      # Cheap no-op unless an escalation for this record is still open; this is
-      # the retry that makes the close converge after a transient write failure.
-      fm_pending_reply_close_escalation "$state" "$corr" || true
+      # Close any open escalation, then remove the answered record so later
+      # polls do not walk a growing archive of settled expectations.
+      fm_pending_reply_retire_resolved "$state" "$corr" || true
       continue
     fi
     fm_pending_reply_reconcile_delivery "$state" "$corr" || true
@@ -1148,6 +1202,11 @@ fm_pending_reply_tick() {  # <state-dir>
       case "$phase" in
         delivery_unknown|escalated)
           fm_pending_reply_tick_one "$state" "$corr" unknown "" || true
+          # tick_one may resolve a late correlated report without a prior
+          # delivered_epoch; retire so answered files do not accumulate.
+          if [ -f "$rec" ] && [ "$(fm_pending_reply_get "$rec" phase)" = resolved ]; then
+            fm_pending_reply_retire_resolved "$state" "$corr" || true
+          fi
           ;;
       esac
       continue
@@ -1163,6 +1222,7 @@ fm_pending_reply_tick() {  # <state-dir>
     meta="$state/${task_id}.meta"
     if [ "$phase" = escalated ]; then
       if fm_pending_reply_try_resolve "$state" "$corr"; then
+        fm_pending_reply_retire_resolved "$state" "$corr" || true
         continue
       fi
       if [ -f "$meta" ]; then
@@ -1176,6 +1236,11 @@ fm_pending_reply_tick() {  # <state-dir>
     case "$phase" in
       recovery_failed|recovery_unknown)
         fm_pending_reply_tick_one "$state" "$corr" unknown "" || true
+        # tick_one may have resolved; retire so the next poll stays cheap.
+        phase=$(fm_pending_reply_get "$rec" phase 2>/dev/null || true)
+        if [ "$phase" = resolved ]; then
+          fm_pending_reply_retire_resolved "$state" "$corr" || true
+        fi
         continue
         ;;
     esac
@@ -1224,7 +1289,15 @@ fm_pending_reply_tick() {  # <state-dir>
       fi
     fi
     fm_pending_reply_tick_one "$state" "$corr" "$busy" "$sm_home" || true
+    # Retire if this open record just became answered mid-tick.
+    if [ -f "$rec" ] && [ "$(fm_pending_reply_get "$rec" phase)" = resolved ]; then
+      fm_pending_reply_retire_resolved "$state" "$corr" || true
+    fi
   done
+  # Final beat so a large walk that ended between intervals still looks alive.
+  if [ -n "$beat_path" ] && [ "$seen" -gt 0 ]; then
+    touch "$beat_path" 2>/dev/null || true
+  fi
   return 0
 }
 

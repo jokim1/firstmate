@@ -487,6 +487,41 @@ test_benign_cycle_end_with_live_watcher_is_silent() {
   pass "auto-arm: benign cycle end with a live watcher and fresh beacon stays silent across the next cycle"
 }
 
+# Defect 2 evidence shape: arm returns FAILED (could not confirm fresh beacon)
+# while a live identity-matched holder still owns the lock. With a fresh beacon
+# the existing benign path treats this as clean. This case documents that a
+# starved beacon is still a hard failure for the auto-arm HEALTHY gate - the
+# arm layer (not auto-arm) is responsible for attaching to mid-poll holders so
+# the arm never returns FAILED while a live cycle continues. When the arm
+# fixture returns FAILED and the beacon is stale, auto-arm correctly exhausts
+# and alarms rather than falsely claiming clean supervision.
+test_failed_arm_with_stale_beacon_live_holder_fails_closed() {
+  local dir out status pid identity
+  dir=$(make_primary_dir "$TMP_ROOT/failed-stale-live")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" failed
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live holder for stale-beacon failure"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    touch -t 202001010000 "$dir/state/.last-watcher-beat" 2>/dev/null \
+      || fail "could not age the beacon on Darwin"
+  else
+    touch -d '2020-01-01 00:00:00' "$dir/state/.last-watcher-beat" 2>/dev/null \
+      || fail "could not age the beacon"
+  fi
+  out=$(FM_GUARD_GRACE=1 run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "a FAILED arm with only a stale-beacon live holder must fail closed"
+  assert_contains "$out" "automatic supervision mechanism is broken" \
+    "stale-beacon live holder must not be mistaken for a healthy cycle"
+  [ "$(epoch_outcome "$dir")" = failed ] \
+    || fail "epoch must record outcome=failed when only a stale-beacon holder exists, got: $(epoch_outcome "$dir")"
+  pass "auto-arm: FAILED arm with live-but-stale holder remains fail-closed (arm attach owns mid-poll)"
+}
+
 test_positive_recovery_budget_contention_preserves_episode() {
   local dir out status pid identity holder
   dir=$(make_primary_dir "$TMP_ROOT/recovery-budget-contention")
@@ -613,6 +648,7 @@ test_failed_cycles_notify_once_and_keep_retrying
 test_unverified_clean_close_exhausts_retries
 test_post_alarm_actionable_close_is_suppressed
 test_benign_cycle_end_with_live_watcher_is_silent
+test_failed_arm_with_stale_beacon_live_holder_fails_closed
 test_positive_recovery_budget_contention_preserves_episode
 test_arms_for_x_mode_poll_need_without_inflight
 test_single_flight_admits_exactly_one_owner

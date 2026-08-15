@@ -852,9 +852,11 @@ while :; do
 
   # Parent-owned secondmate pending-reply reconciliation: resolve correlated
   # parent reports, observe backend busy/idle turn completion, send one recovery
-  # repost after grace, and escalate once if the recovery turn is also missed.
+  # repost after grace, escalate once if the recovery turn is also missed, and
+  # retire answered records so the poll cannot accumulate settled files.
+  # Pass the liveness beacon so a large walk cannot starve grace mid-iteration.
   # No conversation scraping; unresolved records are never silently expired.
-  fm_pending_reply_tick "$STATE" || true
+  fm_pending_reply_tick "$STATE" "$STATE/.last-watcher-beat" || true
 
   # Process-to-event liveness repair. This never discovers a result by polling:
   # each registered source has its own child blocking on that source, and this
