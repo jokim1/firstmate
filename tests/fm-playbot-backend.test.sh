@@ -275,7 +275,7 @@ if fm_backend_playbot_route_write "$STATE" be-bad 1 1 project-alpha root-alpha \
 fi
 [ ! -e "$STATE/be-bad.playbot-route.json" ] || fail "a refused route_write must not leave a record behind"
 fm_backend_playbot_validate_endpoint "$STATE/be-ep.meta" || fail "adapter endpoint validation must accept the bound endpoint"
-sed -i '' 's/window=playbot:thread-complete/window=session:window/' "$STATE/be-ep.meta"
+sed -i.bak 's/window=playbot:thread-complete/window=session:window/' "$STATE/be-ep.meta" && rm -f "$STATE/be-ep.meta.bak"
 if fm_backend_playbot_validate_endpoint "$STATE/be-ep.meta" >/dev/null 2>&1; then
   fail "adapter endpoint validation must reject a non-playbot window shape"
 fi

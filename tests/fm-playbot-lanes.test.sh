@@ -189,12 +189,12 @@ write_route_fixture lane-ep thread-complete workspace-task "$WORKTREE_TASK"
 node "$LANES" validate-endpoint --meta "$STATE/lane-ep.meta" >/dev/null || fail "a well-formed endpoint must validate"
 pass "well-formed meta + bound route + live DB conjunction validates"
 
-sed -i '' 's/playbot_route_gen=1/playbot_route_gen=2/' "$STATE/lane-ep.meta"
+sed -i.bak 's/playbot_route_gen=1/playbot_route_gen=2/' "$STATE/lane-ep.meta" && rm -f "$STATE/lane-ep.meta.bak"
 if node "$LANES" validate-endpoint --meta "$STATE/lane-ep.meta" > "$TMP_ROOT/ep.out" 2>&1; then
   fail "a tampered route generation must fail endpoint validation"
 fi
 grep -q 'route generation does not match\|meta digest does not match' "$TMP_ROOT/ep.out" || fail "tampered route must name the binding failure"
-sed -i '' 's/playbot_route_gen=2/playbot_route_gen=1/' "$STATE/lane-ep.meta"
+sed -i.bak 's/playbot_route_gen=2/playbot_route_gen=1/' "$STATE/lane-ep.meta" && rm -f "$STATE/lane-ep.meta.bak"
 if node "$LANES" validate-endpoint --meta "$STATE/lane-ep.meta" >/dev/null 2>&1; then :; else fail "restored endpoint must validate again"; fi
 chmod 0644 "$STATE/lane-ep.playbot-route.json"
 if node "$LANES" validate-endpoint --meta "$STATE/lane-ep.meta" >/dev/null 2>&1; then
