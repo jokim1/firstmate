@@ -817,6 +817,56 @@ export function readRouteRecord(routePath) {
   return parsed;
 }
 
+export function writeRouteRecord(options) {
+  // options: stateDir, metaPath, taskId, spawnGen, routeGen, projectId,
+  // projectRootId, workspaceId, threadId, deliveryId, worktree.
+  // The fm-spawn-owned meta-published stage's bound route (plan 3.1/3.2): a
+  // home-local mode-0600 record, never a Playbot mutation and never a meta
+  // hand-write. It refuses unless the already-published meta agrees with the
+  // dispatch identity on every immutable endpoint field.
+  const meta = parseMetaFile(options.metaPath);
+  const { fields } = meta;
+  const checks = [
+    ['backend', 'playbot'],
+    ['endpoint_task_id', options.taskId],
+    ['spawn_gen', options.spawnGen],
+    ['playbot_route_gen', options.routeGen],
+    ['playbot_project_id', options.projectId],
+    ['playbot_project_root_id', options.projectRootId],
+    ['playbot_workspace_id', options.workspaceId],
+    ['playbot_thread_id', options.threadId],
+    ['playbot_delivery_id', options.deliveryId],
+    ['window', `playbot:${options.threadId}`]
+  ];
+  for (const [field, expected] of checks) {
+    if (fields.get(field) !== expected) {
+      throw new Error(`route-write refused: meta ${field} does not match the dispatch identity`);
+    }
+  }
+  const worktree = realpathSync(options.worktree);
+  if (realpathSync(fields.get('worktree') ?? '/nonexistent') !== worktree) {
+    throw new Error('route-write refused: meta worktree does not match the dispatch worktree');
+  }
+  const record = {
+    schema: 'firstmate.playbot.route.v1',
+    home: realpathSync(fmHome()),
+    taskId: options.taskId,
+    spawnGen: options.spawnGen,
+    routeGen: options.routeGen,
+    metaDigest: metaEndpointDigest(fields),
+    threadId: options.threadId,
+    workspaceId: options.workspaceId,
+    projectId: options.projectId,
+    projectRootId: options.projectRootId,
+    deliveryId: options.deliveryId,
+    playbotSessionId: null,
+    worktree,
+    writtenAt: new Date().toISOString()
+  };
+  writePrivateJsonAtomic(resolve(options.stateDir, `${options.taskId}.playbot-route.json`), record);
+  return record;
+}
+
 export function validateEndpoint(options) {
   const failures = [];
   const fail = (reason) => failures.push(reason);
@@ -931,6 +981,37 @@ export function bindProject(options) {
   });
   writePrivateJsonAtomic(projectBindingsPath(options.stateDir), bindings);
   return bindings.bindings.at(-1);
+}
+
+export function resolveProjectBinding(options) {
+  // options: stateDir, projectPath, paths. Dispatch-side read of the
+  // lock-owner-written bindings (plan section 3.3): exact canonical-path
+  // match, then a read-only live re-verification that the bound project/root
+  // are still active and the live root path still equals the registered
+  // clone. Never widens to a fuzzy or corpus-wide match.
+  const canonical = realpathSync(options.projectPath);
+  const bindings = readProjectBindings(options.stateDir);
+  const matches = bindings.bindings.filter((binding) => binding.canonicalProjectPath === canonical);
+  if (matches.length === 0) throw new Error(`no playbot project binding for ${canonical}`);
+  if (matches.length > 1) throw new Error(`ambiguous playbot project bindings for ${canonical}`);
+  const binding = matches[0];
+  const db = openReadonlyDatabase(options.paths.applicationDb);
+  try {
+    exactlyOne(db.prepare(`
+      SELECT id, deletion_state FROM projects WHERE id = ? AND deletion_state = 'active'
+    `).all(binding.playbotProjectId), 'Playbot project');
+    const root = exactlyOne(db.prepare(`
+      SELECT pr.id, r.path FROM project_roots pr
+      JOIN repositories r ON r.id = pr.repository_id
+      WHERE pr.id = ? AND pr.project_id = ?
+    `).all(binding.playbotRootId, binding.playbotProjectId), 'Playbot project root');
+    if (realpathSync(root.path) !== canonical) {
+      throw new Error('live Playbot root path no longer matches the registered project clone');
+    }
+  } finally {
+    db.close();
+  }
+  return binding;
 }
 
 export function bindController(options) {
@@ -1560,6 +1641,12 @@ Read-only commands (default posture; every mutation path is ${PHASE1_MARKER}):
   agent-state <thread-id>                            recovery-grade: alive|missing|ambiguous|unreadable
   worktree-path <workspace-id>                       exact workspace_roots.path for one workspace
 
+Dispatch-transaction commands (called only by the fm-spawn/teardown playbot seam):
+  binding-resolve --project-path <clone>             exact bound project/root ids + generation (tab-separated)
+  route-write --task-id <id> --spawn-gen <g> --route-gen <g> --project-id <id> --project-root-id <id> \
+              --workspace-id <id> --thread-id <id> --delivery-id <id> --worktree <path> --meta <path>
+                                                     home-local bound route record; refuses on meta mismatch
+
 Lock-owner setup commands (write home-local state only; never mutate Playbot):
   bind-project --project-path <clone> --playbot-project-id <id> --playbot-root-id <id>
   bind-controller --thread-id <exact controller thread>
@@ -1723,6 +1810,36 @@ async function main() {
         paths
       });
       output({ bound: binding });
+      return;
+    }
+    case 'binding-resolve': {
+      if (!args['project-path']) throw new Error('binding-resolve needs --project-path <registered clone>');
+      const binding = resolveProjectBinding({ stateDir, projectPath: args['project-path'], paths });
+      process.stdout.write(`${binding.playbotProjectId}\t${binding.playbotRootId}\t${binding.bindingGeneration}\n`);
+      return;
+    }
+    case 'route-write': {
+      // The fm-spawn playbot seam calls this at its meta-published stage; it
+      // is a home-local record write, not a Playbot mutation, so it is not
+      // phase-gated - but it refuses unless the published meta agrees.
+      const required = ['task-id', 'spawn-gen', 'route-gen', 'project-id', 'project-root-id',
+        'workspace-id', 'thread-id', 'delivery-id', 'worktree', 'meta'];
+      for (const key of required) {
+        if (!args[key]) throw new Error(`route-write needs --${key}`);
+      }
+      writeRouteRecord({
+        stateDir,
+        metaPath: args.meta,
+        taskId: args['task-id'],
+        spawnGen: args['spawn-gen'],
+        routeGen: args['route-gen'],
+        projectId: args['project-id'],
+        projectRootId: args['project-root-id'],
+        workspaceId: args['workspace-id'],
+        threadId: args['thread-id'],
+        deliveryId: args['delivery-id'],
+        worktree: args.worktree
+      });
       return;
     }
     case 'bind-controller': {
