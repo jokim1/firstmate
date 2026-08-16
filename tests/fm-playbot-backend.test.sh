@@ -301,17 +301,66 @@ fm_backend_playbot_abort_cleanup_confirmed thread-gone workspace-gone "$TMP_ROOT
 pass "abort cleanup confirmation requires thread, workspace, and worktree absence"
 
 TD_OUT=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-complete \
-  "$WORKTREE_TASK" workspace-task thread-complete 2>"$TMP_ROOT/td.err") && TD_RC=0 || TD_RC=$?
+  "$WORKTREE_TASK" workspace-task thread-complete : 2>"$TMP_ROOT/td.err") && TD_RC=0 || TD_RC=$?
 [ "$TD_RC" -ne 0 ] || fail "teardown must refuse a live endpoint when archive/stop cannot complete"
 case "$TD_OUT" in refuse:*) : ;; *) fail "teardown refusal must print a refuse:<reason> proof token, got $TD_OUT" ;; esac
 TD_RET=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-archived \
-  "$WORKTREE_TASK" workspace-task thread-archived) \
+  "$WORKTREE_TASK" workspace-task thread-archived :) \
   || fail "an already-gone endpoint must report retained or retired, not refuse"
 case "$TD_RET" in retained:*|retired) : ;; *) fail "already-gone teardown must print retained:<reason> or retired, got $TD_RET" ;; esac
 TD_MM=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-complete \
-  "$WORKTREE_TASK" workspace-task thread-OTHER 2>/dev/null) && TD_RC=0 || TD_RC=$?
+  "$WORKTREE_TASK" workspace-task thread-OTHER : 2>/dev/null) && TD_RC=0 || TD_RC=$?
 [ "$TD_RC" -ne 0 ] && [ "$TD_MM" = 'refuse:target-thread-mismatch' ] \
   || fail "teardown must refuse a target/thread identity mismatch"
 pass "teardown refuses live/mismatched endpoints and reports retained/retired for a confirmed-gone thread"
+
+PLAYBOT_TEARDOWN_LOG="$TMP_ROOT/teardown-order.log"
+playbot_teardown_safety_check() {
+  [ ! -e "$WORKTREE_TASK/late-worker-write" ]
+}
+fm_backend_playbot_lane() {
+  case "${1:-}" in
+    agent-state) printf '%s\n' "${PLAYBOT_TEST_STATE:-alive}" ;;
+    stop) printf 'stop\n' >> "$PLAYBOT_TEARDOWN_LOG" ;;
+    archive)
+      printf 'archive\n' >> "$PLAYBOT_TEARDOWN_LOG"
+      printf 'late\n' > "$WORKTREE_TASK/late-worker-write"
+      ;;
+    delete) printf 'delete\n' >> "$PLAYBOT_TEARDOWN_LOG" ;;
+    *) return 1 ;;
+  esac
+}
+: > "$PLAYBOT_TEARDOWN_LOG"
+TD_RACE=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-complete \
+  "$WORKTREE_TASK" workspace-task thread-complete playbot_teardown_safety_check) \
+  && TD_RC=0 || TD_RC=$?
+[ "$TD_RC" -ne 0 ] && [ "$TD_RACE" = 'refuse:worktree-safety-recheck-failed' ] \
+  || fail "teardown must refuse a worker write created while the endpoint quiesces"
+grep -qxF archive "$PLAYBOT_TEARDOWN_LOG" \
+  || fail "race fixture did not archive the endpoint before the safety recheck"
+if grep -qxF delete "$PLAYBOT_TEARDOWN_LOG"; then
+  fail "teardown deleted the workspace after the post-quiescence safety recheck failed"
+fi
+pass "teardown rechecks worktree safety after Playbot quiescence and before workspace deletion"
+
+PLAYBOT_TEST_STATE=missing
+: > "$PLAYBOT_TEARDOWN_LOG"
+TD_MISSING=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-archived \
+  "$WORKTREE_TASK" workspace-task thread-archived playbot_teardown_safety_check) \
+  && TD_RC=0 || TD_RC=$?
+[ "$TD_RC" -ne 0 ] && [ "$TD_MISSING" = 'refuse:worktree-safety-recheck-failed' ] \
+  || fail "teardown must safety-check an already-gone endpoint before workspace deletion"
+if grep -qxF delete "$PLAYBOT_TEARDOWN_LOG"; then
+  fail "teardown deleted the workspace after the confirmed-gone safety recheck failed"
+fi
+rm -f "$WORKTREE_TASK/late-worker-write"
+: > "$PLAYBOT_TEARDOWN_LOG"
+TD_SAFE=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-archived \
+  "$WORKTREE_TASK" workspace-task thread-archived :) \
+  || fail "teardown must remove an already-gone endpoint when the safety recheck passes"
+[ "$TD_SAFE" = retired ] || fail "safe confirmed-gone teardown must report retired"
+grep -qxF delete "$PLAYBOT_TEARDOWN_LOG" \
+  || fail "safe confirmed-gone teardown did not reach workspace deletion"
+pass "confirmed-gone Playbot deletion also requires a passing worktree safety recheck"
 
 printf 'fm-playbot-backend: all tests passed\n'

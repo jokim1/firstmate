@@ -1193,13 +1193,14 @@ test_cleanup_refuses_while_a_public_reply_is_owed() {
     || fail "could not add the guarded ship to its home's backlog"
   tasks_in "$home" start ship-task >/dev/null \
     || fail "could not mark the guarded ship In flight"
+  fm_git_init_commit "$home/projects/sample"
   fm_write_meta "$home/state/ship-task.meta" \
     "window=firstmate:fm-ship-task" \
-    "worktree=$home/projects/gone" \
+    "worktree=$home/projects/sample" \
     "project=$home/projects/sample" \
     "harness=codex" \
     "kind=ship" \
-    "mode=no-mistakes" \
+    "mode=local-only" \
     "spawn_gen=public-followup-guard"
 
   rc=0
@@ -2065,13 +2066,14 @@ test_retention_creates_no_false_teardown_refusal() {
     || fail "could not add the retained-registration ship to its home's backlog"
   tasks_in "$home" start ship-retain >/dev/null \
     || fail "could not mark the retained-registration ship In flight"
+  fm_git_init_commit "$home/projects/sample"
   fm_write_meta "$home/state/ship-retain.meta" \
     "window=firstmate:fm-ship-retain" \
-    "worktree=$home/projects/gone" \
+    "worktree=$home/projects/sample" \
     "project=$home/projects/sample" \
     "harness=codex" \
     "kind=ship" \
-    "mode=no-mistakes" \
+    "mode=local-only" \
     "spawn_gen=public-followup-retain"
   emit_terminal "$home" "$home" pf-retain main ship-retain >/dev/null || fail "emit failed"
   run_pf "$home" consume >/dev/null || fail "consume failed"
@@ -2225,9 +2227,10 @@ test_x_request_teardown_warns_when_final_unposted() {
     || fail "could not add the legacy-link ship to its home's backlog"
   tasks_in "$home" start linked-task >/dev/null \
     || fail "could not mark the legacy-link ship In flight"
+  fm_git_init_commit "$home/projects/sample"
   fm_write_meta "$home/state/linked-task.meta" \
     "window=firstmate:fm-linked-task" \
-    "worktree=$home/projects/gone" \
+    "worktree=$home/projects/sample" \
     "project=$home/projects/sample" \
     "kind=ship" \
     "mode=local-only" \
