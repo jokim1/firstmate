@@ -58,6 +58,23 @@ const LIMITS = COMPATIBILITY_MANIFEST.v1Limits;
 const COURIER_VERBS = new Set(['working', 'needs-decision', 'blocked', 'paused', 'done', 'failed']);
 const TXN_DEADLINE_SECS = Number(process.env.FM_PLAYBOT_TXN_DEADLINE_SECS ?? 600);
 
+export function parseDispatchTransaction(text) {
+  const fields = new Map();
+  for (const line of String(text).split(/\r?\n/)) {
+    if (!line) continue;
+    const separator = line.indexOf('=');
+    if (separator < 1) throw new Error('transaction line is not key=value');
+    const key = line.slice(0, separator);
+    if (!/^[a-z][a-z0-9_]*$/.test(key) || fields.has(key)) {
+      throw new Error(`transaction key is malformed or duplicated: ${key}`);
+    }
+    fields.set(key, line.slice(separator + 1));
+  }
+  const state = fields.get('state');
+  if (!state) throw new Error('transaction is missing state');
+  return { state, fields };
+}
+
 class ReconcileDeadline extends Error {
   constructor() {
     super('reconcile exceeded its 3-second deadline');
@@ -247,7 +264,7 @@ export function reconcileCheck(taskId, options = {}) {
   const txnPath = resolve(stateDir, '.playbot-dispatch', `${taskId}.txn`);
   if (existsSync(txnPath)) {
     try {
-      const txn = JSON.parse(readFileSync(txnPath, 'utf8'));
+      const txn = parseDispatchTransaction(readFileSync(txnPath, 'utf8'));
       const ageSecs = (Date.now() - statSync(txnPath).mtimeMs) / 1_000;
       if (txn.state && txn.state !== 'worker-started' && ageSecs > TXN_DEADLINE_SECS) {
         return failOnce('dispatch-transaction', `txn-state ${txn.state} is ${Math.round(ageSecs)}s old, past the ${TXN_DEADLINE_SECS}s deadline`);
@@ -526,4 +543,3 @@ if (invokedAsScript) {
     process.exitCode = 64;
   });
 }
-

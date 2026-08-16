@@ -1,0 +1,38 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence.v1",
+  "operation": "workspace:create",
+  "appVersion": "0.92.0",
+  "smokeRunId": "2026-08-15T06-30-33-620Z",
+  "recordedAt": "2026-08-15T06:30:33.910Z",
+  "projectId": "project_07474ac1d119",
+  "projectRootId": "root_1274183bc1fe",
+  "request": {
+    "strategy": "quick",
+    "projectId": "project_07474ac1d119",
+    "projectRootId": "root_1274183bc1fe",
+    "mode": "open",
+    "baseRef": "main",
+    "branch": "fm-playbot-lane-smoke-1786775433620",
+    "expectedCommit": "7aa761a69a65892a4eee352c3ac78d066d8a5fc9"
+  },
+  "result": {
+    "id": "ws_caeec1261dad",
+    "projectId": "project_07474ac1d119",
+    "name": "Fm playbot lane smoke 1786775433620",
+    "kind": "worktree",
+    "isSelected": true,
+    "pinnedAt": null,
+    "archiveState": "active",
+    "archivedAt": null,
+    "archiveReason": null,
+    "manualStatus": null,
+    "panelLayout": null,
+    "createdAt": "2026-08-15T06:30:33.870Z",
+    "updatedAt": "2026-08-15T06:30:33.870Z"
+  },
+  "requestSha256": "aaa2adece308ffbe783d661e2d5d41f6c184b22b0f6eedda125d70a0507d3e8c",
+  "resultSha256": "9f34f717b02b98e61db10b5aaa15aea573ef6be307a3b6610b8b1f95b97451a7",
+  "workspaceId": "ws_caeec1261dad",
+  "worktreePath": "/Users/josephkim/Library/Application Support/@playbot/desktop/worktrees/repo_c901e2099b94/fm-playbot-lane-smoke-1786775433620-ebfa4b34",
+  "branch": "fm-playbot-lane-smoke-1786775433620"
+}

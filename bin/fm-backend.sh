@@ -66,9 +66,8 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # cmux is EXPERIMENTAL and spawn-capable, session-provider-only like
 # herdr/zellij - verified against the real 0.64.17 binary (docs/cmux-backend.md).
 # playbot is EXPERIMENTAL and worktree-owning (like orca): registered known and
-# listed spawn-capable for adapter dispatch, but fm_backend_validate_spawn refuses
-# live dispatch until Phase 1/2 native gates pass (compatibility policy; unlock
-# hermetic fixture tests with FM_PLAYBOT_NATIVE_SPAWN=1 only). See plan v3
+# listed spawn-capable for adapter dispatch. Its adapter runtime check enforces
+# the native readiness and evidence gates before live dispatch. See plan v3
 # data/lanemcp-impl-plan/report.md §5.2/§6.2 and docs/playbot-lanes.md when present.
 # codex-app remains deliberately absent; see docs/codex-app-backend.md.
 FM_BACKEND_KNOWN="tmux herdr zellij orca cmux playbot"
@@ -298,13 +297,6 @@ fm_backend_validate_spawn() {  # <name>
     echo "error: backend '$name' does not support task spawning yet (spawn-supported: $FM_BACKEND_SPAWN)" >&2
     return 1
   fi
-  # Playbot stays registered spawn-capable for adapter wiring and hermetic
-  # transaction tests, but live dispatch remains phase-gated until Phase 1/2
-  # native smoke proves workspace create, send acceptance, stop, and cleanup.
-  if [ "$name" = playbot ] && [ "${FM_PLAYBOT_NATIVE_SPAWN:-0}" != 1 ]; then
-    echo "error: backend=playbot is not spawn-capable for live dispatch until Phase 1/2 native gates pass (compatibility policy); hermetic tests may set FM_PLAYBOT_NATIVE_SPAWN=1 against fixtures only" >&2
-    return 1
-  fi
   return 0
 }
 
@@ -329,7 +321,7 @@ fm_backend_required_tools() {  # <backend>
     zellij) printf '%s' 'zellij jq treehouse' ;;
     cmux)   printf '%s' 'cmux jq treehouse' ;;
     orca)   printf '%s' 'orca' ;;
-    playbot) printf '%s' 'node' ;;
+    playbot) printf '%s' 'node ssh-keygen' ;;
     *) return 1 ;;
   esac
 }
