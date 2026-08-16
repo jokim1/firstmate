@@ -22,8 +22,8 @@ Never force-push to upstream.
 
 All pushes, pull requests, and merges target the origin fork (`jokim1/firstmate`) only.
 
-Anything that writes to kunchenguid/firstmate - PR, comment, close, issue, or cleanup of artifacts there - happens only on the captain's explicit per-item instruction.
-Upstream engagement without that word is forbidden; issues are the only allowed upstream write surface, and only under that same per-item authority.
+ALL writes to kunchenguid/firstmate are forbidden always - PRs, pushes, merges, comments, and cleanup of artifacts there included; no captain word makes an upstream PR (or any other write there) possible.
+The ONLY permitted upstream engagement is filing an ISSUE, each one on the captain's explicit per-item word.
 
 Local clones enforce the push half of this boundary:
 the `upstream` and `sanchith` remotes have push URLs disabled, so any push there fails loudly.
