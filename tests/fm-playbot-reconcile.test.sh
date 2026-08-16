@@ -31,6 +31,22 @@ export FM_PLAYBOT_DEVTOOLS_PORT_FILE="$FIX/DevToolsActivePort"
 export FM_PLAYBOT_APP_BUNDLE="$FIX/fixture-app.asar"
 export FM_PLAYBOT_APP_VERSION="0.90.0"
 
+file_mode() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %Lp "$1"
+  else
+    stat -c %a "$1"
+  fi
+}
+
+file_mtime() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %m "$1"
+  else
+    stat -c %Y "$1"
+  fi
+}
+
 # write_task_fixture <task-id> <thread-id> <workspace-id> <worktree-dir> <kind>
 write_task_fixture() {
   local id=$1 thread=$2 workspace=$3 worktree_dir=$4 kind=$5 worktree digest
@@ -139,12 +155,12 @@ pass "only the recorded live lock owner can acknowledge; acknowledged events sta
 # NOT touch it, so the watcher's bound still fires.
 [ -e "$STATE/rc-done.turn-ended" ] || fail "turn-ended must exist after a completed turn"
 NOW=$(date +%s)
-MTIME=$(stat -f %m "$STATE/rc-done.turn-ended")
+MTIME=$(file_mtime "$STATE/rc-done.turn-ended")
 [ $((NOW - MTIME)) -lt 60 ] || fail "turn-ended must be fresh after the reconciler observed a completed turn"
 touch -t 202001010000 "$STATE/rc-done.turn-ended"
-STALE_MTIME=$(stat -f %m "$STATE/rc-done.turn-ended")
+STALE_MTIME=$(file_mtime "$STATE/rc-done.turn-ended")
 node "$RECONCILE" check rc-done --check-key-queued 1 >/dev/null || fail "no-new-turn check failed"
-MTIME=$(stat -f %m "$STATE/rc-done.turn-ended")
+MTIME=$(file_mtime "$STATE/rc-done.turn-ended")
 [ "$MTIME" = "$STALE_MTIME" ] || fail "a check with no newly completed turn must leave a stale turn-ended untouched (escalation still fires)"
 pass "wedge-timer regression: fresh turn-ended after a completed turn, untouched when nothing completed"
 
@@ -215,7 +231,7 @@ pass "corrupt or unverifiable records are a visible failure, never silently filt
 
 write_task_fixture rc-txn thread-complete workspace-task worktrees/task ship
 mkdir -p "$STATE/.playbot-dispatch"
-printf '{"state":"accepted","taskId":"rc-txn"}\n' > "$STATE/.playbot-dispatch/rc-txn.txn"
+printf 'task_id=rc-txn\nstate=accepted\nworkspace_id=workspace-task\nthread_id=thread-complete\n' > "$STATE/.playbot-dispatch/rc-txn.txn"
 touch -t 202001010000 "$STATE/.playbot-dispatch/rc-txn.txn"
 RC=0
 OUT=$(FM_PLAYBOT_TXN_DEADLINE_SECS=600 node "$RECONCILE" check rc-txn --check-key-queued 0 2>/dev/null) || RC=$?
@@ -244,7 +260,7 @@ pass "Playbot absence is bounded and visible with every record retained"
 write_task_fixture rc-wrap thread-complete workspace-task worktrees/task ship
 node "$RECONCILE" write-check rc-wrap >/dev/null || fail "write-check failed"
 [ -x "$STATE/rc-wrap.check.sh" ] || fail "the generated wrapper must be executable"
-[ "$(stat -f %Lp "$STATE/rc-wrap.check.sh")" = 700 ] || fail "the generated wrapper must be mode 0700"
+[ "$(file_mode "$STATE/rc-wrap.check.sh")" = 700 ] || fail "the generated wrapper must be mode 0700"
 [ ! -L "$STATE/rc-wrap.check.sh" ] || fail "the generated wrapper must not be a symlink"
 WRAP_OUT=$(FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" bash "$STATE/rc-wrap.check.sh") || fail "wrapper run failed"
 printf '%s' "$WRAP_OUT" | grep -q '^playbot-event task=rc-wrap ' || fail "the wrapper must print the reconciler's static pointer line"

@@ -1,0 +1,18 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence.v1",
+  "operation": "threads:archiveThread",
+  "appVersion": "0.92.0",
+  "smokeRunId": "2026-08-15T06-30-33-620Z",
+  "recordedAt": "2026-08-15T06:30:39.620Z",
+  "projectId": "project_07474ac1d119",
+  "projectRootId": "root_1274183bc1fe",
+  "request": {
+    "threadId": "chat-1-1786775433911"
+  },
+  "resultWasUndefined": true,
+  "requestSha256": "d543a5006dc9c7ecb3c7d81382ca3266e3b87d345f3cdb76237081cbd45e30de",
+  "persisted": {
+    "archived": 1,
+    "session_id": "01a0041d-72dc-7f63-a714-7df2a8ba6ff5"
+  }
+}

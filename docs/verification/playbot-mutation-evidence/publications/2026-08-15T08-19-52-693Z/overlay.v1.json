@@ -1,0 +1,45 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence-overlay.v1",
+  "manifestVersion": 2,
+  "releases": {
+    "0.92.0": {
+      "mutationEvidence": {
+        "workspace:create": {
+          "recordedAt": "2026-08-15T08:19:53.073Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/workspace:create.json",
+          "contentSha256": "959b9e10238a670410a57658e891c07fad1a8e29454df3d7332dcd0c2a3ec9e7"
+        },
+        "threads:openThread": {
+          "recordedAt": "2026-08-15T08:19:53.098Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/threads:openThread.json",
+          "contentSha256": "665e0c4568789aa5c72fb9173dc7f888f9f1b0b56cbaf0c2637792e86a88be84"
+        },
+        "threads:send": {
+          "recordedAt": "2026-08-15T08:19:53.233Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/threads:send.json",
+          "contentSha256": "0f15debc2b82ea77245e9f42e6adde5fbbc64768cbc71d21e59c76009d10facc"
+        },
+        "threads:stop": {
+          "recordedAt": "2026-08-15T08:20:05.951Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/threads:stop.json",
+          "contentSha256": "9d90cbcf1678430afb60ae1945b4581119322796034470b106b8756b49d3f404"
+        },
+        "threads:archiveThread": {
+          "recordedAt": "2026-08-15T08:20:08.969Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/threads:archiveThread.json",
+          "contentSha256": "b8a5f0a13885c742b686444c0c48cd96dcf23035e5e5f0dfa5558a9b50704f0d"
+        },
+        "workspace:delete": {
+          "recordedAt": "2026-08-15T08:20:09.195Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/workspace:delete.json",
+          "contentSha256": "17fe7a26bb0f195528a993486c8c15cfbda971f98ef51a050c59a20abc38b422"
+        }
+      },
+      "confinement": {
+        "recordedAt": "2026-08-15T08:20:08.953Z",
+        "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/confinement.json",
+        "contentSha256": "d449b75e71cb75075bab345baaa4bf8ab5f37ba3d0e9254f681f0bef4786d387"
+      }
+    }
+  }
+}

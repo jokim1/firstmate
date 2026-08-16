@@ -15,6 +15,9 @@ mkdir -p "$FIX"
 node "$ROOT/tests/playbot-fixtures/generate.mjs" "$FIX" >/dev/null || fail "fixture generation failed"
 
 LANES="$ROOT/bin/fm-playbot-lanes.mjs"
+if grep -q 'DISPOSABLE_SMOKE_PROJECT,.*options\.project' "$LANES"; then
+  fail "production smoke must not accept a project override"
+fi
 HOME_DIR="$TMP_ROOT/home"
 STATE="$HOME_DIR/state"
 mkdir -p "$STATE"
@@ -27,6 +30,18 @@ export FM_PLAYBOT_APP_RUN_STATE="$FIX/playbot-app-run-state.json"
 export FM_PLAYBOT_DEVTOOLS_PORT_FILE="$FIX/DevToolsActivePort"
 export FM_PLAYBOT_APP_BUNDLE="$FIX/fixture-app.asar"
 export FM_PLAYBOT_APP_VERSION="0.90.0"
+export FM_PLAYBOT_EVIDENCE_ROOT="$TMP_ROOT/empty-evidence"
+export FM_PLAYBOT_EVIDENCE_OVERLAY="$TMP_ROOT/empty-evidence/overlay.v1.json"
+
+
+file_mode() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %Lp "$1"
+  else
+    stat -c %a "$1"
+  fi
+}
+
 
 # Start a fake CDP server and point the fixture DevToolsActivePort at it.
 node "$ROOT/tests/playbot-fixtures/fake-cdp.mjs" ok > "$TMP_ROOT/cdp-port" &
@@ -44,7 +59,7 @@ printf '%s\n' "$CDP_PORT" > "$FIX/DevToolsActivePort"
 
 OUT=$(node "$LANES" doctor --json 2>"$TMP_ROOT/doctor.err") || fail "doctor failed on the compatible fixture: $(cat "$TMP_ROOT/doctor.err")"
 printf '%s' "$OUT" | grep -q '"readOnlyReady": true' || fail "doctor not read-only ready on the compatible fixture"
-printf '%s' "$OUT" | grep -q '"mutationsEnabled": false' || fail "doctor must always report mutationsEnabled false in this phase"
+printf '%s' "$OUT" | grep -q '"mutationsEnabled": false' || fail "doctor must report mutationsEnabled false without smoke evidence"
 printf '%s' "$OUT" | grep -q 'phase1-evidence-required' || fail "doctor must report the phase1-evidence-required operating state"
 printf '%s' "$OUT" | grep -q 'same_uid_unauthenticated_devtools' || fail "doctor must keep the same-UID DevTools warning"
 printf '%s' "$OUT" | grep -q '"appVersion": "0.90.0"' || fail "doctor must report the exact app version"
@@ -184,12 +199,12 @@ write_route_fixture lane-ep thread-complete workspace-task "$WORKTREE_TASK"
 node "$LANES" validate-endpoint --meta "$STATE/lane-ep.meta" >/dev/null || fail "a well-formed endpoint must validate"
 pass "well-formed meta + bound route + live DB conjunction validates"
 
-sed -i '' 's/playbot_route_gen=1/playbot_route_gen=2/' "$STATE/lane-ep.meta"
+sed -i.bak 's/playbot_route_gen=1/playbot_route_gen=2/' "$STATE/lane-ep.meta" && rm -f "$STATE/lane-ep.meta.bak"
 if node "$LANES" validate-endpoint --meta "$STATE/lane-ep.meta" > "$TMP_ROOT/ep.out" 2>&1; then
   fail "a tampered route generation must fail endpoint validation"
 fi
 grep -q 'route generation does not match\|meta digest does not match' "$TMP_ROOT/ep.out" || fail "tampered route must name the binding failure"
-sed -i '' 's/playbot_route_gen=2/playbot_route_gen=1/' "$STATE/lane-ep.meta"
+sed -i.bak 's/playbot_route_gen=2/playbot_route_gen=1/' "$STATE/lane-ep.meta" && rm -f "$STATE/lane-ep.meta.bak"
 if node "$LANES" validate-endpoint --meta "$STATE/lane-ep.meta" >/dev/null 2>&1; then :; else fail "restored endpoint must validate again"; fi
 chmod 0644 "$STATE/lane-ep.playbot-route.json"
 if node "$LANES" validate-endpoint --meta "$STATE/lane-ep.meta" >/dev/null 2>&1; then
@@ -214,7 +229,7 @@ LEASE_GEN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.a
 node "$LANES" bind-controller --thread-id thread-complete >/dev/null || fail "re-bind must succeed for the lock owner"
 LEASE_GEN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).generation)' "$STATE/.playbot-controller.lease")
 [ "$LEASE_GEN" = 2 ] || fail "second lease generation must be 2, got $LEASE_GEN"
-[ "$(stat -f %Lp "$STATE/.playbot-controller.lease")" = 600 ] || fail "controller lease must be mode 0600"
+[ "$(file_mode "$STATE/.playbot-controller.lease")" = 600 ] || fail "controller lease must be mode 0600"
 rm -f "$STATE/.lock"
 if node "$LANES" bind-controller --thread-id thread-complete >/dev/null 2>&1; then
   fail "bind-controller without a live session lock must refuse"
@@ -237,5 +252,430 @@ pass "MCP serves health only, denies task-data tools without proven identity, an
 
 node "$ROOT/tests/playbot-fixtures/cdp-transport.test.mjs" || fail "CDP transport regressions failed"
 pass "CDP transport rejects on close/timeout, skips dead targets, and serializes payloads safely"
+
+# --- mutation evidence overlay: record, load, tamper-refuse, confinement gate ---
+
+EVIDENCE_ROOT="$TMP_ROOT/mutation-evidence"
+OVERLAY="$EVIDENCE_ROOT/overlay.v1.json"
+SIGNING_KEY="$EVIDENCE_ROOT/test-signer"
+ALLOWED_SIGNERS="$EVIDENCE_ROOT/allowed_signers"
+mkdir -p "$EVIDENCE_ROOT"
+ssh-keygen -q -t ed25519 -N '' -f "$SIGNING_KEY" || fail "could not create hermetic evidence signing key"
+printf 'jokim1 %s\n' "$(cat "$SIGNING_KEY.pub")" > "$ALLOWED_SIGNERS"
+ALLOWED_SIGNERS_SHA=$(shasum -a 256 "$ALLOWED_SIGNERS" | awk '{print $1}')
+export FM_PLAYBOT_EVIDENCE_ROOT="$EVIDENCE_ROOT"
+export FM_PLAYBOT_EVIDENCE_OVERLAY="$OVERLAY"
+export FM_PLAYBOT_SMOKE_FIXTURE=1
+node --input-type=module - "$ROOT/bin/fm-playbot-lanes.mjs" "$EVIDENCE_ROOT" "$OVERLAY" "$SIGNING_KEY" "$ALLOWED_SIGNERS" "$ALLOWED_SIGNERS_SHA" "$FIX/playbot.db" <<'NODE' || fail "mutation evidence fixture checks failed"
+import { pathToFileURL } from 'node:url';
+import { writeFileSync, readFileSync, chmodSync, mkdirSync, statSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+
+const lanesUrl = pathToFileURL(process.argv[2]).href;
+const {
+  loadCompatibilityManifest,
+  mutationEvidenceState,
+  assertMutationAllowed,
+  nativeDispatchState,
+  ready,
+  writeEvidenceRecord,
+  writeFixtureEvidenceOverlay,
+  assertFixtureEvidencePaths,
+  normalizeIpcEvaluateResult,
+  validateWorkspaceCreateResult,
+  validateThreadSendResult,
+  mintNativeThreadId,
+  buildMutationEvaluateExpression,
+  buildConfinementProbeSpec,
+  writeConfinementProbeScripts,
+  parseConfinementToolProof,
+  assertProjectMutationTarget,
+  assertThreadMutationTarget,
+  assertWorkspaceMutationTarget,
+  resolveWorkspaceIncludingArchived,
+  verifyPlaybotRetirement
+} = await import(lanesUrl);
+
+const evidenceRoot = process.argv[3];
+const overlayPath = process.argv[4];
+const signingKey = process.argv[5];
+const allowedSignersPath = process.argv[6];
+const allowedSignersSha256 = process.argv[7];
+const applicationDb = process.argv[8];
+const attestation = { signingKey, allowedSignersPath, allowedSignersSha256 };
+const env = { FM_PLAYBOT_EVIDENCE_ROOT: evidenceRoot, FM_PLAYBOT_EVIDENCE_OVERLAY: overlayPath, FM_PLAYBOT_SMOKE_FIXTURE: '1' };
+const productionEvidenceRoot = resolve(dirname(process.argv[2]), '../docs/verification/playbot-mutation-evidence');
+try {
+  assertFixtureEvidencePaths(evidenceRoot, resolve(productionEvidenceRoot, 'overlay.v1.json'));
+  throw new Error('fixture production overlay path must fail');
+} catch (error) {
+  if (!/production evidence root/.test(error.message)) throw error;
+}
+try {
+  assertFixtureEvidencePaths(evidenceRoot, resolve(dirname(evidenceRoot), 'outside-fixture', 'overlay.v1.json'));
+  throw new Error('fixture overlay outside evidence root must fail');
+} catch (error) {
+  if (!/within the fixture evidence root/.test(error.message)) throw error;
+}
+const publicationFiles = (pointerPath) => {
+  const pointer = JSON.parse(readFileSync(pointerPath, 'utf8'));
+  const overlay = resolve(dirname(pointerPath), pointer.publicationRelPath, 'overlay.v1.json');
+  return { overlay, receipt: `${overlay}.receipt.json` };
+};
+const ops = [
+  'workspace:create',
+  'threads:openThread',
+  'threads:send',
+  'threads:stop',
+  'threads:archiveThread',
+  'workspace:delete',
+  'confinement'
+];
+const pointers = {};
+for (const operation of ops) {
+  pointers[operation] = writeEvidenceRecord({
+    schema: 'firstmate.playbot.mutation-evidence.v1',
+    operation,
+    appVersion: '0.92.0',
+    smokeRunId: 'hermetic-fixture',
+    recordedAt: new Date().toISOString(),
+    probe: {
+      readAttempted: true,
+      writeAttempted: true,
+      readOutcome: 'allowed',
+      writeOutcome: 'denied'
+    },
+    rationalePointer: 'docs/playbot-lanes.md#confinement-gate-8-re-scope',
+    note: 'hermetic fixture'
+  }, { env, evidenceRoot });
+}
+const overlay = {
+  schema: 'firstmate.playbot.mutation-evidence-overlay.v1',
+  manifestVersion: 2,
+  releases: {
+    '0.92.0': {
+      mutationEvidence: Object.fromEntries(ops.filter((op) => op !== 'confinement').map((op) => [op, pointers[op]])),
+      confinement: pointers.confinement
+    }
+  }
+};
+try {
+  writeFixtureEvidenceOverlay(overlay, {
+    env,
+    evidenceRoot,
+    overlayPath: resolve(dirname(evidenceRoot), 'outside-fixture', 'overlay.v1.json'),
+    smokeRunId: 'outside-fixture',
+    appVersion: '0.92.0',
+    ...attestation
+  });
+  throw new Error('fixture publisher must refuse an overlay outside its evidence root');
+} catch (error) {
+  if (!/within the fixture evidence root/.test(error.message)) throw error;
+}
+writeFixtureEvidenceOverlay(overlay, {
+  env, evidenceRoot, overlayPath, smokeRunId: 'hermetic-fixture', appVersion: '0.92.0', ...attestation
+});
+const loaded = loadCompatibilityManifest({ env, evidenceRoot, overlayPath, ...attestation });
+const native = nativeDispatchState(loaded.manifest, '0.92.0');
+if (!native.allowed || native.operatingState !== 'native-enabled') {
+  throw new Error(`expected native-enabled, got ${native.operatingState}: ${native.reason}`);
+}
+if (!mutationEvidenceState(loaded.manifest, '0.92.0', 'threads:send').allowed) {
+  throw new Error('threads:send should be allowed with verified evidence');
+}
+if (mutationEvidenceState(loaded.manifest, '0.92.0', 'workspace:archive').allowed) {
+  throw new Error('workspace:archive must stay gated without successful live evidence');
+}
+try {
+  writeFixtureEvidenceOverlay(overlay, {
+    env,
+    evidenceRoot,
+    overlayPath,
+    smokeRunId: 'interrupted-fixture',
+    appVersion: '0.92.0',
+    publicationFailpoint: 'before-pointer',
+    ...attestation
+  });
+  throw new Error('publication failpoint must interrupt before pointer replacement');
+} catch (error) {
+  if (!/fixture publication failpoint/.test(error.message)) throw error;
+}
+const afterInterruptedPublication = loadCompatibilityManifest({ env, evidenceRoot, overlayPath, ...attestation });
+if (!nativeDispatchState(afterInterruptedPublication.manifest, '0.92.0').allowed) {
+  throw new Error('interrupted publication must leave the prior pointer valid');
+}
+const fixtureRoot = dirname(applicationDb);
+const deadPortFile = resolve(fixtureRoot, 'DeadDevToolsActivePort');
+writeFileSync(deadPortFile, '1\n');
+const unhealthyNative = await ready({
+  appVersion: '0.92.0',
+  manifest: loaded.manifest,
+  stateDir: resolve(fixtureRoot, 'unhealthy-state'),
+  paths: {
+    appVersion: '0.92.0',
+    applicationDb,
+    codexDb: resolve(fixtureRoot, 'harness/state_5.sqlite'),
+    appRunState: resolve(fixtureRoot, 'playbot-app-run-state.json'),
+    devToolsPortFile: deadPortFile,
+    appBundle: resolve(fixtureRoot, 'fixture-app.asar')
+  }
+});
+if (unhealthyNative.ready || !/reachability/.test(unhealthyNative.reason)) {
+  throw new Error('native readiness must require read-only runtime health');
+}
+// Tamper: rewrite evidence body without updating the overlay hash.
+const sendPath = resolve(evidenceRoot, pointers['threads:send'].recordRelPath);
+writeFileSync(sendPath, `${readFileSync(sendPath, 'utf8')} `);
+const tampered = loadCompatibilityManifest({ env, evidenceRoot, overlayPath, ...attestation });
+if (mutationEvidenceState(tampered.manifest, '0.92.0', 'threads:send').allowed) {
+  throw new Error('tampered evidence must keep threads:send refused');
+}
+if (!tampered.integrity.refused.some((item) => item.scope.includes('threads:send'))) {
+  throw new Error('tamper must appear in integrity.refused');
+}
+const editedBody = `${JSON.stringify({
+  schema: 'firstmate.playbot.mutation-evidence.v1',
+  operation: 'threads:send',
+  appVersion: '0.92.0',
+  smokeRunId: 'hand-edited',
+  recordedAt: new Date().toISOString()
+}, null, 2)}\n`;
+writeFileSync(sendPath, editedBody);
+overlay.releases['0.92.0'].mutationEvidence['threads:send'].contentSha256 = (await import('node:crypto')).createHash('sha256').update(editedBody).digest('hex');
+writeFileSync(publicationFiles(overlayPath).overlay, `${JSON.stringify(overlay, null, 2)}\n`);
+const coordinated = loadCompatibilityManifest({ env, evidenceRoot, overlayPath, ...attestation });
+if (!coordinated.integrity.refused.some((item) => item.scope === 'overlay' && item.reason.includes('attestation'))) {
+  throw new Error('coordinated overlay and record edits must fail attestation');
+}
+// Shape parsers (offline; no live Playbot).
+const createEnv = normalizeIpcEvaluateResult(JSON.stringify({
+  channel: 'workspace:create',
+  request: {},
+  resultWasUndefined: false,
+  resultType: 'object',
+  result: { id: 'ws_x', projectId: 'p', kind: 'worktree', archiveState: 'active' }
+}));
+validateWorkspaceCreateResult(createEnv.result);
+validateThreadSendResult({ threadId: 'chat-1-1', phase: { kind: 'ready' } });
+try {
+  validateWorkspaceCreateResult(createEnv.result, 'wrong-project');
+  throw new Error('workspace:create project mismatch must fail');
+} catch (error) {
+  if (!/expected wrong-project/.test(error.message)) throw error;
+}
+try {
+  validateThreadSendResult({ threadId: 'chat-1-2' }, 'chat-1-1', 'threads:stop');
+  throw new Error('thread result identity mismatch must fail');
+} catch (error) {
+  if (!/expected chat-1-1/.test(error.message)) throw error;
+}
+if (!/^chat-1-\d+$/.test(mintNativeThreadId(42))) throw new Error('native thread id format');
+const expr = buildMutationEvaluateExpression('threads:stop', { threadId: 'chat-1-1' });
+if (!expr.includes('"threads:stop"') || !expr.includes('"chat-1-1"')) throw new Error('IPC expression must JSON-serialize');
+if (assertWorkspaceMutationTarget(applicationDb, 'workspace-task').kind !== 'worktree') throw new Error('worktree mutation target should pass');
+if (assertProjectMutationTarget(applicationDb, 'project-alpha', 'root-alpha').project_root_id !== 'root-alpha') {
+  throw new Error('exact project/root mutation target should pass');
+}
+if (assertThreadMutationTarget(applicationDb, 'thread-complete', 'threads:send').workspace.id !== 'workspace-task') {
+  throw new Error('exact thread/workspace mutation target should pass');
+}
+try {
+  assertWorkspaceMutationTarget(applicationDb, 'workspace-main', 'workspace:delete');
+  throw new Error('MAIN workspace mutation must fail');
+} catch (error) {
+  if (!/MAIN\/local/.test(error.message)) throw error;
+}
+const fixtureDb = new DatabaseSync(applicationDb);
+fixtureDb.exec("UPDATE workspaces SET archive_state = 'archived' WHERE id = 'workspace-task'");
+if (resolveWorkspaceIncludingArchived(applicationDb, 'workspace-task').archive_state !== 'archived') {
+  throw new Error('archived workspace must remain resolvable for guarded deletion');
+}
+if (assertWorkspaceMutationTarget(applicationDb, 'workspace-task', 'workspace:delete').kind !== 'worktree') {
+  throw new Error('archived non-MAIN workspace delete target should pass');
+}
+fixtureDb.prepare(`
+  INSERT INTO workspace_threads (id, workspace_id, session_id, pending_queue_json, agent_status, archived)
+  VALUES (?, ?, ?, NULL, ?, 0)
+`).run('thread-orphan', 'workspace-gone', 'session-orphan', 'ready');
+fixtureDb.close();
+const retirement = verifyPlaybotRetirement({ applicationDb }, {
+  threadId: 'thread-orphan',
+  workspaceId: 'workspace-gone',
+  worktreePath: resolve(dirname(applicationDb), 'missing-worktree')
+});
+if (retirement.ok || !retirement.problems.some((problem) => problem.includes('thread-orphan'))) {
+  throw new Error('independent cleanup verification must expose orphan threads');
+}
+const probeSpec = buildConfinementProbeSpec({
+  smokeRunId: 'proof-fixture',
+  canaryPath: '/tmp/canary fixture',
+  writeAttemptPath: '/tmp/write fixture',
+  worktreePath: resolve(evidenceRoot, 'probe-worktree')
+});
+mkdirSync(resolve(evidenceRoot, 'probe-worktree'));
+writeConfinementProbeScripts(probeSpec);
+if ((statSync(probeSpec.readScriptPath).mode & 0o777) !== 0o700
+  || (statSync(probeSpec.writeScriptPath).mode & 0o777) !== 0o700) {
+  throw new Error('confinement probe scripts must be mode 0700');
+}
+if (!readFileSync(probeSpec.readScriptPath, 'utf8').includes(probeSpec.canaryPath)
+  || !readFileSync(probeSpec.writeScriptPath, 'utf8').includes(probeSpec.writeAttemptPath)) {
+  throw new Error('confinement probe scripts must bind the fixed probe paths');
+}
+const toolOutput = (callId, result) => ({
+  callId,
+  sourceFile: '/tmp/rollout.jsonl',
+  text: `Script completed\nWall time 0.1 seconds\nOutput:\n${JSON.stringify(result)}\n`
+});
+const execInput = (variable, cmd) => `const ${variable} = await tools.exec_command(${JSON.stringify({ cmd })});\ntext(JSON.stringify({exit_code:${variable}.exit_code,output:${variable}.output}));\n`;
+const proof = parseConfinementToolProof({
+  toolCalls: [
+    { callId: 'read-call', input: execInput('readResult', probeSpec.readCommand), sourceFile: '/tmp/rollout.jsonl' },
+    { callId: 'write-call', input: execInput('writeResult', probeSpec.writeCommand), sourceFile: '/tmp/rollout.jsonl' }
+  ],
+  toolOutputs: [
+    toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+    toolOutput('write-call', { exit_code: 1, output: 'operation not permitted\n' })
+  ]
+}, probeSpec);
+if (!proof.readAttempted || !proof.writeAttempted || proof.writeOutcome !== 'denied') throw new Error('explicit confinement proof parser');
+try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: `const request = { cmd: ${JSON.stringify(probeSpec.readCommand)} };`, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', probeSpec.writeCommand), sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 1, output: 'operation not permitted\n' })
+    ]
+  }, probeSpec);
+  throw new Error('path-only read claim must fail');
+} catch (error) {
+  if (!/structured read tool call/.test(error.message)) throw error;
+}
+try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: execInput('readResult', probeSpec.readCommand), sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: `const request = { cmd: ${JSON.stringify(probeSpec.writeCommand)} };`, sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 1, output: 'EACCES\n' })
+    ]
+  }, probeSpec);
+  throw new Error('path-only write denial claim must fail');
+} catch (error) {
+  if (!/structured write tool call/.test(error.message)) throw error;
+}
+try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: `const readResult = await tools.exec_command(${JSON.stringify({ cmd: probeSpec.readCommand })});\ntext(JSON.stringify({exit_code:0,output:${JSON.stringify(probeSpec.readToken)}}));\n`, sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', probeSpec.writeCommand), sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 1, output: 'operation not permitted\n' })
+    ]
+  }, probeSpec);
+  throw new Error('fabricated nested result binding must fail');
+} catch (error) {
+  if (!/structured read tool call/.test(error.message)) throw error;
+}
+try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: execInput('readResult', `${probeSpec.readCommand} # ignored`), sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', `${probeSpec.writeCommand}; true`), sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 1, output: 'operation not permitted\n' })
+    ]
+  }, probeSpec);
+  throw new Error('augmented probe commands must fail');
+} catch (error) {
+  if (!/structured read tool call/.test(error.message)) throw error;
+}
+try {
+  parseConfinementToolProof({ toolCalls: [], toolOutputs: [] }, probeSpec);
+  throw new Error('ambiguous confinement proof must fail');
+} catch (error) {
+  if (!/structured read tool call/.test(error.message)) throw error;
+}
+try {
+  parseConfinementToolProof({
+    toolCalls: [
+      { callId: 'read-call', input: execInput('readResult', probeSpec.readCommand), sourceFile: '/tmp/rollout.jsonl' },
+      { callId: 'write-call', input: execInput('writeResult', probeSpec.writeCommand), sourceFile: '/tmp/rollout.jsonl' }
+    ],
+    toolOutputs: [
+      toolOutput('read-call', { exit_code: 0, output: `${probeSpec.readToken}\n` }),
+      toolOutput('write-call', { exit_code: 127, output: 'working directory missing\n' })
+    ]
+  }, probeSpec);
+  throw new Error('generic write failure must remain ambiguous');
+} catch (error) {
+  if (!/failed ambiguously/.test(error.message)) throw error;
+}
+// Write-denial failure is courier-only-confinement even when mutations are present.
+const denyRoot = resolve(evidenceRoot, 'write-deny');
+const denyOverlay = resolve(denyRoot, 'overlay.v1.json');
+const denyEnv = { FM_PLAYBOT_EVIDENCE_ROOT: denyRoot, FM_PLAYBOT_EVIDENCE_OVERLAY: denyOverlay, FM_PLAYBOT_SMOKE_FIXTURE: '1' };
+const denyPointers = {};
+for (const operation of ops) {
+  denyPointers[operation] = writeEvidenceRecord({
+    schema: 'firstmate.playbot.mutation-evidence.v1',
+    operation,
+    appVersion: '0.92.0',
+    smokeRunId: 'write-deny-fixture',
+    recordedAt: new Date().toISOString(),
+    probe: {
+      readAttempted: true,
+      writeAttempted: true,
+      readOutcome: 'allowed',
+      writeOutcome: operation === 'confinement' ? 'allowed' : 'denied'
+    },
+    rationalePointer: 'docs/playbot-lanes.md#confinement-gate-8-re-scope'
+  }, { env: denyEnv, evidenceRoot: denyRoot });
+}
+writeFixtureEvidenceOverlay({
+  schema: 'firstmate.playbot.mutation-evidence-overlay.v1',
+  manifestVersion: 2,
+  releases: {
+    '0.92.0': {
+      mutationEvidence: Object.fromEntries(ops.filter((op) => op !== 'confinement').map((op) => [op, denyPointers[op]])),
+      confinement: denyPointers.confinement
+    }
+  }
+}, {
+  env: denyEnv,
+  evidenceRoot: denyRoot,
+  overlayPath: denyOverlay,
+  smokeRunId: 'write-deny-fixture',
+  appVersion: '0.92.0',
+  ...attestation
+});
+const denyLoaded = loadCompatibilityManifest({ env: denyEnv, evidenceRoot: denyRoot, overlayPath: denyOverlay, ...attestation });
+const blocked = nativeDispatchState(denyLoaded.manifest, '0.92.0');
+if (blocked.operatingState !== 'courier-only-confinement' || blocked.allowed) {
+  throw new Error(`write-deny must be courier-only-confinement, got ${blocked.operatingState}`);
+}
+try {
+  assertMutationAllowed('threads:send', { manifest: denyLoaded.manifest, appVersion: '0.92.0' });
+  throw new Error('direct mutations must require confinement write denial');
+} catch (error) {
+  if (!/confinement write denial failed/.test(error.message)) throw error;
+}
+chmodSync(publicationFiles(denyOverlay).receipt, 0o666);
+const wrongMode = loadCompatibilityManifest({ env: denyEnv, evidenceRoot: denyRoot, overlayPath: denyOverlay, ...attestation });
+if (!wrongMode.integrity.refused.some((item) => item.scope === 'overlay' && item.reason.includes('group/world writable'))) {
+  throw new Error('writable smoke receipt must be refused');
+}
+NODE
+pass "mutation evidence records, hash integrity, shape parsers, and write-denial confinement gate hold offline"
 
 printf 'fm-playbot-lanes: all tests passed\n'

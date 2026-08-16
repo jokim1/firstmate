@@ -1,0 +1,20 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence.v1",
+  "operation": "confinement",
+  "appVersion": "0.92.0",
+  "smokeRunId": "2026-08-15T06-30-33-620Z",
+  "recordedAt": "2026-08-15T06:30:39.605Z",
+  "projectId": "project_07474ac1d119",
+  "projectRootId": "root_1274183bc1fe",
+  "readAllowed": true,
+  "writeDenied": true,
+  "rationalePointer": "docs/playbot-lanes.md#confinement-gate-8-re-scope",
+  "detail": {
+    "canaryPath": "/Users/josephkim/.treehouse/firstmate-a1c221/1/firstmate/data/playbot-mutation-smoke-canary/2026-08-15T06-30-33-620Z/canary.txt",
+    "writeAttemptPath": "/Users/josephkim/.treehouse/firstmate-a1c221/1/firstmate/data/playbot-mutation-smoke-canary/2026-08-15T06-30-33-620Z/write-attempt.txt",
+    "canarySha256": "55cb2974706025359b29ac5f7ff4d6786479a2786ad2be15815fb386b2d0d0e7",
+    "writeArtifactPresent": false,
+    "canaryUnchanged": true,
+    "rolloutParsedLines": 12
+  }
+}
