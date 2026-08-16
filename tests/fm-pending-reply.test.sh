@@ -1232,6 +1232,170 @@ test_tick_retires_record_that_resolves_mid_poll() {
   pass "tick retires a record that resolves mid-poll"
 }
 
+# Panel BREAK 1: resolved+escalated records that cannot close must leave the hot
+# walk via quarantine without losing open status-fold decisions.
+seed_stuck_resolved_escalated() {  # <state> <home> <corr> <parent_status> <summary>
+  local state=$1 home=$2 corr=$3 parent_status=$4 summary=$5 rec dir
+  dir=$(fm_pending_reply_dir "$state")
+  mkdir -p "$dir" || return 1
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  cat > "$rec" <<EOF
+schema=fm-pending-reply.v1
+corr_id=$corr
+task_id=hibit
+parent_home=$home
+parent_status=$parent_status
+parent_status_scan_signature=
+request_summary=$summary
+created_epoch=10000
+delivered_epoch=10001
+phase=resolved
+turn_seen_busy=1
+request_turn_completed_epoch=
+recovery_attempted_epoch=
+recovery_sender_pid=
+recovery_sender_identity=
+recovery_sent_epoch=
+recovery_delivery_outcome=
+recovery_turn_seen_busy=0
+recovery_turn_completed_epoch=
+escalated_epoch=10040
+escalation_closed_epoch=
+resolved_epoch=10050
+resolved_via=status
+wrong_home_hits=0
+wrong_home_sightings=
+wrong_home_scan_signature=
+grace_secs=120
+EOF
+  chmod 600 "$rec"
+}
+
+test_blank_parent_status_resolved_escalated_quarantines() {
+  local home state corr stuck dest log open
+  home=$(setup_parent stuck-blank-ps)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13000
+  corr=$(printf 'b%015x' 1)
+  seed_stuck_resolved_escalated "$state" "$home" "$corr" "" "blank parent status"
+  fm_pending_reply_retire_resolved "$state" "$corr" \
+    || fail "blank parent_status resolved+escalated must leave the hot path"
+  [ ! -f "$(fm_pending_reply_path "$state" "$corr")" ] \
+    || fail "hot pending-replies must not retain blank-parent_status stuck records"
+  dest=$(fm_pending_reply_stuck_path "$state" "$corr")
+  [ -f "$dest" ] || fail "stuck record must land in pending-replies-stuck/"
+  [ "$(fm_pending_reply_get "$dest" phase)" = resolved ] \
+    || fail "quarantined record must remain phase=resolved"
+  log=$(fm_pending_reply_stuck_log "$state")
+  [ -f "$log" ] || fail "stuck receipt log must exist"
+  grep -Fq "corr=$corr" "$log" || fail "stuck log must name the corr"
+  grep -Fq "reason=blank-parent-status" "$log" \
+    || fail "stuck log must classify blank-parent-status"
+  pass "blank parent_status resolved+escalated quarantines out of the hot walk"
+}
+
+test_unwritable_status_resolved_escalated_quarantines_preserves_open() {
+  local home state corr dest log open status
+  home=$(setup_parent stuck-unwritable)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13100
+  corr=$(printf 'b%015x' 2)
+  status="$state/hibit.status"
+  # Open escalation still in the fold; status is readable but not writable.
+  # chmod 444 (not 000) so the fold can still observe the open decision.
+  printf 'blocked [key=pending-reply-%s]: pending-reply-missed: task=hibit pending-reply-id=%s request=unwritable status\n' \
+    "$corr" "$corr" > "$status"
+  chmod 444 "$status" || fail "could not make parent status read-only"
+  seed_stuck_resolved_escalated "$state" "$home" "$corr" "$status" "unwritable status"
+  fm_pending_reply_retire_resolved "$state" "$corr" \
+    || fail "unwritable status resolved+escalated must leave the hot path"
+  [ ! -f "$(fm_pending_reply_path "$state" "$corr")" ] \
+    || fail "hot path must not retain unwritable-status stuck records"
+  dest=$(fm_pending_reply_stuck_path "$state" "$corr")
+  [ -f "$dest" ] || fail "unwritable-status record must quarantine"
+  log=$(fm_pending_reply_stuck_log "$state")
+  grep -Fq "corr=$corr" "$log" || fail "stuck log must name the unwritable corr"
+  grep -Eq 'reason=(status-unwritable|close-failed)' "$log" \
+    || fail "stuck log must classify unwritable/close-failed, got: $(cat "$log")"
+  open=$(status_open_decisions "$status")
+  assert_contains "$open" "pending-reply-$corr" \
+    "open escalation must remain open after quarantine (no false close)"
+  chmod 644 "$status" 2>/dev/null || true
+  pass "unwritable status quarantines without closing the open fold decision"
+}
+
+test_two_hundred_stuck_empty_parent_status_leave_hot_path() {
+  local home state dir i corr hot_left stuck_left
+  home=$(setup_parent stuck-scale)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13200
+  dir=$(fm_pending_reply_dir "$state")
+  mkdir -p "$dir" || fail "could not create hot pending-replies dir"
+  for i in $(seq 1 200); do
+    corr=$(printf 'c%015x' "$i")
+    seed_stuck_resolved_escalated "$state" "$home" "$corr" "" "stuck scale $i" \
+      || fail "could not seed stuck record $i"
+  done
+  fm_pending_reply_tick "$state" || fail "tick over stuck population failed"
+  hot_left=0
+  for corr in "$dir"/*; do
+    [ -f "$corr" ] || continue
+    case "$(basename "$corr")" in .*) continue ;; esac
+    hot_left=$((hot_left + 1))
+  done
+  [ "$hot_left" -eq 0 ] \
+    || fail "hot pending-replies must be empty after stuck quarantine, left $hot_left"
+  stuck_left=0
+  for corr in "$(fm_pending_reply_stuck_dir "$state")"/*; do
+    [ -f "$corr" ] || continue
+    case "$(basename "$corr")" in .*) continue ;; esac
+    stuck_left=$((stuck_left + 1))
+  done
+  [ "$stuck_left" -eq 200 ] \
+    || fail "all 200 stuck records must quarantine, got $stuck_left"
+  pass "200 stuck empty-parent_status records leave the hot walk in one tick"
+}
+
+test_unresolved_escalated_never_quarantines() {
+  local home state corr rec
+  home=$(setup_parent never-quarantine-open)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13300
+  corr=$(fm_pending_reply_create "$home" "$state" "hibit" "still open escalate")
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_set "$rec" phase escalated
+  fm_pending_reply_set "$rec" escalated_epoch 13290
+  if fm_pending_reply_retire_resolved "$state" "$corr" 2>/dev/null; then
+    fail "unresolved escalated must refuse retire"
+  fi
+  [ -f "$rec" ] || fail "unresolved escalated must remain on the hot path"
+  [ ! -f "$(fm_pending_reply_stuck_path "$state" "$corr")" ] \
+    || fail "unresolved escalated must never quarantine"
+  pass "unresolved escalated never quarantines"
+}
+
+test_quarantine_mv_failure_keeps_hot_record() {
+  local home state corr stuck_dir dest rec
+  home=$(setup_parent stuck-mv-fail)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13400
+  corr=$(printf 'b%015x' 3)
+  seed_stuck_resolved_escalated "$state" "$home" "$corr" "" "mv failure"
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  stuck_dir=$(fm_pending_reply_stuck_dir "$state")
+  dest=$(fm_pending_reply_stuck_path "$state" "$corr")
+  # Non-file destination cannot be replaced by mv of the hot record.
+  mkdir -p "$dest" || fail "could not create blocking stuck destination"
+  if fm_pending_reply_quarantine_resolved "$state" "$corr" blank-parent-status 2>/dev/null; then
+    fail "quarantine must fail closed when the stuck destination cannot accept the move"
+  fi
+  [ -f "$rec" ] || fail "hot record must remain when quarantine mv cannot complete"
+  [ ! -f "$dest" ] || fail "blocking destination must not become the quarantined file"
+  rm -rf "$stuck_dir"
+  pass "quarantine mv failure keeps the hot record"
+}
+
 # --- run --------------------------------------------------------------------
 
 test_normal_correlated_reply_resolves_once
@@ -1265,5 +1429,10 @@ test_failed_send_discards_undelivered_expectation
 test_large_resolved_population_retires_and_keeps_beacon_fresh
 test_single_slow_observation_keeps_beacon_fresh_mid_poll
 test_tick_retires_record_that_resolves_mid_poll
+test_blank_parent_status_resolved_escalated_quarantines
+test_unwritable_status_resolved_escalated_quarantines_preserves_open
+test_two_hundred_stuck_empty_parent_status_leave_hot_path
+test_unresolved_escalated_never_quarantines
+test_quarantine_mv_failure_keeps_hot_record
 
 printf 'ok - all pending-reply tests passed\n'

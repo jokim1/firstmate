@@ -15,13 +15,19 @@
 # and escalate once if the recovery turn also completes without a correlated
 # report. Never loop, never repeatedly inject, never silently expire unresolved
 # records, and never treat wrong-home or structured-home heuristics as
-# acknowledgement. Resolved records (and only resolved records) are retired from
-# state/pending-replies/ once their escalation lifecycle is closed, so the
-# watcher tick cannot accumulate answered files until a single poll starves the
-# liveness beacon.
+# acknowledgement. Resolved records leave the hot state/pending-replies/ walk
+# once their escalation lifecycle is closed, or - when close cannot complete
+# (blank parent_status, unwritable status, permanent close failure) - via
+# quarantine to state/pending-replies-stuck/ with a durable receipt. That keeps
+# open status-fold decisions intact while the hot poll cannot re-accumulate
+# answered files until a single iteration starves the liveness beacon.
+# Unresolved records are never silently expired.
 #
 # Record location (parent FM_HOME):
 #   state/pending-replies/<corr_id>
+# Stuck-resolved quarantine (not walked by the tick):
+#   state/pending-replies-stuck/<corr_id>
+#   state/pending-replies-stuck.log
 # Each record is a key=value file owned by this library. Schema:
 #   schema=fm-pending-reply.v1
 #   corr_id=                privacy-safe correlation token
@@ -124,6 +130,21 @@ fm_pending_reply_dir() {  # <state-dir>
 
 fm_pending_reply_path() {  # <state-dir> <corr_id>
   printf '%s/%s' "$(fm_pending_reply_dir "$1")" "$2"
+}
+
+# Cold storage for resolved records whose escalation close cannot complete.
+# Not scanned by fm_pending_reply_tick - preserves open status-fold decisions
+# while keeping the hot pending-replies walk bounded.
+fm_pending_reply_stuck_dir() {  # <state-dir>
+  printf '%s/pending-replies-stuck' "$1"
+}
+
+fm_pending_reply_stuck_path() {  # <state-dir> <corr_id>
+  printf '%s/%s' "$(fm_pending_reply_stuck_dir "$1")" "$2"
+}
+
+fm_pending_reply_stuck_log() {  # <state-dir>
+  printf '%s/pending-replies-stuck.log' "$1"
 }
 
 # Privacy-safe correlation id: 16 lowercase hex chars (64 bits of entropy).
@@ -427,11 +448,73 @@ fm_pending_reply_discard_undelivered() {  # <state-dir> <corr_id>
   rm -f "$rec"
 }
 
-# Retire a resolved pending-reply record after its escalation lifecycle is closed
-# (or never opened). Unresolved records always refuse and stay on disk.
-# Returns 0 when the record is gone (already or newly), 1 when it must remain.
+# Classify why close_escalation failed for a resolved+escalated record.
+# Used only for the stuck-receipt trail; never invents a status close line.
+fm_pending_reply_close_failure_reason() {  # <state-dir> <corr_id>
+  local state=$1 corr=$2 rec parent_status
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  parent_status=$(fm_pending_reply_get "$rec" parent_status)
+  if [ -z "$parent_status" ]; then
+    printf 'blank-parent-status'
+    return 0
+  fi
+  if [ ! -e "$parent_status" ]; then
+    printf 'missing-parent-status'
+    return 0
+  fi
+  if [ ! -w "$parent_status" ]; then
+    printf 'status-unwritable'
+    return 0
+  fi
+  printf 'close-failed'
+}
+
+# Move a resolved hot record into pending-replies-stuck/ and append one receipt.
+# Does not close open status-fold decisions. Returns 0 when the hot path is
+# clear (moved or already gone); 1 when the hot record must remain (mv failed).
+fm_pending_reply_quarantine_resolved() {  # <state-dir> <corr_id> <reason>
+  local state=$1 corr=$2 reason=$3
+  local rec stuck_dir stuck dest marker log now task_id
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  [ -f "$rec" ] || return 0
+  [ "$(fm_pending_reply_get "$rec" phase)" = resolved ] || return 1
+  stuck_dir=$(fm_pending_reply_stuck_dir "$state")
+  mkdir -p "$stuck_dir" || return 1
+  chmod 700 "$stuck_dir" 2>/dev/null || true
+  dest=$(fm_pending_reply_stuck_path "$state" "$corr")
+  # Explicit destination/move failure: leave the hot record so we never claim
+  # success while the tick would still walk it, and never drop the only durable
+  # copy without a successful quarantine landing.
+  if [ -e "$dest" ]; then
+    if [ ! -f "$dest" ]; then
+      return 1
+    fi
+    rm -f "$dest" 2>/dev/null || return 1
+  fi
+  if ! mv "$rec" "$dest" 2>/dev/null; then
+    return 1
+  fi
+  if [ ! -f "$dest" ]; then
+    return 1
+  fi
+  marker=$(fm_pending_reply_delivery_confirmation_path "$state" "$corr")
+  rm -f "$marker" 2>/dev/null || true
+  now=$(fm_pending_reply_now)
+  task_id=$(fm_pending_reply_get "$dest" task_id)
+  log=$(fm_pending_reply_stuck_log "$state")
+  printf 'epoch=%s corr=%s task=%s reason=%s phase=resolved\n' \
+    "$now" "$corr" "${task_id:-}" "${reason:-close-failed}" >> "$log" 2>/dev/null || true
+  return 0
+}
+
+# Retire a resolved pending-reply record from the hot pending-replies/ walk.
+# Happy path: escalation closed (or never opened), then delete.
+# Terminal close failure: quarantine out of the hot walk with a durable receipt
+# so open status-fold decisions stay intact and polls cannot re-accumulate
+# stuck-resolved files. Unresolved records always refuse and stay on disk.
+# Returns 0 when the hot path no longer has the record, 1 when it must remain.
 fm_pending_reply_retire_resolved() {  # <state-dir> <corr_id>
-  local state=$1 corr=$2 rec phase escalated closed marker
+  local state=$1 corr=$2 rec phase escalated closed marker reason
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 0
   phase=$(fm_pending_reply_get "$rec" phase)
@@ -440,11 +523,15 @@ fm_pending_reply_retire_resolved() {  # <state-dir> <corr_id>
   if [ -n "$escalated" ]; then
     closed=$(fm_pending_reply_get "$rec" escalation_closed_epoch)
     if [ -z "$closed" ]; then
-      fm_pending_reply_close_escalation "$state" "$corr" || return 1
-      # Re-read after close: a transient write failure must keep the record.
+      fm_pending_reply_close_escalation "$state" "$corr" || true
+      # Re-read after close: a concurrent retire may have removed the file.
       [ -f "$rec" ] || return 0
       closed=$(fm_pending_reply_get "$rec" escalation_closed_epoch)
-      [ -n "$closed" ] || return 1
+      if [ -z "$closed" ]; then
+        reason=$(fm_pending_reply_close_failure_reason "$state" "$corr")
+        fm_pending_reply_quarantine_resolved "$state" "$corr" "$reason" || return 1
+        return 0
+      fi
     fi
   fi
   marker=$(fm_pending_reply_delivery_confirmation_path "$state" "$corr")
