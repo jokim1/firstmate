@@ -474,7 +474,7 @@ fm_pending_reply_close_failure_reason() {  # <state-dir> <corr_id>
 # clear (moved or already gone); 1 when the hot record must remain (mv failed).
 fm_pending_reply_quarantine_resolved() {  # <state-dir> <corr_id> <reason>
   local state=$1 corr=$2 reason=$3
-  local rec stuck_dir stuck dest marker log now task_id
+  local rec stuck_dir dest marker log now task_id
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 0
   [ "$(fm_pending_reply_get "$rec" phase)" = resolved ] || return 1
