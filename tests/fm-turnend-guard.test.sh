@@ -210,7 +210,8 @@ watcher_identity() {
 }
 
 record_watcher_lock() {
-  local dir=$1 pid=$2 identity=$3 beacon_identity=${4-$identity} root bin_dir
+  local dir=$1 pid=$2 identity=$3 root bin_dir
+  local beacon_identity=${4-$identity}
   root=$(cd "$dir" && pwd)
   bin_dir=$(cd "$dir/bin" && pwd)
   mkdir -p "$dir/state/.watch.lock"

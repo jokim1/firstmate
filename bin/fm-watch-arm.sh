@@ -424,6 +424,21 @@ handling_successor_generation() {
   esac
 }
 
+stop_pid_bounded() {  # <pid> [tenths-of-a-second]
+  local pid=$1 limit=${2:-50} i=0
+  [ -n "$pid" ] || return 0
+  fm_pid_alive "$pid" || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  while [ "$i" -lt "$limit" ] && fm_pid_alive "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if fm_pid_alive "$pid"; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
 mode=arm
 handling_generation=
 handling_watcher_pid=
@@ -454,15 +469,7 @@ if [ "$mode" = restart ]; then
   lock_pid=$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)
   if fm_pid_alive "$lock_pid"; then
     if fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$lock_pid" "$FM_HOME"; then
-      kill -TERM "$lock_pid" 2>/dev/null || true
-      # Wait for it to actually exit before relaunching, so the fresh watcher
-      # either takes a released lock or reclaims a now-dead-pid stale lock instead
-      # of seeing the dying one as a live holder and no-opping.
-      i=0
-      while [ "$i" -lt 50 ] && fm_pid_alive "$lock_pid"; do
-        sleep 0.1
-        i=$((i + 1))
-      done
+      stop_pid_bounded "$lock_pid"
     else
       if ! clear_stale_recorded_watcher_lock; then
         echo "watcher: FAILED - stale watcher recovery state could not be persisted" >&2
@@ -495,9 +502,7 @@ fi
 child=
 child_out=
 cleanup_child() {
-  if [ -n "$child" ] && fm_pid_alive "$child"; then
-    kill -TERM "$child" 2>/dev/null || true
-  fi
+  [ -z "$child" ] || stop_pid_bounded "$child"
   if [ -n "$child_out" ]; then
     rm -f "$child_out" 2>/dev/null || true
   fi
@@ -507,10 +512,8 @@ cleanup_child() {
 handle_arm_signal() {
   local signal=$1 rc=$2
   trap - HUP TERM INT
-  if [ -n "$child" ] && fm_pid_alive "$child"; then
-    kill -TERM "$child" 2>/dev/null || true
-    wait "$child" 2>/dev/null || true
-  fi
+  [ -z "$child" ] || stop_pid_bounded "$child"
+  clear_stale_recorded_watcher_lock || true
   cycle_log_append "$rc" "$signal" arm-interrupted none
   cleanup_child
   exit "$rc"
