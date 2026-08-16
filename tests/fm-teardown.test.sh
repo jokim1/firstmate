@@ -1,60 +1,7 @@
 #!/usr/bin/env bash
-# Tests for bin/fm-teardown.sh's landed-work safety and stale-lock recovery.
-#
-# The check refuses to tear down a worktree whose work has not LANDED, because
-# treehouse return hard-resets the worktree. "Landed" means reachable from a remote
-# OR - for a normal ship task whose commits are not so reachable - its PR is merged
-# and GitHub reports a PR head that contains the current local work, or its content
-# is already in the up-to-date default branch.
-#
-# Covers four fixes:
-#   - local-only fork-remote: a fork IS a remote, so fork-pushed upstream-
-#     contribution PRs are teardown-eligible (the pre-fix code false-refused them).
-#   - squash-merge-then-delete-branch: the branch's own commits live nowhere on a
-#     remote after a squash merge deletes the head branch, yet the change is fully in
-#     main. Reachability alone false-refused this common GitHub flow; the check now
-#     recognizes a merged PR head containing the local work (or the content already
-#     in main) as landed.
-#   - open-PR veto: content-in-default is provenance-blind, so a SIBLING PR that
-#     landed the same change makes an unmerged task's content look "landed" and the
-#     old check reaped its still-open PR's state. A recorded-but-open PR now vetoes
-#     the content fallback: the task's own work has not landed until its own PR merges.
-#   - teardown-lock-race: a killed crew process can leave a transient worktree
-#     git index.lock that blocks teardown. The return path retries on the lock
-#     error signature (even if the lock self-clears mid-check), then only removes a
-#     provably stale lock before re-running safety checks.
-#
-# Matrix:
-#   (a) local-only + HEAD on a fork remote-tracking branch     -> ALLOW  (fork fix)
-#   (b) local-only + truly unpushed work (no remote, not main) -> REFUSE (safety)
-#   (c) local-only + merged into local main, no remote         -> ALLOW  (no regression)
-#   (d) no-mistakes + HEAD on origin remote-tracking branch    -> ALLOW  (no regression)
-#   (e) no-mistakes + unpushed, no PR, content not in default  -> REFUSE (safety)
-#   (f) local-only + truly unpushed + --force                  -> ALLOW  (escape hatch)
-#   (g) no-mistakes + squash-merged PR, exact PR head          -> ALLOW  (squash fix)
-#   (h) no-mistakes + no PR but content already in default     -> ALLOW  (content fallback)
-#   (i) no-mistakes + dirty worktree, even when work landed     -> REFUSE (dirty wins)
-#   (j) no-mistakes + gh lookup errors + content not in default -> REFUSE (fail-safe)
-#   (k) no-mistakes + merged PR but HEAD moved afterward        -> REFUSE (stale PR)
-#   (l) no-mistakes + stale origin/main but fetched content     -> ALLOW  (fresh fetch)
-#   (m) no-mistakes + local HEAD ancestor of merged PR head     -> ALLOW  (lagging local)
-#   (n) no-mistakes + replayed unpushed patch in merged PR head -> ALLOW  (replayed local)
-#   (o) fm-pr-check rerun after HEAD moved                      -> no stale pr_head
-#   (p) fm-pr-check when local HEAD lags                        -> record remote PR head
-#   (q) no-mistakes + NO pr= recorded, PR discovered by branch  -> ALLOW  (yolo/no-CI merge)
-#  (za) no-mistakes + recorded pr= OPEN + sibling content in default -> REFUSE (open-PR veto)
-#  (zb) no-mistakes + recorded pr= MERGED + sibling content in default -> ALLOW (own PR landed)
-#
-# Also covers backlog teardown-lock-race: a git index.lock left in the worktree by a
-# killed crew process (bin/fm-teardown.sh's teardown_treehouse_return).
-#   (r) provably-stale index.lock (old mtime, no live holder) -> lock removed, ALLOW
-#   (s) index.lock with a live holder, any age                -> lock kept, REFUSE
-#   (t) lsof error while checking index.lock                  -> lock kept, REFUSE
-#   (u) dirty worktree after stale lock cleanup               -> lock removed, REFUSE
-#   (v) non-linked repo index.lock                            -> lock removed, ALLOW
-#   (w) index.lock mtime read failure                         -> lock kept, REFUSE
-#   (x) transient lock cleared after first failed return      -> retry ALLOW
-#   (y) persistent lock (never clears, not provably stale)    -> REFUSE loudly
+# Regression tests for bin/fm-teardown.sh's landed-work safety and stale-lock recovery.
+# That script's header is the single owner of the complete safety contract.
+# Case-local comments describe only the evidence each fixture isolates.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -2811,6 +2758,70 @@ EOF
   pass "post-reap worktree mutations are revalidated before destructive return"
 }
 
+test_playbot_archive_mutation_refuses_before_workspace_deletion() {
+  local case_dir rc
+  case_dir=$(make_case playbot-archive-mutation-refusal)
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=playbot:thread-task-x1" \
+    "endpoint_task_id=task-x1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only" \
+    "backend=playbot" \
+    "playbot_project_id=project-alpha" \
+    "playbot_project_root_id=root-alpha" \
+    "playbot_workspace_id=workspace-task-x1" \
+    "playbot_thread_id=thread-task-x1" \
+    "playbot_route_gen=1" \
+    "playbot_delivery_id=delivery-task-x1"
+  land_shippable_commit "$case_dir"
+  printf '%s\n' '{"route":"preserve"}' > "$case_dir/state/task-x1.playbot-route.json"
+  printf '%s\n' '{"outbox":"preserve"}' > "$case_dir/state/task-x1.playbot-outbox.json"
+
+  cat > "$case_dir/playbot-lanes.mjs" <<'JS'
+import { appendFileSync, writeFileSync } from "node:fs";
+
+const [command] = process.argv.slice(2);
+const log = process.env.FM_PLAYBOT_TEST_LOG;
+const worktree = process.env.FM_PLAYBOT_TEST_WORKTREE;
+if (command === "validate-endpoint") process.exit(0);
+if (command === "agent-state") {
+  process.stdout.write("alive\n");
+  process.exit(0);
+}
+appendFileSync(log, `${command}\n`);
+if (command === "archive") {
+  writeFileSync(`${worktree}/late-worker-write.txt`, "created while Playbot archived the thread\n");
+}
+process.exit(0);
+JS
+
+  rc=0
+  FM_PLAYBOT_LANES_OVERRIDE="$case_dir/playbot-lanes.mjs" \
+  FM_PLAYBOT_TEST_LOG="$case_dir/playbot.log" \
+  FM_PLAYBOT_TEST_WORKTREE="$case_dir/wt" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-archive-mutation-refusal: teardown should refuse the late worker write"
+  assert_grep "archive" "$case_dir/playbot.log" \
+    "playbot-archive-mutation-refusal: fixture did not archive the Playbot thread"
+  if grep -qxF delete "$case_dir/playbot.log"; then
+    fail "playbot-archive-mutation-refusal: teardown deleted the workspace after the late write"
+  fi
+  assert_present "$case_dir/wt/late-worker-write.txt" \
+    "playbot-archive-mutation-refusal: late worker write was not preserved"
+  assert_grep "has uncommitted changes" "$case_dir/stderr" \
+    "playbot-archive-mutation-refusal: post-archive safety check did not report the late write"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "playbot-archive-mutation-refusal: teardown removed task metadata after refusing"
+  assert_present "$case_dir/state/task-x1.playbot-route.json" \
+    "playbot-archive-mutation-refusal: teardown removed the Playbot route after refusing"
+  assert_present "$case_dir/state/task-x1.playbot-outbox.json" \
+    "playbot-archive-mutation-refusal: teardown removed the Playbot outbox after refusing"
+  pass "Playbot archive-time mutations refuse workspace deletion and preserve task records"
+}
+
 
 # --- v5 default-deny regressions (plan v5 break matrix) ---
 
@@ -3170,3 +3181,4 @@ test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
 test_process_reap_mutation_refuses_before_worktree_return
+test_playbot_archive_mutation_refuses_before_workspace_deletion

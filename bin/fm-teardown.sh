@@ -16,9 +16,11 @@
 # Recorded pr= overlay: OPEN always refuses; CLOSED and unconfirmed accept only A
 # (never T); MERGED accepts A/M/T. Missing ordinary-ship worktree refuses (restore
 # an inspectable worktree or captain --force); pr_head alone never authorizes.
-# The same dirty+land+four-way classify recheck runs after quiescence before every
-# ordinary treehouse return (including lock-retry). Uncommitted changes are never
-# landed. A missing pr= still discovers a merged PR by branch when possible so
+# The same dirty+land+four-way classify recheck runs after quiescence immediately
+# before every ordinary destructive worktree return or removal: each Treehouse
+# return attempt (including lock retries) and Playbot workspace deletion after
+# endpoint archival or confirmed absence. Uncommitted changes are never landed.
+# A missing pr= still discovers a merged PR by branch when possible so
 # yolo/no-CI merges are not false-refused. local-only keeps the existing merge-to-
 # local-default carveout when there is no remote.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
