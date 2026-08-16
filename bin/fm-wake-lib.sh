@@ -196,6 +196,11 @@ fm_guard_grace_seconds() {
 
 FM_WATCHER_HEALTHY_PID=
 FM_WATCHER_HEALTHY_IDENTITY=
+fm_watcher_generation_beaconed() {
+  local state=$1 identity=$2
+  [ "$(cat "$state/.watch.lock/beacon-identity" 2>/dev/null || true)" = "$identity" ]
+}
+
 fm_watcher_healthy() {
   local state=$1 watch_path=$2 grace=${3:-} home=${4:-$FM_HOME} lockdir beat pid identity age
   [ -n "$grace" ] || grace=$(fm_guard_grace_seconds)
@@ -207,6 +212,7 @@ fm_watcher_healthy() {
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
   identity=$FM_WATCHER_MATCHED_IDENTITY
+  fm_watcher_generation_beaconed "$state" "$identity" || return 1
   age=$(fm_path_age "$beat")
   [ "$age" -lt "$grace" ] || return 1
   # shellcheck disable=SC2034 # Read by callers after fm_watcher_healthy returns.

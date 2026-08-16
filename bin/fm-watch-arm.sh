@@ -246,16 +246,10 @@ clear_stale_recorded_watcher_lock() {
 # started/healthy watcher that is not really there.
 HEALTHY_PID=
 HEALTHY_IDENTITY=
-watcher_generation_beaconed() {
-  local identity=$1
-  [ "$(cat "$WATCH_LOCK/beacon-identity" 2>/dev/null || true)" = "$identity" ]
-}
-
 healthy_watcher() {
   HEALTHY_PID=
   HEALTHY_IDENTITY=
   fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" || return 1
-  watcher_generation_beaconed "$FM_WATCHER_HEALTHY_IDENTITY" || return 1
   HEALTHY_PID=$FM_WATCHER_HEALTHY_PID
   HEALTHY_IDENTITY=$FM_WATCHER_HEALTHY_IDENTITY
 }
@@ -272,7 +266,7 @@ live_watcher_holder() {
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$pid" "$FM_HOME" || return 1
   identity=$FM_WATCHER_MATCHED_IDENTITY
-  watcher_generation_beaconed "$identity" || return 1
+  fm_watcher_generation_beaconed "$STATE" "$identity" || return 1
   HEALTHY_PID=$pid
   HEALTHY_IDENTITY=$identity
   return 0
