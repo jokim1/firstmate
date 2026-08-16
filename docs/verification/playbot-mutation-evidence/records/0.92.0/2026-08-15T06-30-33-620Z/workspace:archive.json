@@ -1,0 +1,17 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence.v1",
+  "operation": "workspace:archive",
+  "appVersion": "0.92.0",
+  "smokeRunId": "2026-08-15T06-30-33-620Z",
+  "recordedAt": "2026-08-15T06:30:39.629Z",
+  "projectId": "project_07474ac1d119",
+  "projectRootId": "root_1274183bc1fe",
+  "request": {
+    "workspaceId": "ws_caeec1261dad"
+  },
+  "ok": false,
+  "error": "Error invoking remote method 'workspace:archive': Error: Workspace cleanup is experimental and is currently disabled.",
+  "resultWasUndefined": true,
+  "requestSha256": "fa03186787eef7fa909447a3399e131a2f0a2188963d939003af50a5587d34fa",
+  "note": "feature-disabled or error (delete used for cleanup)"
+}
