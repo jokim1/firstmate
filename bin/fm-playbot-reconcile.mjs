@@ -225,14 +225,14 @@ export function reconcileCheck(taskId, options = {}) {
     printed.push(`playbot-reconcile-failure task=${taskId} stage=outbox`);
     return { printed, outbox: null, exitCode: 1, error: error.message };
   }
-  const failOnce = (stage, message) => {
-    const signature = `${stage}: ${message}`;
+  const failOnce = (stage, message, episode = message) => {
+    const signature = `${stage}: ${episode}`;
     outbox.lastReconcileAt = new Date().toISOString();
     if (outbox.lastFailure?.signature === signature && outbox.lastFailure?.printed) {
       writePrivateJsonAtomic(outboxPathFor(stateDir, taskId), outbox);
       return { printed, outbox, exitCode: 1 };
     }
-    outbox.lastFailure = { signature, stage, at: new Date().toISOString(), printed: true };
+    outbox.lastFailure = { signature, stage, message, at: new Date().toISOString(), printed: true };
     writePrivateJsonAtomic(outboxPathFor(stateDir, taskId), outbox);
     printed.push(`playbot-reconcile-failure task=${taskId} stage=${stage}`);
     return { printed, outbox, exitCode: 1 };
@@ -265,9 +265,14 @@ export function reconcileCheck(taskId, options = {}) {
   if (existsSync(txnPath)) {
     try {
       const txn = parseDispatchTransaction(readFileSync(txnPath, 'utf8'));
-      const ageSecs = (Date.now() - statSync(txnPath).mtimeMs) / 1_000;
+      const txnMtimeMs = statSync(txnPath).mtimeMs;
+      const ageSecs = (Date.now() - txnMtimeMs) / 1_000;
       if (txn.state && txn.state !== 'worker-started' && ageSecs > TXN_DEADLINE_SECS) {
-        return failOnce('dispatch-transaction', `txn-state ${txn.state} is ${Math.round(ageSecs)}s old, past the ${TXN_DEADLINE_SECS}s deadline`);
+        return failOnce(
+          'dispatch-transaction',
+          `txn-state ${txn.state} is ${Math.round(ageSecs)}s old, past the ${TXN_DEADLINE_SECS}s deadline`,
+          `txn-state ${txn.state} mtime=${txnMtimeMs} past deadline`
+        );
       }
     } catch (error) {
       return failOnce('dispatch-transaction', `unreadable transaction: ${error.message}`);
