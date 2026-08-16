@@ -691,7 +691,11 @@ playbot_retire_records() {
 }
 
 playbot_teardown_endpoint() {
-  local proof gone_rc
+  local pre_workspace_removal_check=${1:-} proof gone_rc
+  [ -n "$pre_workspace_removal_check" ] || {
+    echo "error: playbot teardown has no pre-removal safety check; preserving task state" >&2
+    return 1
+  }
   fm_backend_source playbot || {
     echo "error: playbot backend adapter could not be loaded; preserving task state" >&2
     return 1
@@ -703,7 +707,7 @@ playbot_teardown_endpoint() {
   # Adapter: stop current turn, archive exact task-owned thread, optionally
   # archive/remove workspace. Prints: retired | retained:<reason> | refuse:<reason>
   set +e
-  proof=$(fm_backend_playbot_teardown "$META" "$ID" "$T" "$WT" "$PLAYBOT_WORKSPACE_ID" "$PLAYBOT_THREAD_ID")
+  proof=$(fm_backend_playbot_teardown "$META" "$ID" "$T" "$WT" "$PLAYBOT_WORKSPACE_ID" "$PLAYBOT_THREAD_ID" "$pre_workspace_removal_check")
   gone_rc=$?
   set -e
   case "$gone_rc:$proof" in
@@ -2841,7 +2845,7 @@ elif [ "$BACKEND" = playbot ] && [ "$KIND" != secondmate ]; then
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
   fi
   validate_worktree_teardown_safety_with_lock_recovery || exit 1
-  playbot_teardown_endpoint || exit 1
+  playbot_teardown_endpoint validate_worktree_teardown_safety_with_lock_recovery || exit 1
   if [ "$PLAYBOT_ENDPOINT_RETIRED" = 1 ]; then
     playbot_retire_records
   else
