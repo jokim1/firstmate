@@ -959,10 +959,12 @@ teardown_default_remote() {
 # Fetch live default tip D; after fetch re-read remote default name + OID and
 # require both match the fetched snapshot (closes same-branch OID drift). Echo D.
 live_default_tip() {
-  local remote name fetch_ref D live_sym live_name live_oid
+  local remote name fetch_ref D live_sym_output live_sym live_name live_oid_output live_oid initial_symref=0
   remote=$(teardown_default_remote) || return 1
-  live_sym=$(git -C "$PROJ" ls-remote --symref "$remote" HEAD 2>/dev/null | awk '/^ref:/ { print $2; exit }')
+  live_sym_output=$(git -C "$PROJ" ls-remote --symref "$remote" HEAD 2>/dev/null) || return 1
+  live_sym=$(printf '%s\n' "$live_sym_output" | awk '/^ref:/ { print $2; exit }')
   if [ -n "$live_sym" ]; then
+    initial_symref=1
     name=${live_sym#refs/heads/}
     [ "$name" != "$live_sym" ] || return 1
   else
@@ -973,12 +975,17 @@ live_default_tip() {
   git -C "$PROJ" fetch --quiet "$remote" "+refs/heads/$name:$fetch_ref" >/dev/null 2>&1 || return 1
   D=$(git -C "$PROJ" rev-parse --verify --quiet "$fetch_ref^{commit}" 2>/dev/null) || return 1
   [ -n "$D" ] || return 1
-  live_sym=$(git -C "$PROJ" ls-remote --symref "$remote" HEAD 2>/dev/null | awk '/^ref:/ { print $2; exit }')
+  live_sym_output=$(git -C "$PROJ" ls-remote --symref "$remote" HEAD 2>/dev/null) || return 1
+  live_sym=$(printf '%s\n' "$live_sym_output" | awk '/^ref:/ { print $2; exit }')
+  if [ "$initial_symref" = 1 ]; then
+    [ -n "$live_sym" ] || return 1
+  fi
   if [ -n "$live_sym" ]; then
     live_name=${live_sym#refs/heads/}
     [ "$live_name" = "$name" ] || return 1
   fi
-  live_oid=$(git -C "$PROJ" ls-remote "$remote" "refs/heads/$name" 2>/dev/null | awk 'NR == 1 { print $1; exit }')
+  live_oid_output=$(git -C "$PROJ" ls-remote "$remote" "refs/heads/$name" 2>/dev/null) || return 1
+  live_oid=$(printf '%s\n' "$live_oid_output" | awk 'NR == 1 { print $1; exit }')
   [ -n "$live_oid" ] || return 1
   [ "$live_oid" = "$D" ] || return 1
   # Ensure the worktree object db can resolve D (shared repo for linked worktrees).
@@ -1323,16 +1330,22 @@ cleanup_stale_lock_for_safety_check() {
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
 # stale git index.lock left by a killed crew process. See the script header.
 teardown_treehouse_return() {
-  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-}
-  local out lock attempt=0 max_retries lock_desc
+  local dir=$1 cd_dir=$2 label=$3 pre_return_check=${4:-}
+  local out lock attempt=0 max_retries lock_desc return_rc
 
   # Capture stdout+stderr so non-lock failures stay visible and lock failures can
   # be matched by signature even when the lock file is already gone mid-check.
-  if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+  if out=$(teardown_treehouse_return_attempt "$dir" "$cd_dir" "$pre_return_check" 2>&1); then
     [ -n "$out" ] && printf '%s\n' "$out"
     return 0
+  else
+    return_rc=$?
   fi
   [ -n "$out" ] && printf '%s\n' "$out" >&2
+  if [ "$return_rc" -eq 125 ]; then
+    echo "teardown: $label return aborted because safety checks failed" >&2
+    return 1
+  fi
 
   if ! treehouse_return_is_index_lock_error "$out"; then
     return 1
@@ -1353,12 +1366,18 @@ teardown_treehouse_return() {
     echo "teardown: $label return failed with transient git lock ($lock_desc); waiting ${TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${max_retries})" >&2
     sleep "$TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS"
 
-    if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+    if out=$(teardown_treehouse_return_attempt "$dir" "$cd_dir" "$pre_return_check" 2>&1); then
       [ -n "$out" ] && printf '%s\n' "$out"
       echo "teardown: $label return succeeded on retry; lock cleared on its own" >&2
       return 0
+    else
+      return_rc=$?
     fi
     [ -n "$out" ] && printf '%s\n' "$out" >&2
+    if [ "$return_rc" -eq 125 ]; then
+      echo "teardown: $label return aborted on retry because safety checks failed" >&2
+      return 1
+    fi
 
     if ! treehouse_return_is_index_lock_error "$out"; then
       echo "teardown: $label return failed with a non-lock error after retry; aborting" >&2
@@ -1374,18 +1393,18 @@ teardown_treehouse_return() {
     if fm_lock_is_provably_stale "$lock" "$dir" "$STALE_WORKTREE_LOCK_AGE_SECS"; then
       rm -f "$lock"
       echo "teardown: removed provably-stale git lock $lock (age >= ${STALE_WORKTREE_LOCK_AGE_SECS}s, no live holder) and retrying $label return" >&2
-      if [ -n "$post_cleanup_check" ]; then
-        if ! "$post_cleanup_check"; then
-          echo "teardown: $label return aborted after stale-lock cleanup because safety checks failed" >&2
-          return 1
-        fi
-      fi
-      if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+      if out=$(teardown_treehouse_return_attempt "$dir" "$cd_dir" "$pre_return_check" 2>&1); then
         [ -n "$out" ] && printf '%s\n' "$out"
         echo "teardown: $label return succeeded after stale-lock cleanup" >&2
         return 0
+      else
+        return_rc=$?
       fi
       [ -n "$out" ] && printf '%s\n' "$out" >&2
+      if [ "$return_rc" -eq 125 ]; then
+        echo "teardown: $label return aborted after stale-lock cleanup because safety checks failed" >&2
+        return 1
+      fi
       echo "teardown: $label return still failing after stale-lock cleanup" >&2
       return 1
     fi
@@ -1396,6 +1415,14 @@ teardown_treehouse_return() {
 
   echo "teardown: $label return failed: git index.lock signature persisted across ${max_retries} retries (waiting ${TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS}s each) even after the lock file disappeared" >&2
   return 1
+}
+
+teardown_treehouse_return_attempt() {
+  local dir=$1 cd_dir=$2 pre_return_check=${3:-}
+  if [ -n "$pre_return_check" ] && ! "$pre_return_check"; then
+    return 125
+  fi
+  ( cd "$cd_dir" && treehouse return --force "$dir" )
 }
 
 validate_worktree_teardown_safety() {
@@ -1486,6 +1513,18 @@ validate_worktree_teardown_safety() {
     echo "Land the change (merge/squash into the default branch or merge the PR), or get the captain's explicit OK to discard, then --force." >&2
   fi
   return 1
+}
+
+validate_worktree_teardown_safety_with_lock_recovery() {
+  local safety_rc
+  if validate_worktree_teardown_safety; then
+    return 0
+  else
+    safety_rc=$?
+  fi
+  [ "$safety_rc" -eq "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED" ] || return "$safety_rc"
+  cleanup_stale_lock_for_safety_check "$WT" || return 1
+  validate_worktree_teardown_safety
 }
 
 # Fix 1 (see script header): does the active-or-most-recent no-mistakes run in
@@ -2729,17 +2768,7 @@ if [ "$FORCE" != "--force" ]; then
   case "$KIND" in
     secondmate|scout) ;;
     *)
-      if validate_worktree_teardown_safety; then
-        :
-      else
-        safety_rc=$?
-        if [ "$safety_rc" -eq "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED" ]; then
-          cleanup_stale_lock_for_safety_check "$WT" || exit 1
-          validate_worktree_teardown_safety || exit 1
-        else
-          exit 1
-        fi
-      fi
+      validate_worktree_teardown_safety_with_lock_recovery || exit 1
       ;;
   esac
 fi
@@ -2794,6 +2823,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
   fi
   [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+  validate_worktree_teardown_safety_with_lock_recovery || exit 1
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
 elif [ "$BACKEND" = playbot ] && [ "$KIND" != secondmate ]; then
   # After common dirty/unlanded validation: stop turn, archive thread/workspace
@@ -2810,6 +2840,7 @@ elif [ "$BACKEND" = playbot ] && [ "$KIND" != secondmate ]; then
       "$WT/.opencode/plugins/fm-busy-state.js" \
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
   fi
+  validate_worktree_teardown_safety_with_lock_recovery || exit 1
   playbot_teardown_endpoint || exit 1
   if [ "$PLAYBOT_ENDPOINT_RETIRED" = 1 ]; then
     playbot_retire_records
@@ -2831,11 +2862,11 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # to pool. treehouse resolves the pool from the working directory, so run it from
   # the project. teardown_treehouse_return tolerates transient and stale git locks
   # left by a killed crew process; see the script header for retry and stale-lock proof.
-  post_lock_cleanup_check=
+  pre_return_check=
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
-    post_lock_cleanup_check=validate_worktree_teardown_safety
+    pre_return_check=validate_worktree_teardown_safety_with_lock_recovery
   fi
-  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
+  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$pre_return_check" || {
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
     exit 1
   }

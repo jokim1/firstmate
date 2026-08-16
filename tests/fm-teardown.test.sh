@@ -2773,6 +2773,44 @@ EOF
   pass "the run abort and the leaked-process reap both complete before the destructive worktree return"
 }
 
+test_process_reap_mutation_refuses_before_worktree_return() {
+  local case_dir rc pid
+  case_dir=$(make_case reap-mutation-refusal)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+
+  (
+    cd "$case_dir/wt" || exit 1
+    trap 'printf "%s\n" post-reap > dirty-after-reap.txt; exit 0' TERM
+    while :; do sleep 1; done
+  ) &
+  pid=$!
+  disown
+  sleep 0.3
+  kill -0 "$pid" 2>/dev/null || fail "reap-mutation-refusal: setup writer did not start"
+
+  cat > "$case_dir/fakebin/treehouse" <<EOF
+#!/usr/bin/env bash
+printf 'return\n' >> "$case_dir/treehouse.log"
+EOF
+  chmod +x "$case_dir/fakebin/treehouse"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  kill -0 "$pid" 2>/dev/null && { kill -KILL "$pid" 2>/dev/null || true; }
+
+  expect_code 1 "$rc" "reap-mutation-refusal: teardown should refuse post-reap changes"
+  assert_present "$case_dir/wt/dirty-after-reap.txt" \
+    "reap-mutation-refusal: TERM handler did not create the post-reap change"
+  assert_grep "has uncommitted changes" "$case_dir/stderr" \
+    "reap-mutation-refusal: post-reap safety check did not report the change"
+  assert_absent "$case_dir/treehouse.log" \
+    "reap-mutation-refusal: teardown returned the worktree after it became dirty"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "reap-mutation-refusal: teardown removed task metadata after refusing"
+  pass "post-reap worktree mutations are revalidated before destructive return"
+}
+
 
 # --- v5 default-deny regressions (plan v5 break matrix) ---
 
@@ -2998,6 +3036,68 @@ SH
   pass "same-branch default OID force-push after fetch refuses (V4-F1)"
 }
 
+test_default_symref_disappears_after_fetch_refuses() {
+  local case_dir rc real_git
+  case_dir=$(make_case default-symref-disappears)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  real_git=${REAL_GIT_FOR_TEST:-$(command -v git)}
+  cat > "$case_dir/fakebin/git" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${3:-}" = ls-remote ] && [ "\${4:-}" = --symref ]; then
+  count=0
+  [ ! -f "$case_dir/symref-count" ] || count=\$(cat "$case_dir/symref-count")
+  count=\$((count + 1))
+  printf '%s\n' "\$count" > "$case_dir/symref-count"
+  if [ "\$count" -eq 2 ]; then
+    exec "$real_git" -C "\$2" ls-remote "\$5" HEAD
+  fi
+fi
+exec "$real_git" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/git"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "default-symref-disappears: teardown should refuse"
+  assert_grep "REFUSED" "$case_dir/stderr" \
+    "default-symref-disappears: teardown did not report a refusal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "default-symref-disappears: teardown removed task metadata"
+  pass "a remote default symref disappearing after fetch refuses teardown"
+}
+
+test_default_symref_lookup_failure_after_fetch_refuses() {
+  local case_dir rc real_git
+  case_dir=$(make_case default-symref-failure)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  real_git=${REAL_GIT_FOR_TEST:-$(command -v git)}
+  cat > "$case_dir/fakebin/git" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${3:-}" = ls-remote ] && [ "\${4:-}" = --symref ]; then
+  count=0
+  [ ! -f "$case_dir/symref-count" ] || count=\$(cat "$case_dir/symref-count")
+  count=\$((count + 1))
+  printf '%s\n' "\$count" > "$case_dir/symref-count"
+  [ "\$count" -ne 2 ] || exit 1
+fi
+exec "$real_git" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/git"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "default-symref-failure: teardown should refuse"
+  assert_grep "REFUSED" "$case_dir/stderr" \
+    "default-symref-failure: teardown did not report a refusal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "default-symref-failure: teardown removed task metadata"
+  pass "a failed post-fetch remote default lookup refuses teardown"
+}
+
 test_local_only_fork_remote_allows
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
@@ -3037,6 +3137,8 @@ test_gitlab_merged_squash_tree_allows
 test_gitlab_open_refuses
 test_unconfirmed_sibling_tree_refuses
 test_default_oid_force_push_after_fetch_refuses
+test_default_symref_disappears_after_fetch_refuses
+test_default_symref_lookup_failure_after_fetch_refuses
 test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
 test_gh_error_and_content_absent_refuses
@@ -3067,3 +3169,4 @@ test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+test_process_reap_mutation_refuses_before_worktree_return
