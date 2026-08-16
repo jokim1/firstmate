@@ -781,7 +781,7 @@ SH
   pass "arm propagates an immediate watcher wake before confirmation"
 }
 
-test_arm_waits_for_peer_beacon_after_child_stands_down() {
+test_arm_waits_for_peer_beacon_without_starting_child() {
   local dir state fakebin armout peer identity armpid status i
   dir=$(make_case arm-peer-startup-race)
   state="$dir/state"
@@ -798,18 +798,17 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
   printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=1 FM_ARM_ATTACH_POLL=0.1 "$WATCH_ARM" > "$armout" &
   armpid=$!
-  # Synchronize on the owned child declining the live peer lock before making
-  # the peer healthy. Sleeping for the same one-second budget as the arm made
-  # this regression fixture race the confirmation deadline under full-suite
-  # load, rather than testing the intended successor-handshake boundary.
+  # Give the arm time to observe the identity-matched peer before publishing
+  # that generation's first beacon. It must wait directly on the peer instead
+  # of starting a child that competes for the already-held singleton.
   i=0
-  while [ "$i" -lt 80 ]; do
-    grep -qF "watcher: already running pid $peer" "$state"/.watch-arm-output.* 2>/dev/null && break
+  while [ "$i" -lt 5 ]; do
+    is_live_non_zombie "$armpid" || fail "arm exited before the peer published its first beacon"
     sleep 0.1
     i=$((i + 1))
   done
-  grep -qF "watcher: already running pid $peer" "$state"/.watch-arm-output.* 2>/dev/null \
-    || fail "arm child did not stand down behind the peer watcher"
+  ! ls "$state"/.watch-arm-output.* >/dev/null 2>&1 \
+    || fail "arm started a competing child while an identity-matched peer held the singleton"
   touch "$state/.last-watcher-beat"
   printf '%s\n' "$identity" > "$state/.watch.lock/beacon-identity"
   i=0
@@ -819,6 +818,8 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
     i=$((i + 1))
   done
   grep -qF "watcher: attached pid=$peer" "$armout" || fail "arm did not wait for and attach to the peer watcher: $(cat "$armout")"
+  ! ls "$state"/.watch-arm-output.* >/dev/null 2>&1 \
+    || fail "peer attachment left evidence of a competing child watcher"
   ! grep -qF 'watcher: FAILED' "$armout" || fail "arm falsely reported FAILED during peer startup race"
   is_live_non_zombie "$armpid" || fail "arm exited while the peer was still healthy"
   # After the peer dies without a successor, the attached arm must fail loudly.
@@ -828,7 +829,7 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
   status=$?
   [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "attached arm did not fail after peer died (status $status): $(cat "$armout")"
   grep -qF 'watcher: FAILED - cycle ended without an actionable reason' "$armout" || fail "peer-attached arm did not emit the typed cycle-end failure"
-  pass "arm attaches to a peer watcher after child stands down and surfaces a missing successor"
+  pass "arm waits for a peer's first beacon without starting a child and surfaces a missing successor"
 }
 
 test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
@@ -1155,7 +1156,7 @@ test_attached_arm_signal_is_recorded_in_cycle_ledger
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output
 test_arm_propagates_immediate_wake_before_confirmation
-test_arm_waits_for_peer_beacon_after_child_stands_down
+test_arm_waits_for_peer_beacon_without_starting_child
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
 test_cycle_exit_ledger_links_successor_and_stays_bounded
 test_stopped_watcher_is_live_but_stale_then_exit_is_classified

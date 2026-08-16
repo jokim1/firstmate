@@ -228,14 +228,19 @@ cycle_mark_predecessor_successor() {
 }
 
 clear_stale_recorded_watcher_lock() {
-  local lock_home lock_path lock_identity
+  local disposition=${1:-recover} expected_identity=${2:-} lock_home lock_path lock_identity
   lock_home=$(cat "$WATCH_LOCK/fm-home" 2>/dev/null || true)
   lock_path=$(cat "$WATCH_LOCK/watcher-path" 2>/dev/null || true)
   lock_identity=$(cat "$WATCH_LOCK/pid-identity" 2>/dev/null || true)
   [ "$lock_home" = "$FM_HOME" ] || return 0
   [ "$lock_path" = "$WATCH" ] || return 0
   [ -n "$lock_identity" ] || return 0
-  fm_recovery_transition "$STATE/.watcher-down" clear-stale-lock "$WATCH_LOCK" downtime
+  [ -z "$expected_identity" ] || [ "$lock_identity" = "$expected_identity" ] || return 0
+  case "$disposition" in
+    recover) fm_recovery_transition "$STATE/.watcher-down" clear-stale-lock "$WATCH_LOCK" downtime ;;
+    restart) fm_lock_remove_path "$WATCH_LOCK" ;;
+    *) return 2 ;;
+  esac
 }
 
 # A watcher is "healthy" iff the lock names a live process that is genuinely THIS
@@ -258,7 +263,7 @@ healthy_watcher() {
 # mid-poll iteration can starve the beacon without ending the cycle; attach paths
 # must follow that holder rather than treating it as cycle-end or starting a
 # second watcher. Sets HEALTHY_PID/HEALTHY_IDENTITY on success.
-live_watcher_holder() {
+identity_matched_watcher_holder() {
   local pid identity
   HEALTHY_PID=
   HEALTHY_IDENTITY=
@@ -266,10 +271,14 @@ live_watcher_holder() {
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$pid" "$FM_HOME" || return 1
   identity=$FM_WATCHER_MATCHED_IDENTITY
-  fm_watcher_generation_beaconed "$STATE" "$identity" || return 1
   HEALTHY_PID=$pid
   HEALTHY_IDENTITY=$identity
   return 0
+}
+
+live_watcher_holder() {
+  identity_matched_watcher_holder || return 1
+  fm_watcher_generation_beaconed "$STATE" "$HEALTHY_IDENTITY"
 }
 
 report_attached() {
@@ -424,19 +433,27 @@ handling_successor_generation() {
   esac
 }
 
-stop_pid_bounded() {  # <pid> [tenths-of-a-second]
-  local pid=$1 limit=${2:-50} i=0
+stop_pid_bounded() {  # <pid> [tenths-of-a-second] [expected-identity]
+  local pid=$1 limit=${2:-50} expected_identity=${3:-} current_identity i=0
   [ -n "$pid" ] || return 0
-  fm_pid_alive "$pid" || return 0
+  current_identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+  [ -n "$current_identity" ] || return 0
+  [ -z "$expected_identity" ] && expected_identity=$current_identity
+  [ "$current_identity" = "$expected_identity" ] || return 0
   kill -TERM "$pid" 2>/dev/null || true
-  while [ "$i" -lt "$limit" ] && fm_pid_alive "$pid"; do
+  while [ "$i" -lt "$limit" ]; do
+    current_identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+    [ "$current_identity" = "$expected_identity" ] || return 0
     sleep 0.1
     i=$((i + 1))
   done
-  if fm_pid_alive "$pid"; then
+  current_identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+  if [ "$current_identity" = "$expected_identity" ]; then
     kill -KILL "$pid" 2>/dev/null || true
   fi
   wait "$pid" 2>/dev/null || true
+  current_identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+  [ "$current_identity" != "$expected_identity" ]
 }
 
 mode=arm
@@ -469,7 +486,18 @@ if [ "$mode" = restart ]; then
   lock_pid=$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)
   if fm_pid_alive "$lock_pid"; then
     if fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$lock_pid" "$FM_HOME"; then
-      stop_pid_bounded "$lock_pid"
+      lock_identity=$FM_WATCHER_MATCHED_IDENTITY
+      if ! stop_pid_bounded "$lock_pid" 50 "$lock_identity"; then
+        echo "watcher: FAILED - recorded watcher did not stop within the bounded teardown" >&2
+        exit 1
+      fi
+      # A TERM-resistant or externally supplied holder cannot run the watcher's
+      # EXIT cleanup. Remove only the exact generation we just stopped. This is
+      # an attended restart, so the replacement arm itself closes the gap.
+      if ! clear_stale_recorded_watcher_lock restart "$lock_identity"; then
+        echo "watcher: FAILED - stopped watcher lock could not be cleared" >&2
+        exit 1
+      fi
     else
       if ! clear_stale_recorded_watcher_lock; then
         echo "watcher: FAILED - stale watcher recovery state could not be persisted" >&2
@@ -492,6 +520,30 @@ if [ "$mode" = arm ]; then
     report_attached
     attach_and_wait "$HEALTHY_PID"
     exit $?
+  fi
+  # A peer can publish its identity-bound lock just before its first beacon.
+  # Do not launch a competing child into that startup window. Wait directly for
+  # this generation's proof, and fail closed if the same holder never emits it.
+  if identity_matched_watcher_holder; then
+    peer_pid=$HEALTHY_PID
+    peer_identity=$HEALTHY_IDENTITY
+    deadline=$(( $(date +%s) + CONFIRM_TIMEOUT + 1 ))
+    while identity_matched_watcher_holder \
+      && [ "$HEALTHY_PID" = "$peer_pid" ] \
+      && [ "$HEALTHY_IDENTITY" = "$peer_identity" ]; do
+      if fm_watcher_generation_beaconed "$STATE" "$peer_identity"; then
+        cycle_mark_predecessor_successor "attached:$peer_pid"
+        cycle_begin "$peer_pid" attached "$peer_identity"
+        report_attached
+        attach_and_wait "$peer_pid"
+        exit $?
+      fi
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        echo "watcher: FAILED - no live watcher with a fresh beacon"
+        exit 1
+      fi
+      sleep 0.2
+    done
   fi
 fi
 
