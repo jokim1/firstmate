@@ -464,7 +464,7 @@ projects_snapshot() { # <dir>
 }
 mkdir -p "$TMP_ROOT/seed-parent/projects"
 fm_git_init_commit "$TMP_ROOT/seed-parent/projects/resident"
-git init -q --bare "$TMP_ROOT/beta.git"
+git init -q --bare -b main "$TMP_ROOT/beta.git"
 fm_git_init_commit "$TMP_ROOT/beta-src"
 git -C "$TMP_ROOT/beta-src" remote add origin "file://$TMP_ROOT/beta.git"
 git -C "$TMP_ROOT/beta-src" push -q -u origin HEAD

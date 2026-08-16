@@ -439,7 +439,11 @@ test_scenario_c() {
   start_daemon
 
   echo "done: PR https://example.test/pr/300" > "$STATE_DIR/fake-c1.status"
-  sleep 8
+  local i=0
+  while [ "$i" -lt 300 ] && ! grep -q 'Supervisor escalate' "$LOG_FILE" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
 
   local marker_count
   marker_count=$(awk -F '\t' '{ hex=$1; count += gsub(/e281a3/, "", hex) } END { print count + 0 }' "$LOG_FILE")

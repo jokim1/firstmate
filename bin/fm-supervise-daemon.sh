@@ -96,6 +96,8 @@
 #                                   (default 3600)
 #          FM_ESCALATE_BATCH_SECS   buffer window for batched escalation
 #                                   digests; 0 = flush immediately (default 90)
+#          FM_REFILL_COVERED_SECS   seconds a capacity-freeing captain escalate
+#                                   covers a same-window refill (default 120)
 #          FM_HEARTBEAT_SCAN_SECS   cadence for the catch-all status scan
 #                                   (default 300)
 #          FM_HOUSEKEEPING_TICK     seconds between housekeeping passes while
@@ -427,7 +429,23 @@ classify_heartbeat() {
 # Advisory fleet refill: firstmate (or the away-mode primary injection) must
 # re-evaluate ready work against free capacity. The daemon never selects or
 # spawns from this wake itself.
-classify_refill() {
+# A capacity-freeing captain status already forces capacity re-evaluation. Its
+# same-window refill wake must not produce a second injection. Coverage is
+# one-shot and bounded so a later refill-only wake still escalates.
+REFILL_COVERED_SECS_DEFAULT=120
+classify_refill() {  # [state]
+  local state=${1:-} age covered
+  if [ -n "$state" ]; then
+    covered="$state/.subsuper-refill-covered"
+    if [ -f "$covered" ]; then
+      age=$(_file_age "$covered")
+      rm -f "$covered"
+      if [ "$age" -lt "${FM_REFILL_COVERED_SECS:-$REFILL_COVERED_SECS_DEFAULT}" ]; then
+        printf 'self|refill covered by capacity-freeing captain escalate'
+        return
+      fi
+    fi
+  fi
   printf 'escalate|refill: re-evaluate ready work against free capacity'
 }
 
@@ -536,16 +554,19 @@ sync_pause_markers_from_signal() {  # <state> <signal files>
 # heartbeat catch-all scan does not re-fire it. The single source of truth for
 # the .subsuper-seen-status-<task> dedup state: called from both the per-wake
 # escalate path and the catch-all scan.
-mark_status_seen() {  # <state> <task> <last-line>
-  local state=$1 task=$2 line=$3
+mark_status_seen() {  # <state> <task> <last-line> [arm-refill-coverage]
+  local state=$1 task=$2 line=$3 arm_refill_coverage=${4:-1}
   printf '%s' "$line" > "$state/.subsuper-seen-status-$(_stale_key "$task")"
+  if [ "$arm_refill_coverage" = 1 ] && status_frees_capacity "$line"; then
+    _now > "$state/.subsuper-refill-covered"
+  fi
 }
 
 # Mark every captain-relevant status line a per-wake classification escalated as
 # seen, so the catch-all scan does not re-escalate the same line within
 # HEARTBEAT_SCAN_SECS. Mirrors classify_signal/classify_stale's relevance test.
-mark_escalated_seen() {  # <kind> <arg> <state>
-  local kind=$1 arg=$2 state=$3 f last task
+mark_escalated_seen() {  # <kind> <arg> <state> [arm-refill-coverage]
+  local kind=$1 arg=$2 state=$3 arm_refill_coverage=${4:-1} f last task
   case "$kind" in
     signal)
       for f in $arg; do
@@ -554,13 +575,13 @@ mark_escalated_seen() {  # <kind> <arg> <state>
         [ -n "$last" ] || continue
         status_is_captain_relevant "$last" || continue
         task=$(basename "$f"); task="${task%.status}"
-        mark_status_seen "$state" "$task" "$last"
+        mark_status_seen "$state" "$task" "$last" "$arm_refill_coverage"
       done ;;
     stale)
       task=$(window_to_task "$arg" "$state")
       last=$(last_status_line "$state/$task.status")
       [ -n "$last" ] && status_is_captain_relevant "$last" \
-        && mark_status_seen "$state" "$task" "$last" ;;
+        && mark_status_seen "$state" "$task" "$last" "$arm_refill_coverage" ;;
   esac
 }
 
@@ -1221,8 +1242,8 @@ is_wake_reason() {  # <reason>
 
 # --- dispatch one wake reason to self-handle or escalate --------------------
 # Side effects: logging, marker records, escalation buffer appends.
-handle_wake() {  # <reason> <state>
-  local reason=$1 state=$2 decision action distilled task last stale_detail
+handle_wake() {  # <reason> <state> [arm-refill-coverage]
+  local reason=$1 state=$2 arm_refill_coverage=${3:-1} decision action distilled task last stale_detail
   local kind="" arg=""
   if should_force_self "$reason"; then
     log "wake force-self (FM_INJECT_SKIP): $reason"
@@ -1240,7 +1261,7 @@ handle_wake() {  # <reason> <state>
               esac ;;
     check:*)  decision=$(classify_check "$reason") ;;
     heartbeat|heartbeat:*) decision=$(classify_heartbeat) ;;
-    refill|refill:*) decision=$(classify_refill) ;;
+    refill|refill:*) decision=$(classify_refill "$state") ;;
     *)        decision=$(classify_unknown "$reason") ;;
   esac
   action=${decision%%|*}
@@ -1253,7 +1274,7 @@ handle_wake() {  # <reason> <state>
       # A terminal-stale escalate must not leave a persistence marker behind, or
       # housekeeping re-escalates the same pane as a false wedge later.
       [ "$kind" = "stale" ] && stale_marker_remove "$arg" "$state"
-      mark_escalated_seen "$kind" "$arg" "$state"
+      mark_escalated_seen "$kind" "$arg" "$state" "$arm_refill_coverage"
       [ "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" -le 0 ] && { escalate_flush "$state" || true; }
       ;;
     pause)
@@ -1302,8 +1323,8 @@ handle_wake() {  # <reason> <state>
 }
 
 handle_durable_wakes() {  # <watcher-reason> <state>
-  local fallback_reason=$1 state=$2 out err tab epoch sequence kind key payload rest
-  local handled=0 ack_through ack_generation
+  local fallback_reason=$1 state=$2 out err tab epoch sequence kind key payload rest f last
+  local handled=0 ack_through ack_generation arm_refill_coverage=1
   out=$(mktemp "$state/.subsuper-wake-drain.XXXXXX") || return 1
   err=$(mktemp "$state/.subsuper-wake-drain.XXXXXX") || { rm -f "$out"; return 1; }
   if ! "$FM_DAEMON_DIR/fm-wake-drain.sh" > "$out" 2> "$err"; then
@@ -1316,8 +1337,23 @@ handle_durable_wakes() {  # <watcher-reason> <state>
   while IFS="$tab" read -r epoch sequence kind key payload rest; do
     case "$epoch" in ''|*[!0-9]*) continue ;; esac
     case "$sequence" in ''|*[!0-9]*) continue ;; esac
+    [ "$kind" = signal ] || continue
+    for f in ${payload#signal: }; do
+      case "$f" in *.status) ;; *) continue ;; esac
+      [ -e "$f" ] || continue
+      last=$(last_status_line "$f")
+      if status_frees_capacity "$last"; then
+        _now > "$state/.subsuper-refill-covered"
+        arm_refill_coverage=0
+        break 2
+      fi
+    done
+  done < "$out"
+  while IFS="$tab" read -r epoch sequence kind key payload rest; do
+    case "$epoch" in ''|*[!0-9]*) continue ;; esac
+    case "$sequence" in ''|*[!0-9]*) continue ;; esac
     case "$kind" in signal|stale|check|heartbeat|refill) ;; *) continue ;; esac
-    handle_wake "$payload" "$state"
+    handle_wake "$payload" "$state" "$arm_refill_coverage"
     handled=$((handled + 1))
   done < "$out"
   [ "$handled" -gt 0 ] || handle_wake "$fallback_reason" "$state"
@@ -1469,13 +1505,26 @@ fm_super_main() {
 
   # --- shutdown: flush buffered escalations, reap child, release lock -------
   local WATCHER_PID="" CUR_TMP=""
+  stop_watcher_bounded() {  # <pid> [tenths-of-a-second]
+    local pid=$1 limit=${2:-50} i=0
+    [ -n "$pid" ] || return 0
+    fm_pid_alive "$pid" || return 0
+    kill -TERM "$pid" 2>/dev/null || true
+    while [ "$i" -lt "$limit" ] && fm_pid_alive "$pid"; do
+      sleep 0.1
+      i=$((i + 1))
+    done
+    if fm_pid_alive "$pid"; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    wait "$pid" 2>/dev/null || true
+  }
   cleanup() {
     trap - TERM INT
     wedge_alarm_stop_active_notifier
     escalate_flush "$STATE" 2>/dev/null || true
     if [ -n "${WATCHER_PID:-}" ]; then
-      kill "$WATCHER_PID" 2>/dev/null || true
-      wait "$WATCHER_PID" 2>/dev/null || true
+      stop_watcher_bounded "$WATCHER_PID"
     fi
     if [ -n "${CUR_TMP:-}" ]; then
       rm -f "$CUR_TMP" 2>/dev/null || true

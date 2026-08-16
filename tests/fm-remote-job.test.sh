@@ -66,8 +66,8 @@ SH
 cat > "$REMOTE_ROOT/bin/fm-shutdown-job.sh" <<'SH'
 #!/bin/bash
 trap '' HUP INT TERM
-printf 'started\n' > "$1"
-sleep 3
+printf '%s\n' "$$" > "$1"
+sleep 30
 printf 'ran\n' > "$2"
 SH
 cat > "$REMOTE_ROOT/bin/fm-output-job.sh" <<'SH'
@@ -186,10 +186,14 @@ MISE_EXPECTED=$(printf '%s\n' "$MISE_INSTALLS"/*/*/bin)
 rm -rf -- "$ACCOUNT_HOME/.local/share/mise"
 pass "operator PATH orders discovered tool installs deterministically"
 
+# Match the production Linux launcher: the restart supervisor owns an isolated
+# process group so replacement can stop both it and its serving child.
+set -m
 HOME="$ACCOUNT_HOME" PATH="$RUNTIME_BIN:/usr/bin:/bin:/usr/sbin:/sbin" FM_FAKE_PERL_LOG="$FAKE_PERL_LOG" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" \
   FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_TIMEOUT=5 \
   "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" > "$TMP_ROOT/worker.out" 2> "$TMP_ROOT/worker.err" &
+set +m
 for _ in $(seq 1 100); do
   [ -f "$STATE_ROOT/worker.ready" ] && break
   sleep 0.05
@@ -337,12 +341,11 @@ fm_remote_job_reap "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "the blocking job cou
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the expired queued job could not be reaped"
 pass "the worker expires queued jobs before they can mutate"
 
-FIRST_DELAYED_SIDE_EFFECT="$TMP_ROOT/first-delayed-side-effect"
 SECOND_DELAYED_SIDE_EFFECT="$TMP_ROOT/second-delayed-side-effect"
-FM_REMOTE_JOB_QUEUE_TIMEOUT=5
+FM_REMOTE_JOB_QUEUE_TIMEOUT=60
 FM_REMOTE_JOB_TIMEOUT=3
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
-  fm-delay-job.sh 1.8 "$FIRST_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
+  fm-timeout-job.sh < /dev/null > /dev/null
 FIRST_JOB_ID=$FM_REMOTE_JOB_ID
 FIRST_JOB_DIR="$STATE_ROOT/jobs/$FIRST_JOB_ID"
 for _ in $(seq 1 100); do
@@ -351,15 +354,24 @@ for _ in $(seq 1 100); do
 done
 [ "$(fm_remote_job_read_state "$FIRST_JOB_DIR" 2>/dev/null || true)" = running ] \
   || fail "the first delayed job did not begin running"
+FM_REMOTE_JOB_TIMEOUT=10
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
-  fm-delay-job.sh 1.8 "$SECOND_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
+  fm-touch-job.sh "$SECOND_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
+SECOND_JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
 fm_remote_job_wait "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_EXIT" -eq 124 ] || fail "the queue-blocking job did not consume its execution window"
+QUEUE_RELEASED_AT=$(date +%s)
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "queue time consumed the second job's execution timeout"
 assert_present "$SECOND_DELAYED_SIDE_EFFECT" "the queued job did not receive its full execution timeout"
+SECOND_DEADLINE=$(fm_remote_job_read_deadline "$SECOND_JOB_DIR") \
+  || fail "the queued job did not record an execution deadline"
+[ "$SECOND_DEADLINE" -ge $((QUEUE_RELEASED_AT + 8)) ] \
+  || fail "the queued job's execution deadline was not established after queue release"
 fm_remote_job_reap "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "the first delayed job could not be reaped"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the second delayed job could not be reaped"
+FM_REMOTE_JOB_TIMEOUT=3
 pass "queued jobs receive a fresh bounded execution window"
 
 if command -v shasum >/dev/null 2>&1; then
@@ -468,7 +480,13 @@ done
 assert_present "$STATE_ROOT/worker.ready" "the replacement worker did not become ready"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 [ "$FM_REMOTE_JOB_EXIT" -eq 125 ] || fail "the interrupted job did not publish an unknown-completion result"
-sleep 3
+SHUTDOWN_COMMAND_PID=$(cat "$STARTED")
+for _ in $(seq 1 100); do
+  kill -0 "$SHUTDOWN_COMMAND_PID" 2>/dev/null || break
+  sleep 0.05
+done
+kill -0 "$SHUTDOWN_COMMAND_PID" 2>/dev/null \
+  && fail "the active command remained alive after worker shutdown"
 assert_absent "$SHUTDOWN_SIDE_EFFECT" "the active command mutated after worker shutdown"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the interrupted job could not be reaped"
 pass "worker shutdown terminates the active command tree before replacement"
@@ -495,7 +513,13 @@ done
   || fail "the Linux supervisor did not restart a crashed worker"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 [ "$FM_REMOTE_JOB_EXIT" -eq 125 ] || fail "worker crash recovery did not publish unknown completion"
-sleep 3
+CRASH_COMMAND_PID=$(cat "$CRASH_STARTED")
+for _ in $(seq 1 100); do
+  kill -0 "$CRASH_COMMAND_PID" 2>/dev/null || break
+  sleep 0.05
+done
+kill -0 "$CRASH_COMMAND_PID" 2>/dev/null \
+  && fail "the orphaned command remained alive after worker crash recovery"
 assert_absent "$CRASH_SIDE_EFFECT" "an orphaned command mutated after worker crash recovery"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the crash-recovered job could not be reaped"
 fm_remote_job_probe "$ACCOUNT_HOME" || fail "the restarted worker did not remain ready"

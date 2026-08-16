@@ -1,60 +1,7 @@
 #!/usr/bin/env bash
-# Tests for bin/fm-teardown.sh's landed-work safety and stale-lock recovery.
-#
-# The check refuses to tear down a worktree whose work has not LANDED, because
-# treehouse return hard-resets the worktree. "Landed" means reachable from a remote
-# OR - for a normal ship task whose commits are not so reachable - its PR is merged
-# and GitHub reports a PR head that contains the current local work, or its content
-# is already in the up-to-date default branch.
-#
-# Covers four fixes:
-#   - local-only fork-remote: a fork IS a remote, so fork-pushed upstream-
-#     contribution PRs are teardown-eligible (the pre-fix code false-refused them).
-#   - squash-merge-then-delete-branch: the branch's own commits live nowhere on a
-#     remote after a squash merge deletes the head branch, yet the change is fully in
-#     main. Reachability alone false-refused this common GitHub flow; the check now
-#     recognizes a merged PR head containing the local work (or the content already
-#     in main) as landed.
-#   - open-PR veto: content-in-default is provenance-blind, so a SIBLING PR that
-#     landed the same change makes an unmerged task's content look "landed" and the
-#     old check reaped its still-open PR's state. A recorded-but-open PR now vetoes
-#     the content fallback: the task's own work has not landed until its own PR merges.
-#   - teardown-lock-race: a killed crew process can leave a transient worktree
-#     git index.lock that blocks teardown. The return path retries on the lock
-#     error signature (even if the lock self-clears mid-check), then only removes a
-#     provably stale lock before re-running safety checks.
-#
-# Matrix:
-#   (a) local-only + HEAD on a fork remote-tracking branch     -> ALLOW  (fork fix)
-#   (b) local-only + truly unpushed work (no remote, not main) -> REFUSE (safety)
-#   (c) local-only + merged into local main, no remote         -> ALLOW  (no regression)
-#   (d) no-mistakes + HEAD on origin remote-tracking branch    -> ALLOW  (no regression)
-#   (e) no-mistakes + unpushed, no PR, content not in default  -> REFUSE (safety)
-#   (f) local-only + truly unpushed + --force                  -> ALLOW  (escape hatch)
-#   (g) no-mistakes + squash-merged PR, exact PR head          -> ALLOW  (squash fix)
-#   (h) no-mistakes + no PR but content already in default     -> ALLOW  (content fallback)
-#   (i) no-mistakes + dirty worktree, even when work landed     -> REFUSE (dirty wins)
-#   (j) no-mistakes + gh lookup errors + content not in default -> REFUSE (fail-safe)
-#   (k) no-mistakes + merged PR but HEAD moved afterward        -> REFUSE (stale PR)
-#   (l) no-mistakes + stale origin/main but fetched content     -> ALLOW  (fresh fetch)
-#   (m) no-mistakes + local HEAD ancestor of merged PR head     -> ALLOW  (lagging local)
-#   (n) no-mistakes + replayed unpushed patch in merged PR head -> ALLOW  (replayed local)
-#   (o) fm-pr-check rerun after HEAD moved                      -> no stale pr_head
-#   (p) fm-pr-check when local HEAD lags                        -> record remote PR head
-#   (q) no-mistakes + NO pr= recorded, PR discovered by branch  -> ALLOW  (yolo/no-CI merge)
-#  (za) no-mistakes + recorded pr= OPEN + sibling content in default -> REFUSE (open-PR veto)
-#  (zb) no-mistakes + recorded pr= MERGED + sibling content in default -> ALLOW (own PR landed)
-#
-# Also covers backlog teardown-lock-race: a git index.lock left in the worktree by a
-# killed crew process (bin/fm-teardown.sh's teardown_treehouse_return).
-#   (r) provably-stale index.lock (old mtime, no live holder) -> lock removed, ALLOW
-#   (s) index.lock with a live holder, any age                -> lock kept, REFUSE
-#   (t) lsof error while checking index.lock                  -> lock kept, REFUSE
-#   (u) dirty worktree after stale lock cleanup               -> lock removed, REFUSE
-#   (v) non-linked repo index.lock                            -> lock removed, ALLOW
-#   (w) index.lock mtime read failure                         -> lock kept, REFUSE
-#   (x) transient lock cleared after first failed return      -> retry ALLOW
-#   (y) persistent lock (never clears, not provably stale)    -> REFUSE loudly
+# Regression tests for bin/fm-teardown.sh's landed-work safety and stale-lock recovery.
+# That script's header is the single owner of the complete safety contract.
+# Case-local comments describe only the evidence each fixture isolates.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -354,6 +301,72 @@ land_equivalent_patch_on_origin_branch() {
 }
 
 # Override gh-axi so every call fails, simulating an API/network error.
+
+# glab reports a merged GitLab MR via single state: field.
+
+add_gh_pr_closed() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr list")
+    printf '%s\n' "count: 1 (showing first 1)" "pull_requests[1]{number,state}:" "  7,closed" ; exit 0 ;;
+  "pr view")
+    printf '%s\n' "pull_request:" "  number: 7" "  state: closed" ; exit 0 ;;
+esac
+exit 0
+SH
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr view")
+    case " $* " in
+      *"state,headRefOid"*) printf '%s\t%s\n' 'CLOSED' '0000000000000000000000000000000000000000' ; exit 0 ;;
+      *"state"*) printf '%s\n' 'CLOSED' ; exit 0 ;;
+    esac
+    ;;
+esac
+echo "error: pull request not found" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
+}
+
+add_glab_mr_merged() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/glab" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "mr view")
+    printf '%s\n' 'state: merged' 'title: t'
+    exit 0
+    ;;
+esac
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/glab"
+}
+
+add_glab_mr_open() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/glab" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "mr view")
+    printf '%s\n' 'state: open' 'title: t'
+    exit 0
+    ;;
+esac
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/glab"
+}
+
+add_gh_pr_state_only() {
+  # state + head for classify; used by open/closed/merged paths already via add_gh_*
+  :
+}
+
 add_gh_axi_error() {
   local case_dir=$1
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
@@ -2707,6 +2720,395 @@ EOF
   pass "the run abort and the leaked-process reap both complete before the destructive worktree return"
 }
 
+test_process_reap_mutation_refuses_before_worktree_return() {
+  local case_dir rc pid
+  case_dir=$(make_case reap-mutation-refusal)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+
+  (
+    cd "$case_dir/wt" || exit 1
+    trap 'printf "%s\n" post-reap > dirty-after-reap.txt; exit 0' TERM
+    while :; do sleep 1; done
+  ) &
+  pid=$!
+  disown
+  sleep 0.3
+  kill -0 "$pid" 2>/dev/null || fail "reap-mutation-refusal: setup writer did not start"
+
+  cat > "$case_dir/fakebin/treehouse" <<EOF
+#!/usr/bin/env bash
+printf 'return\n' >> "$case_dir/treehouse.log"
+EOF
+  chmod +x "$case_dir/fakebin/treehouse"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  kill -0 "$pid" 2>/dev/null && { kill -KILL "$pid" 2>/dev/null || true; }
+
+  expect_code 1 "$rc" "reap-mutation-refusal: teardown should refuse post-reap changes"
+  assert_present "$case_dir/wt/dirty-after-reap.txt" \
+    "reap-mutation-refusal: TERM handler did not create the post-reap change"
+  assert_grep "has uncommitted changes" "$case_dir/stderr" \
+    "reap-mutation-refusal: post-reap safety check did not report the change"
+  assert_absent "$case_dir/treehouse.log" \
+    "reap-mutation-refusal: teardown returned the worktree after it became dirty"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "reap-mutation-refusal: teardown removed task metadata after refusing"
+  pass "post-reap worktree mutations are revalidated before destructive return"
+}
+
+test_playbot_archive_mutation_refuses_before_workspace_deletion() {
+  local case_dir rc
+  case_dir=$(make_case playbot-archive-mutation-refusal)
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=playbot:thread-task-x1" \
+    "endpoint_task_id=task-x1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only" \
+    "backend=playbot" \
+    "playbot_project_id=project-alpha" \
+    "playbot_project_root_id=root-alpha" \
+    "playbot_workspace_id=workspace-task-x1" \
+    "playbot_thread_id=thread-task-x1" \
+    "playbot_route_gen=1" \
+    "playbot_delivery_id=delivery-task-x1"
+  land_shippable_commit "$case_dir"
+  printf '%s\n' '{"route":"preserve"}' > "$case_dir/state/task-x1.playbot-route.json"
+  printf '%s\n' '{"outbox":"preserve"}' > "$case_dir/state/task-x1.playbot-outbox.json"
+
+  cat > "$case_dir/playbot-lanes.mjs" <<'JS'
+import { appendFileSync, writeFileSync } from "node:fs";
+
+const [command] = process.argv.slice(2);
+const log = process.env.FM_PLAYBOT_TEST_LOG;
+const worktree = process.env.FM_PLAYBOT_TEST_WORKTREE;
+if (command === "validate-endpoint") process.exit(0);
+if (command === "agent-state") {
+  process.stdout.write("alive\n");
+  process.exit(0);
+}
+appendFileSync(log, `${command}\n`);
+if (command === "archive") {
+  writeFileSync(`${worktree}/late-worker-write.txt`, "created while Playbot archived the thread\n");
+}
+process.exit(0);
+JS
+
+  rc=0
+  FM_PLAYBOT_LANES_OVERRIDE="$case_dir/playbot-lanes.mjs" \
+  FM_PLAYBOT_TEST_LOG="$case_dir/playbot.log" \
+  FM_PLAYBOT_TEST_WORKTREE="$case_dir/wt" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-archive-mutation-refusal: teardown should refuse the late worker write"
+  assert_grep "archive" "$case_dir/playbot.log" \
+    "playbot-archive-mutation-refusal: fixture did not archive the Playbot thread"
+  if grep -qxF delete "$case_dir/playbot.log"; then
+    fail "playbot-archive-mutation-refusal: teardown deleted the workspace after the late write"
+  fi
+  assert_present "$case_dir/wt/late-worker-write.txt" \
+    "playbot-archive-mutation-refusal: late worker write was not preserved"
+  assert_grep "has uncommitted changes" "$case_dir/stderr" \
+    "playbot-archive-mutation-refusal: post-archive safety check did not report the late write"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "playbot-archive-mutation-refusal: teardown removed task metadata after refusing"
+  assert_present "$case_dir/state/task-x1.playbot-route.json" \
+    "playbot-archive-mutation-refusal: teardown removed the Playbot route after refusing"
+  assert_present "$case_dir/state/task-x1.playbot-outbox.json" \
+    "playbot-archive-mutation-refusal: teardown removed the Playbot outbox after refusing"
+  pass "Playbot archive-time mutations refuse workspace deletion and preserve task records"
+}
+
+
+# --- v5 default-deny regressions (plan v5 break matrix) ---
+
+test_open_pr_on_clean_pushed_branch_refuses() {
+  # R1-742: pushed feature + OPEN pr= → empty unpushed must still refuse.
+  local case_dir rc tip
+  case_dir=$(make_case open-pr-clean-pushed)
+  write_meta "$case_dir" no-mistakes ship
+  append_pr_meta_url "$case_dir"
+  wt_commit_file "$case_dir" feature.txt unique-open "open feature"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  tip=$(git -C "$case_dir/wt" rev-parse HEAD)
+  git -C "$case_dir/origin.git" cat-file -t "$tip" >/dev/null
+  add_gh_pr_open "$case_dir"
+  # Armed poll shape: meta + poll files would be destroyed by a false allow.
+  printf 'url=https://github.com/example/repo/pull/7\n' > "$case_dir/state/task-x1.pr-poll"
+  touch "$case_dir/state/task-x1.pr-poll-registration"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "open-pr-clean-pushed: must refuse (empty unpushed is not landing)"
+  grep -q REFUSED "$case_dir/stderr" || fail "open-pr-clean-pushed: no REFUSED"
+  grep -q "still open" "$case_dir/stderr" || fail "open-pr-clean-pushed: did not cite open PR"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "open-pr-clean-pushed: meta destroyed"
+  [ -f "$case_dir/state/task-x1.pr-poll" ] || fail "open-pr-clean-pushed: poll destroyed"
+  pass "pushed open-PR ship refuses teardown and keeps meta+poll (R1-742)"
+}
+
+test_missing_worktree_refuses() {
+  # F4: missing WT always refuses; pr_head never authorizes.
+  local case_dir rc
+  case_dir=$(make_case missing-wt-refuse)
+  write_meta "$case_dir" no-mistakes ship
+  append_pr_meta_url "$case_dir"
+  tip=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf 'pr_head=%s\n' "$tip" >> "$case_dir/state/task-x1.meta"
+  # Land tip on main so a pr_head-ancestry allow would incorrectly pass.
+  git -C "$case_dir/wt" push -q origin HEAD:main
+  git -C "$case_dir/project" fetch -q origin
+  add_gh_pr_merged_for_head "$case_dir" "$tip"
+  rm -rf "$case_dir/wt"
+  # Point meta at missing path (write_meta already set worktree; recreate meta line).
+  sed -i.bak 's|^worktree=.*|worktree='"$case_dir"'/wt|' "$case_dir/state/task-x1.meta"
+  rm -f "$case_dir/state/task-x1.meta.bak"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "missing-wt: must refuse"
+  grep -q REFUSED "$case_dir/stderr" || fail "missing-wt: no REFUSED"
+  grep -q "no inspectable worktree" "$case_dir/stderr" || fail "missing-wt: wrong reason"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "missing-wt: meta destroyed"
+  pass "missing worktree refuses even with pr_head and MERGED (F4)"
+}
+
+test_no_pr_unique_pushed_refuses() {
+  # R1-D: pushed unique commits, no pr=, not in default → refuse.
+  local case_dir rc
+  case_dir=$(make_case no-pr-unique-pushed)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" unique.txt only-here "unique"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "no-pr-unique-pushed: must refuse"
+  grep -q REFUSED "$case_dir/stderr" || fail "no-pr-unique-pushed: no REFUSED"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "no-pr-unique-pushed: meta destroyed"
+  pass "pushed unique work without pr= refuses without positive land proof (R1-D)"
+}
+
+test_closed_unmerged_pushed_refuses() {
+  # R1-A: CLOSED is not landing; unique tip not in default.
+  local case_dir rc
+  case_dir=$(make_case closed-unmerged)
+  write_meta "$case_dir" no-mistakes ship
+  append_pr_meta_url "$case_dir"
+  wt_commit_file "$case_dir" closed.txt only "closed unique"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  add_gh_pr_closed "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "closed-unmerged: must refuse"
+  grep -q REFUSED "$case_dir/stderr" || fail "closed-unmerged: no REFUSED"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "closed-unmerged: meta destroyed"
+  pass "CLOSED unmerged pushed work refuses (R1-A)"
+}
+
+test_gitlab_merged_squash_tree_allows() {
+  # FR1: GitLab MERGED + tree on D, tip not ancestor → allow via T.
+  local case_dir rc
+  case_dir=$(make_case gitlab-squash-merged)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://gitlab.com/example/repo/-/merge_requests/7' >> "$case_dir/state/task-x1.meta"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  # Tip is NOT ancestor of main (squash); tree matches.
+  add_glab_mr_merged "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "gitlab-squash-merged: should allow via MERGED+tree"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "gitlab-squash-merged: REFUSED"
+  pass "GitLab MERGED squash with tree on live D allows (FR1)"
+}
+
+test_gitlab_open_refuses() {
+  local case_dir rc
+  case_dir=$(make_case gitlab-open)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://gitlab.com/example/repo/-/merge_requests/7' >> "$case_dir/state/task-x1.meta"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  add_glab_mr_open "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "gitlab-open: must refuse"
+  grep -q REFUSED "$case_dir/stderr" || fail "gitlab-open: no REFUSED"
+  pass "GitLab OPEN refuses even with sibling content in default"
+}
+
+test_unconfirmed_sibling_tree_refuses() {
+  # R2-R1: gh error + sibling tree + pr= → no T under unconfirmed.
+  local case_dir rc
+  case_dir=$(make_case unconfirmed-sibling)
+  write_meta "$case_dir" no-mistakes ship
+  append_pr_meta_url "$case_dir"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  add_gh_axi_error "$case_dir"
+  # Break gh too so classify is unconfirmed.
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+echo "error: API" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unconfirmed-sibling: must refuse"
+  grep -q REFUSED "$case_dir/stderr" || fail "unconfirmed-sibling: no REFUSED"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "unconfirmed-sibling: meta destroyed"
+  pass "unconfirmed forge + sibling tree refuses (R2-R1)"
+}
+
+test_default_oid_force_push_after_fetch_refuses() {
+  # V4-F1: same-branch force-push of main after fetch → refuse.
+  # Interpose git so the first live_default_tip fetch of main is followed by a
+  # remote force-push back to baseline before the post-fetch ls-remote OID read.
+  local case_dir rc baseline tip real_git
+  case_dir=$(make_case default-oid-drift)
+  write_meta "$case_dir" no-mistakes ship
+  baseline=$(git -C "$case_dir/project" rev-parse origin/main)
+  wt_commit_file "$case_dir" feature.txt on-main "land me"
+  tip=$(git -C "$case_dir/wt" rev-parse HEAD)
+  # Push tip onto main so initial land would pass ancestry.
+  git -C "$case_dir/wt" push -q origin HEAD:main
+  git -C "$case_dir/project" fetch -q origin
+  # Also keep task branch pushed.
+  git -C "$case_dir/wt" push -q origin fm/task-x1 2>/dev/null || true
+
+  real_git=${REAL_GIT_FOR_TEST:-$(command -v git)}
+  cat > "$case_dir/fakebin/git" <<SH
+#!/usr/bin/env bash
+# When teardown re-ls-remotes the OID after fetching main, rewind bare main to
+# baseline so post-fetch OID != fetched D (same branch name).
+if [ "\${1:-}" = -C ] && [ "\${3:-}" = ls-remote ] && [ "\${4:-}" = --symref ]; then
+  exec "$real_git" "\$@"
+fi
+if [ "\${1:-}" = -C ] && [ "\${3:-}" = ls-remote ] && [ "\${5:-}" = "refs/heads/main" ]; then
+  # After at least one successful fetch of main during this process, force baseline.
+  if [ -f "$case_dir/state/.v5-oid-drift-armed" ]; then
+    "$real_git" -C "$case_dir/origin.git" update-ref refs/heads/main "$baseline"
+  fi
+  exec "$real_git" "\$@"
+fi
+if [ "\${1:-}" = -C ] && [ "\${3:-}" = fetch ]; then
+  # Mark that a fetch happened so the next ls-remote OID can drift.
+  touch "$case_dir/state/.v5-oid-drift-armed"
+  exec "$real_git" "\$@"
+fi
+exec "$real_git" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/git"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "default-oid-drift: must refuse when live main OID drifts after fetch"
+  grep -q REFUSED "$case_dir/stderr" || fail "default-oid-drift: no REFUSED"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "default-oid-drift: meta destroyed"
+  # Live main should exclude tip after drift.
+  live=$(git -C "$case_dir/origin.git" rev-parse refs/heads/main)
+  [ "$live" = "$baseline" ] || fail "default-oid-drift: fixture did not force-push main (live=$live tip=$tip baseline=$baseline)"
+  pass "same-branch default OID force-push after fetch refuses (V4-F1)"
+}
+
+test_default_symref_disappears_after_fetch_refuses() {
+  local case_dir rc real_git
+  case_dir=$(make_case default-symref-disappears)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  real_git=${REAL_GIT_FOR_TEST:-$(command -v git)}
+  cat > "$case_dir/fakebin/git" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${3:-}" = ls-remote ] && [ "\${4:-}" = --symref ]; then
+  count=0
+  [ ! -f "$case_dir/symref-count" ] || count=\$(cat "$case_dir/symref-count")
+  count=\$((count + 1))
+  printf '%s\n' "\$count" > "$case_dir/symref-count"
+  if [ "\$count" -eq 2 ]; then
+    exec "$real_git" -C "\$2" ls-remote "\$5" HEAD
+  fi
+fi
+exec "$real_git" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/git"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "default-symref-disappears: teardown should refuse"
+  assert_grep "REFUSED" "$case_dir/stderr" \
+    "default-symref-disappears: teardown did not report a refusal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "default-symref-disappears: teardown removed task metadata"
+  pass "a remote default symref disappearing after fetch refuses teardown"
+}
+
+test_default_symref_lookup_failure_after_fetch_refuses() {
+  local case_dir rc real_git
+  case_dir=$(make_case default-symref-failure)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  real_git=${REAL_GIT_FOR_TEST:-$(command -v git)}
+  cat > "$case_dir/fakebin/git" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${3:-}" = ls-remote ] && [ "\${4:-}" = --symref ]; then
+  count=0
+  [ ! -f "$case_dir/symref-count" ] || count=\$(cat "$case_dir/symref-count")
+  count=\$((count + 1))
+  printf '%s\n' "\$count" > "$case_dir/symref-count"
+  [ "\$count" -ne 2 ] || exit 1
+fi
+exec "$real_git" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/git"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "default-symref-failure: teardown should refuse"
+  assert_grep "REFUSED" "$case_dir/stderr" \
+    "default-symref-failure: teardown did not report a refusal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "default-symref-failure: teardown removed task metadata"
+  pass "a failed post-fetch remote default lookup refuses teardown"
+}
+
 test_local_only_fork_remote_allows
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
@@ -2738,6 +3140,16 @@ test_pr_check_records_remote_head_when_local_lags
 test_content_in_default_fallback_allows
 test_open_pr_with_sibling_content_in_default_refuses
 test_merged_pr_with_sibling_content_allows
+test_open_pr_on_clean_pushed_branch_refuses
+test_missing_worktree_refuses
+test_no_pr_unique_pushed_refuses
+test_closed_unmerged_pushed_refuses
+test_gitlab_merged_squash_tree_allows
+test_gitlab_open_refuses
+test_unconfirmed_sibling_tree_refuses
+test_default_oid_force_push_after_fetch_refuses
+test_default_symref_disappears_after_fetch_refuses
+test_default_symref_lookup_failure_after_fetch_refuses
 test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
 test_gh_error_and_content_absent_refuses
@@ -2768,3 +3180,5 @@ test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+test_process_reap_mutation_refuses_before_worktree_return
+test_playbot_archive_mutation_refuses_before_workspace_deletion
