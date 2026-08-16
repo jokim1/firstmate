@@ -471,20 +471,20 @@ if [ "$mode" = restart ]; then
   fi
 fi
 
-# If a genuinely live+fresh watcher already holds the lock, do not start a
-# second one - attach to that cycle and wait until it ends so the harness
-# notify fires then, not as an immediate empty wake. A live holder with a
-# temporarily stale beacon is still mid-poll: start the usual tracked child so
-# it can self-evict/stand down behind the peer, then attach via the
-# confirmation and owned-child paths that accept live_watcher_holder without
-# requiring a fresh beacon. (--restart skips this: it just stopped this home's
+# If a genuinely live identity-matched watcher already holds the lock, do not
+# start a second one - attach to that cycle and wait until it ends so the
+# harness notify fires then, not as an immediate empty wake. Prefer a fresh
+# beacon, but still attach when the holder is live with a temporarily stale
+# beacon (mid long poll). (--restart skips this: it just stopped this home's
 # watcher and wants a fresh one.)
-if [ "$mode" = arm ] && healthy_watcher; then
-  cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
-  cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
-  report_attached
-  attach_and_wait "$HEALTHY_PID"
-  exit $?
+if [ "$mode" = arm ]; then
+  if healthy_watcher || live_watcher_holder; then
+    cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
+    cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
+    report_attached
+    attach_and_wait "$HEALTHY_PID"
+    exit $?
+  fi
 fi
 
 # Start a watcher as a tracked child and confirm it before settling in. The child

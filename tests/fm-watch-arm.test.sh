@@ -214,7 +214,7 @@ test_arm_attaches_to_live_holder_with_stale_beacon() {
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=2 FM_GUARD_GRACE=1 \
     FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    "$WATCH_ARM" > "$armout" &
+    "$WATCH_ARM" > "$armout" 2> "$dir/arm.err" &
   ARM_PID=$!
   i=0
   while [ "$i" -lt 80 ]; do
@@ -228,6 +228,8 @@ test_arm_attaches_to_live_holder_with_stale_beacon() {
     || fail "stale-beacon live holder must not be reported as FAILED: $(cat "$armout")"
   ! grep -qF 'watcher: started' "$armout" \
     || fail "stale-beacon live holder must not start a second watcher: $(cat "$armout")"
+  [ ! -s "$dir/arm.err" ] \
+    || fail "stale-beacon arm launched a competing watcher: $(cat "$dir/arm.err")"
   # Still the original singleton; a competing start would replace the lock pid.
   [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$SEED_PID" ] \
     || fail "arm replaced the live stale-beacon holder instead of attaching"
