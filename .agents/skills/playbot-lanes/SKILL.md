@@ -4,8 +4,8 @@ description: >-
   Agent-only reference for operating the experimental Playbot lane components.
   Load before running the Playbot doctor or readiness checks, binding a Playbot
   project or controller, dispatching or supervising any backend=playbot task,
-  handling a playbot-event or playbot-reconcile-failure check wake, or
-  acknowledging a Playbot outbox event.
+  handling a playbot-event or playbot-reconcile-failure check wake, running the
+  Phase 1 disposable smoke, or acknowledging a Playbot outbox event.
 user-invocable: false
 metadata:
   internal: true
@@ -13,22 +13,25 @@ metadata:
 
 # playbot-lanes
 
-Playbot lanes are an experimental, Phase-1-gated backend.
-The design contract is plan v3 (`data/lanemcp-impl-plan/report.md`, captain-private); the operator surface and trust boundaries are documented in `docs/playbot-lanes.md`; live evidence lives in `docs/verification/playbot-lanes.md`.
+Playbot lanes are an experimental backend.
+The design contract is plan v3 (`data/lanemcp-impl-plan/report.md`, captain-private); the operator surface and trust boundaries are documented in `docs/playbot-lanes.md`; live evidence lives in `docs/verification/playbot-lanes.md` and the smoke overlay under `docs/verification/playbot-mutation-evidence/`.
 This skill owns only the operating procedure.
 
 ## Current posture
 
-The backend is not spawn-capable.
-Every mutation path refuses with `PHASE1-EVIDENCE-REQUIRED` until the Phase 1 disposable smoke records per-operation evidence into the compatibility manifest in `bin/fm-playbot-lanes.mjs`.
-Never hand-edit a manifest `mutationEvidence` entry: only a recorded Phase 1 smoke flips one, and flipping one without that evidence is a safety violation.
+Native mutations are implemented in `bin/fm-playbot-lanes.mjs` and wired through `bin/backends/playbot.sh`.
+Every mutation still refuses with `PHASE1-EVIDENCE-REQUIRED` until the Phase 1 disposable smoke records verified per-operation evidence for the live release.
+Never hand-edit a manifest overlay pointer or evidence body: hash mismatch keeps the operation refused.
 `backend=playbot` is refused for secondmates entirely.
-The courier remains the production delivery path; a native task that becomes uncertain never falls back to the courier without reconciliation proving absence.
+The courier remains an independent delivery path; a native task that becomes uncertain never falls back to the courier without reconciliation proving absence.
 
 ## Operating procedure
 
 - Readiness: `bin/fm-playbot-lanes.mjs doctor --json` and `ready --json --capability <read-only|native|courier>`.
   Treat any failed load-bearing dimension as a blocker; the same-UID unauthenticated-DevTools warning is permanent posture, not a failure.
+- Phase 1 smoke (operator only, not CI): ensure `pgrep -f courier-run.py` is empty and Playbot is idle, then `bin/fm-playbot-lanes.mjs smoke --json`.
+  The smoke targets only the registered disposable project `project_07474ac1d119` and never MAIN `ws_00159507e225`.
+  Confinement records the honest read/write result under the gate-8 re-scope owned by `docs/playbot-lanes.md#confinement-gate-8-re-scope`.
 - Setup: `bind-project` and `bind-controller` are explicit lock-owner CLI operations with exact IDs and paths, never model-selected defaults.
 - Completion wakes: a `playbot-event task=<id> event=<id> record=...` check wake means the reconciler published a pending outbox event.
   Handle the event from the named outbox record, then acknowledge it with `bin/fm-playbot-reconcile.mjs ack <id> <event-id>` - acknowledgement revalidates the live session lock and the recorded lock-owner identity, so run it only from the lock-owning session before the queue's own acknowledgement.
