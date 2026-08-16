@@ -389,7 +389,11 @@ test_scenario_c() {
   start_daemon
 
   echo "done: PR https://example.test/pr/300" > "$STATE_DIR/fake-c1.status"
-  sleep 6
+  local i=0
+  while [ "$i" -lt 200 ] && ! grep -q 'Supervisor escalate' "$LOG_FILE" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
 
   # Exactly one terminal-safe marker in the submitted log (no duplicate, no loss).
   local marker_count

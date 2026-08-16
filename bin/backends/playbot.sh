@@ -370,6 +370,13 @@ fm_backend_playbot_endpoint_confirmed_gone() {  # <target>
   [ "$state" = missing ]
 }
 
+fm_backend_playbot_teardown_remove_worktree() {  # <workspace-id> <pre-removal-check>
+  local workspace_id=${1:-} pre_removal_check=${2:-}
+  [ -n "$workspace_id" ] && [ -n "$pre_removal_check" ] || return 2
+  "$pre_removal_check" || return 2
+  fm_backend_playbot_remove_worktree "$workspace_id" >/dev/null 2>&1
+}
+
 # fm_backend_playbot_teardown: teardown-authority endpoint retirement (plan
 # section 3.7), printing exactly one proof token: retired | retained:<reason> |
 # refuse:<reason>. Turn stop, thread archive, and workspace removal are all
@@ -380,9 +387,11 @@ fm_backend_playbot_endpoint_confirmed_gone() {  # <target>
 # fm_backend_playbot_endpoint_confirmed_gone before retiring records with an
 # orphan/retention receipt. The adapter never touches meta, routes, outboxes,
 # or txn records itself.
-fm_backend_playbot_teardown() {  # <meta-file> <task-id> <target> <worktree> <workspace-id> <thread-id> -> proof
+fm_backend_playbot_teardown() {  # <meta-file> <task-id> <target> <worktree> <workspace-id> <thread-id> <pre-removal-check> -> proof
   local meta=${1:-} id=${2:-} target=${3:-} worktree=${4:-} workspace_id=${5:-} thread_id=${6:-}
-  [ -n "$meta" ] && [ -n "$id" ] && [ -n "$target" ] && [ -n "$workspace_id" ] && [ -n "$thread_id" ] || {
+  local pre_removal_check=${7:-} remove_rc
+  [ -n "$meta" ] && [ -n "$id" ] && [ -n "$target" ] && [ -n "$workspace_id" ] \
+    && [ -n "$thread_id" ] && [ -n "$pre_removal_check" ] || {
     printf 'refuse:incomplete-task-identity'
     return 1
   }
@@ -392,9 +401,15 @@ fm_backend_playbot_teardown() {  # <meta-file> <task-id> <target> <worktree> <wo
   state=$(fm_backend_playbot_lane agent-state "$thread_id" 2>/dev/null) || state=unreadable
   case "$state" in
     missing)
-      if fm_backend_playbot_remove_worktree "$workspace_id" >/dev/null 2>&1; then
+      if fm_backend_playbot_teardown_remove_worktree "$workspace_id" "$pre_removal_check"; then
         printf 'retired'
         return 0
+      else
+        remove_rc=$?
+      fi
+      if [ "$remove_rc" -eq 2 ]; then
+        printf 'refuse:worktree-safety-recheck-failed'
+        return 1
       fi
       printf 'retained:workspace-removal-failed-after-thread-gone'
       return 0
@@ -409,12 +424,19 @@ fm_backend_playbot_teardown() {  # <meta-file> <task-id> <target> <worktree> <wo
         printf 'refuse:thread-archive-failed'
         return 1
       fi
-      if ! fm_backend_playbot_remove_worktree "$workspace_id" >/dev/null 2>&1; then
+      if fm_backend_playbot_teardown_remove_worktree "$workspace_id" "$pre_removal_check"; then
+        printf 'retired'
+        return 0
+      else
+        remove_rc=$?
+      fi
+      if [ "$remove_rc" -eq 2 ]; then
+        printf 'refuse:worktree-safety-recheck-failed'
+        return 1
+      else
         printf 'retained:thread-archived-workspace-removal-failed'
         return 0
       fi
-      printf 'retired'
-      return 0
       ;;
     *)
       echo "error: playbot teardown refuses unreadable endpoint playbot:$thread_id ($state)" >&2
