@@ -5,26 +5,22 @@
 # tasks, then print a backlog-refresh reminder for ship and scout teardowns
 # (a secondmate teardown prints none, since secondmates are not backlog items).
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
-# hard-resets/removes the worktree and kills its processes. Work has landed when it is
-# reachable from any remote-tracking branch (a fork counts as a remote, so
-# upstream-contribution PRs pushed to a fork satisfy this in any mode), OR - for a
-# normal ship task whose commits are not so reachable - when its PR is merged and
-# GitHub reports a PR head that contains the current local work, or its content is
-# already present in the up-to-date default branch. This recognizes the common
-# squash-merge-then-delete-branch flow, where the branch's own commits live nowhere
-# on a remote yet the change is fully in main.
-# The PR itself is resolved from the task's recorded pr= when present, or - when
-# no pr= was ever recorded (e.g. a yolo-authorized merge on a repo with no PR CI,
-# where the usual "checks green" fm-pr-check.sh trigger never fires) - by looking
-# up a merged PR whose head branch matches the worktree's branch, fetching its head
-# via refs/pull/<n>/head when the branch itself was deleted. So a missing pr= never
-# by itself causes a false refusal of landed work.
-# A gh lookup error falls back to the content check; if that is also inconclusive,
-# teardown refuses rather than risk discarding unlanded work.
-# Uncommitted changes are never landed.
-# local-only projects additionally accept work merged into the local default
-# branch (firstmate performs that merge after configured approval) as a fallback
-# for the common case where there is no remote at all.
+# hard-resets/removes the worktree and kills its processes. Default-deny for ship
+# tasks: teardown proceeds only on positive land proof against a live default tip,
+# never because a feature branch is merely reachable from a remote. Positive land is
+# (A) current HEAD is an ancestor of the live default tip D, (T) tree equality of
+# HEAD vs D when no pr= is recorded or the forge reports MERGED (squash), or (M)
+# forge MERGED with current HEAD contained in the PR head. Live D is fetched from
+# origin (else the sole remote); after fetch the remote default branch name and OID
+# must still match the fetched snapshot (same-branch force-push drift refuses).
+# Recorded pr= overlay: OPEN always refuses; CLOSED and unconfirmed accept only A
+# (never T); MERGED accepts A/M/T. Missing ordinary-ship worktree refuses (restore
+# an inspectable worktree or captain --force); pr_head alone never authorizes.
+# The same dirty+land+four-way classify recheck runs after quiescence before every
+# ordinary treehouse return (including lock-retry). Uncommitted changes are never
+# landed. A missing pr= still discovers a merged PR by branch when possible so
+# yolo/no-CI merges are not false-refused. local-only keeps the existing merge-to-
+# local-default carveout when there is no remote.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
@@ -946,63 +942,218 @@ pr_is_merged() {
   unpushed_patches_are_in_pr_head "$head"
 }
 
-# Is the branch's content already present in the up-to-date default branch? Fetches
-# first, then 3-way merges the default branch with HEAD: when HEAD introduces nothing
-# the default branch does not already contain (e.g. its change landed via squash) the
-# merged tree equals the default branch's tree. This isolates branch-only changes, so
-# unrelated commits the default branch gained past the merge-base do not count as
-# "added". Returns non-zero when inconclusive (no default ref, or a merge conflict),
-# so the caller refuses rather than guesses.
-content_in_default() {
-  local name ref default_tree merged_tree
-  name=$(default_branch) || return 1
-  if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
-    git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
-    ref="refs/remotes/origin/$name"
-  elif git -C "$WT" rev-parse --quiet --verify "refs/heads/$name" >/dev/null 2>&1; then
-    ref="refs/heads/$name"
-  else
-    return 1
+# Prefer origin; else the sole remote. Used for live default tip D.
+teardown_default_remote() {
+  local remotes n
+  [ -n "${PROJ:-}" ] && [ -d "$PROJ" ] || return 1
+  if git -C "$PROJ" remote get-url origin >/dev/null 2>&1; then
+    printf '%s\n' origin
+    return 0
   fi
-  default_tree=$(git -C "$WT" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
+  remotes=$(git -C "$PROJ" remote 2>/dev/null) || return 1
+  n=$(printf '%s\n' "$remotes" | sed '/^$/d' | wc -l | tr -d ' ')
+  [ "$n" = 1 ] || return 1
+  printf '%s\n' "$(printf '%s\n' "$remotes" | sed '/^$/d' | head -1)"
+}
+
+# Fetch live default tip D; after fetch re-read remote default name + OID and
+# require both match the fetched snapshot (closes same-branch OID drift). Echo D.
+live_default_tip() {
+  local remote name fetch_ref D live_sym live_name live_oid
+  remote=$(teardown_default_remote) || return 1
+  live_sym=$(git -C "$PROJ" ls-remote --symref "$remote" HEAD 2>/dev/null | awk '/^ref:/ { print $2; exit }')
+  if [ -n "$live_sym" ]; then
+    name=${live_sym#refs/heads/}
+    [ "$name" != "$live_sym" ] || return 1
+  else
+    name=$(default_branch) || return 1
+  fi
+  [ -n "$name" ] || return 1
+  fetch_ref="refs/remotes/$remote/$name"
+  git -C "$PROJ" fetch --quiet "$remote" "+refs/heads/$name:$fetch_ref" >/dev/null 2>&1 || return 1
+  D=$(git -C "$PROJ" rev-parse --verify --quiet "$fetch_ref^{commit}" 2>/dev/null) || return 1
+  [ -n "$D" ] || return 1
+  live_sym=$(git -C "$PROJ" ls-remote --symref "$remote" HEAD 2>/dev/null | awk '/^ref:/ { print $2; exit }')
+  if [ -n "$live_sym" ]; then
+    live_name=${live_sym#refs/heads/}
+    [ "$live_name" = "$name" ] || return 1
+  fi
+  live_oid=$(git -C "$PROJ" ls-remote "$remote" "refs/heads/$name" 2>/dev/null | awk 'NR == 1 { print $1; exit }')
+  [ -n "$live_oid" ] || return 1
+  [ "$live_oid" = "$D" ] || return 1
+  # Ensure the worktree object db can resolve D (shared repo for linked worktrees).
+  if [ -n "${WT:-}" ] && [ -d "$WT" ]; then
+    git -C "$WT" rev-parse --verify --quiet "$D^{commit}" >/dev/null 2>&1 || return 1
+  fi
+  printf '%s\n' "$D"
+}
+
+# Tree equality of tip vs D (merge-tree). Provenance-blind; caller gates on PR state.
+land_tree_eq() {
+  local D=$1 tip=${2:-HEAD} default_tree merged_tree repo
+  [ -n "$D" ] || return 1
+  if [ -n "${WT:-}" ] && [ -d "$WT" ]; then
+    repo=$WT
+  else
+    repo=$PROJ
+  fi
+  [ -n "$repo" ] && [ -d "$repo" ] || return 1
+  default_tree=$(git -C "$repo" rev-parse --quiet --verify "$D^{tree}" 2>/dev/null) || return 1
   [ -n "$default_tree" ] || return 1
-  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
+  merged_tree=$(git -C "$repo" merge-tree --write-tree "$D" "$tip" 2>/dev/null) || return 1
   merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
   [ "$merged_tree" = "$default_tree" ]
 }
 
-# Is this task's own recorded PR (pr= in meta) still open? An open PR is
-# affirmative proof the task's own work has not landed, even when its content
-# already matches the default branch because a sibling PR carried the same
-# change first. Returns success only when a pr= is recorded and GitHub reports
-# its state as OPEN; returns non-zero for no recorded PR, any other state, or a
-# gh error, so the caller keeps its content fallback for those cases.
-recorded_pr_is_open() {
-  local state
-  [ -n "$PR_URL" ] || return 1
-  state=$(cd "$WT" && gh pr view "$PR_URL" --json state -q '.state' 2>/dev/null) || return 1
-  case "$state" in
-    OPEN|open) return 0 ;;
-    *) return 1 ;;
+# content_in_default: tree equality vs live D (with post-fetch OID). Used when T is allowed.
+content_in_default() {
+  local D
+  [ -d "${WT:-}" ] || return 1
+  D=$(live_default_tip) || return 1
+  land_tree_eq "$D" HEAD
+}
+
+# Forge classify for recorded pr=. Sets RECORDED_PR_STATE and RECORDED_PR_HEAD.
+# Returns: 0 OPEN, 1 MERGED, 3 CLOSED, 2 unconfirmed/malformed/lookup.
+RECORDED_PR_STATE=
+RECORDED_PR_HEAD=
+RECORDED_PR_PROVIDER=
+classify_recorded_pr_state() {
+  local view state head lines raw glab_cwd states state_count forge_cwd
+  RECORDED_PR_STATE=
+  RECORDED_PR_HEAD=
+  RECORDED_PR_PROVIDER=
+  [ -n "${PR_URL:-}" ] || return 2
+  if ! fm_pr_url_parse "$PR_URL"; then
+    return 2
+  fi
+  RECORDED_PR_PROVIDER=$FM_PR_PROVIDER
+  if [ -n "${PROJ:-}" ] && [ -d "$PROJ" ]; then
+    forge_cwd=$PROJ
+  else
+    forge_cwd=${WT:-$PWD}
+  fi
+  case "$FM_PR_PROVIDER" in
+    github)
+      view=$(cd "$forge_cwd" && gh pr view "$PR_URL" --json state,headRefOid -q '.state + "\t" + .headRefOid' 2>/dev/null) || return 2
+      [ -n "$view" ] || return 2
+      lines=$(printf '%s\n' "$view" | wc -l | tr -d ' ')
+      [ "$lines" = 1 ] || return 2
+      case "$view" in *$'\t'*) ;; *) return 2 ;; esac
+      state=${view%%$'\t'*}
+      head=${view#*$'\t'}
+      [ -n "$state" ] || return 2
+      case "$state" in
+        OPEN)
+          RECORDED_PR_STATE=OPEN
+          RECORDED_PR_HEAD=$head
+          return 0
+          ;;
+        MERGED)
+          fm_pr_head_valid "$head" || return 2
+          RECORDED_PR_STATE=MERGED
+          RECORDED_PR_HEAD=$head
+          return 1
+          ;;
+        CLOSED)
+          if [ -n "$head" ] && ! fm_pr_head_valid "$head"; then
+            return 2
+          fi
+          RECORDED_PR_STATE=CLOSED
+          RECORDED_PR_HEAD=$head
+          return 3
+          ;;
+        *) return 2 ;;
+      esac
+      ;;
+    gitlab)
+      command -v glab >/dev/null 2>&1 || return 2
+      glab_cwd=$forge_cwd
+      raw=$(cd "$glab_cwd" && glab mr view "$FM_PR_NUMBER" -R "https://$FM_PR_HOST/$FM_PR_PATH" 2>/dev/null) || return 2
+      states=$(printf '%s\n' "$raw" | sed -n 's/^state:[[:space:]]*//p' | sed '/^$/d')
+      state_count=$(printf '%s\n' "$states" | sed '/^$/d' | wc -l | tr -d ' ')
+      [ "$state_count" = 1 ] || return 2
+      state=$states
+      case "$state" in
+        open|opened) RECORDED_PR_STATE=OPEN; return 0 ;;
+        merged) RECORDED_PR_STATE=MERGED; return 1 ;;
+        closed) RECORDED_PR_STATE=CLOSED; return 3 ;;
+        *) return 2 ;;
+      esac
+      ;;
+    *) return 2 ;;
   esac
 }
 
-# Has the worktree's committed work actually LANDED, though its commits are not
-# reachable from any remote-tracking branch? True when a merged PR proves the
-# current local work is contained in the PR head. A recorded-but-open PR is
-# positive proof the work is NOT landed, so it refuses without consulting the
-# provenance-blind content check - otherwise a sibling PR's identical content in
-# the default branch would falsely green-light teardown of the still-open task.
-# Otherwise falls back to the content check, which covers the no-PR, gh-error,
-# and squash-merge-then-delete paths. False only for genuinely unlanded work.
-work_is_landed() {
-  local branch=$1
-  pr_is_merged "$branch" && return 0
-  if recorded_pr_is_open; then
-    WORK_UNLANDED_PR_OPEN=1
+# Positive land proof for current WT HEAD against live D + PR overlay (v5 §3).
+# Sets WORK_UNLANDED_PR_OPEN=1 when refusing OPEN.
+ship_land_proven() {
+  local branch=$1 D current pr_rc=0
+  WORK_UNLANDED_PR_OPEN=
+  [ -d "${WT:-}" ] || return 1
+  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+
+  # Four-way PR overlay first when pr= is set so OPEN never reaches T.
+  if [ -n "${PR_URL:-}" ]; then
+    classify_recorded_pr_state || pr_rc=$?
+    if [ "$pr_rc" -eq 0 ]; then
+      WORK_UNLANDED_PR_OPEN=1
+      return 1
+    fi
+  fi
+
+  D=$(live_default_tip) || {
+    # No live remote D: allow only via pr_is_merged (GitHub M) when readable MERGED.
+    if [ -n "${PR_URL:-}" ] && [ "${RECORDED_PR_STATE:-}" = MERGED ]; then
+      pr_is_merged "$branch" && return 0
+    fi
+    pr_is_merged "$branch" && return 0
+    return 1
+  }
+
+  # A: ancestry
+  if git -C "$WT" merge-base --is-ancestor "$current" "$D" 2>/dev/null; then
+    return 0
+  fi
+
+  # M: MERGED + containment (GitHub head; GitLab often lacks head oid → T under MERGED)
+  if [ -n "${PR_URL:-}" ] && [ "${RECORDED_PR_STATE:-}" = MERGED ]; then
+    if [ -n "${RECORDED_PR_HEAD:-}" ]; then
+      ensure_commit_object "$PR_URL" "$RECORDED_PR_HEAD" || true
+      if git -C "$WT" merge-base --is-ancestor "$current" "$RECORDED_PR_HEAD" 2>/dev/null; then
+        return 0
+      fi
+      unpushed_patches_are_in_pr_head "$RECORDED_PR_HEAD" && return 0
+    fi
+    # FR1: MERGED ⇒ tree equality allowed
+    land_tree_eq "$D" HEAD && return 0
     return 1
   fi
-  content_in_default
+
+  # T: only when no pr= (unconfirmed with pr= must not use T — R2-R1)
+  if [ -z "${PR_URL:-}" ]; then
+    # Discover merged PR by branch (existing behavior) or tree equality
+    pr_is_merged "$branch" && return 0
+    land_tree_eq "$D" HEAD && return 0
+    return 1
+  fi
+
+  # CLOSED or unconfirmed: A only (already failed)
+  return 1
+}
+
+# Is this task's own recorded PR still open? Back-compat helper.
+recorded_pr_is_open() {
+  local pr_rc=0
+  [ -n "$PR_URL" ] || return 1
+  classify_recorded_pr_state || pr_rc=$?
+  [ "$pr_rc" -eq 0 ]
+}
+
+# Has the worktree's committed work LANDED? Default-deny positive proof (v5).
+work_is_landed() {
+  local branch=$1
+  ship_land_proven "$branch"
 }
 
 backlog_refresh_reminder() {
@@ -1249,11 +1400,17 @@ teardown_treehouse_return() {
 
 validate_worktree_teardown_safety() {
   local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
-  [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   case "$KIND" in
     secondmate|scout) return 0 ;;
   esac
+
+  # Missing ordinary ship worktree: refuse (F4). No pr_head allow path.
+  if [ ! -d "${WT:-}" ]; then
+    echo "REFUSED: ordinary ship task $ID has no inspectable worktree at ${WT:-<missing>}; landing cannot be positively proven." >&2
+    echo "Restore an inspectable worktree and retry, or get the captain's explicit OK to discard, then --force." >&2
+    return 1
+  fi
 
   if ! dirty_raw=$(git -C "$WT" status --porcelain 2>/dev/null); then
     if worktree_safety_blocked_by_lock "uncommitted changes"; then
@@ -1275,6 +1432,7 @@ validate_worktree_teardown_safety() {
   fi
   unpushed=$(printf '%s\n' "$unpushed_raw" | head -5)
 
+  # local-only carveout: merge into local default when not on any remote (existing).
   if [ -n "$unpushed" ] && [ "$MODE" = local-only ]; then
     DEFAULT=$(default_branch) || { echo "REFUSED: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master." >&2; return 1; }
     if ! unmerged_raw=$(git -C "$WT" log --oneline HEAD --not "$DEFAULT" -- 2>/dev/null); then
@@ -1293,27 +1451,41 @@ validate_worktree_teardown_safety() {
       echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
       return 1
     fi
-  elif [ -n "$dirty" ]; then
+    return 0
+  fi
+
+  if [ -n "$dirty" ]; then
     echo "REFUSED: worktree $WT has uncommitted changes." >&2
     echo "uncommitted changes present" >&2
     echo "Commit them (or get the captain's explicit OK to discard, then --force)." >&2
     return 1
-  elif [ -n "$unpushed" ]; then
-    branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
-    if [ -z "$branch" ]; then
-      branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-      TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
-    fi
-    if ! work_is_landed "$branch"; then
-      echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
-      if [ -n "${WORK_UNLANDED_PR_OPEN:-}" ]; then
-        echo "PR $PR_URL is still open (not merged); its content may already be in the default branch via a sibling PR, but this task's own PR has not landed." >&2
-      fi
-      printf 'unpushed commits:\n%s\n' "$unpushed" >&2
-      echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
-      return 1
-    fi
   fi
+
+  # Always require positive land proof (replace empty-unpushed fall-through ALLOW).
+  branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
+  if [ -z "$branch" ]; then
+    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+    TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
+  fi
+  if ship_land_proven "$branch"; then
+    return 0
+  fi
+
+  if [ -n "${WORK_UNLANDED_PR_OPEN:-}" ]; then
+    echo "REFUSED: worktree $WT belongs to task $ID, whose recorded PR is still open: $PR_URL${RECORDED_PR_PROVIDER:+ ($RECORDED_PR_PROVIDER)}" >&2
+    echo "Tearing down now deletes the metadata bin/fm-pr-merge.sh needs, stranding a PR with no guarded path to land it." >&2
+    echo "Get the PR merged with bin/fm-pr-merge.sh once it is green and merge is authorized, or close it on the forge, then retry teardown." >&2
+    return 1
+  fi
+  if [ -n "$unpushed" ]; then
+    echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
+    printf 'unpushed commits:\n%s\n' "$unpushed" >&2
+    echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
+  else
+    echo "REFUSED: worktree $WT is reachable from a remote but has no positive land proof on the live default branch or merged PR." >&2
+    echo "Land the change (merge/squash into the default branch or merge the PR), or get the captain's explicit OK to discard, then --force." >&2
+  fi
+  return 1
 }
 
 # Fix 1 (see script header): does the active-or-most-recent no-mistakes run in
@@ -2553,18 +2725,23 @@ if [ "$BACKEND" = playbot ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]
   }
 fi
 
-if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
-  if validate_worktree_teardown_safety; then
-    :
-  else
-    safety_rc=$?
-    if [ "$safety_rc" -eq "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED" ]; then
-      cleanup_stale_lock_for_safety_check "$WT" || exit 1
-      validate_worktree_teardown_safety || exit 1
-    else
-      exit 1
-    fi
-  fi
+if [ "$FORCE" != "--force" ]; then
+  case "$KIND" in
+    secondmate|scout) ;;
+    *)
+      if validate_worktree_teardown_safety; then
+        :
+      else
+        safety_rc=$?
+        if [ "$safety_rc" -eq "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED" ]; then
+          cleanup_stale_lock_for_safety_check "$WT" || exit 1
+          validate_worktree_teardown_safety || exit 1
+        else
+          exit 1
+        fi
+      fi
+      ;;
+  esac
 fi
 
 # Every landed/discard-work refusal above has now passed (or --force skipped
