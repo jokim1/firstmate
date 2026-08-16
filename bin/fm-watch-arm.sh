@@ -471,20 +471,20 @@ if [ "$mode" = restart ]; then
   fi
 fi
 
-# If a genuinely live identity-matched watcher already holds the lock, do not
-# start a second one - attach to that cycle and wait until it ends so the
-# harness notify fires then, not as an immediate empty wake. Prefer a fresh
-# beacon, but still attach when the holder is live with a temporarily stale
-# beacon (mid long poll). (--restart skips this: it just stopped this home's
+# If a genuinely live+fresh watcher already holds the lock, do not start a
+# second one - attach to that cycle and wait until it ends so the harness
+# notify fires then, not as an immediate empty wake. A live holder with a
+# temporarily stale beacon is still mid-poll: start the usual tracked child so
+# it can self-evict/stand down behind the peer, then attach via the
+# confirmation and owned-child paths that accept live_watcher_holder without
+# requiring a fresh beacon. (--restart skips this: it just stopped this home's
 # watcher and wants a fresh one.)
-if [ "$mode" = arm ]; then
-  if healthy_watcher || live_watcher_holder; then
-    cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
-    cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
-    report_attached
-    attach_and_wait "$HEALTHY_PID"
-    exit $?
-  fi
+if [ "$mode" = arm ] && healthy_watcher; then
+  cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
+  cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
+  report_attached
+  attach_and_wait "$HEALTHY_PID"
+  exit $?
 fi
 
 # Start a watcher as a tracked child and confirm it before settling in. The child
@@ -563,14 +563,16 @@ owned_child_finished() {
     if live_watcher_holder; then
       cycle_log_append "$rc" "$signal" unexpected-clean-exit "attached:$HEALTHY_PID"
       print_watch_output "$child_out"
-      rm -f "$child_out" 2>/dev/null || true
       child=
-      child_out=
+      # Keep child_out until after attach so stand-down diagnostics stay visible.
       cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
       report_attached
       cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
       attach_and_wait "$HEALTHY_PID"
-      return $?
+      rc=$?
+      rm -f "$child_out" 2>/dev/null || true
+      child_out=
+      return "$rc"
     fi
     print_watch_output "$child_out"
     rm -f "$child_out" 2>/dev/null || true
@@ -649,13 +651,16 @@ while :; do
     wait "$child" 2>/dev/null || true
     child=
     print_watch_output "$child_out"
-    rm -f "$child_out" 2>/dev/null || true
-    child_out=
+    # Leave child_out on disk until EXIT cleanup so peer-stand-down diagnostics
+    # (e.g. "watcher: already running pid …") remain readable during attach.
     cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
     report_attached
     cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
     attach_and_wait "$HEALTHY_PID"
-    exit $?
+    rc=$?
+    rm -f "$child_out" 2>/dev/null || true
+    child_out=
+    exit "$rc"
   fi
   [ "$(date +%s)" -ge "$deadline" ] && break
   sleep 0.2
@@ -667,15 +672,19 @@ trap - HUP TERM INT
 # fresh beacon checked above before it can be reported as started.
 if live_watcher_holder && [ "$HEALTHY_PID" != "$child" ]; then
   print_watch_output "$child_out"
-  cleanup_child
+  if [ -n "$child" ] && fm_pid_alive "$child"; then
+    kill -TERM "$child" 2>/dev/null || true
+  fi
   wait "$child" 2>/dev/null || true
   child=
-  child_out=
   cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
   report_attached
   cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
   attach_and_wait "$HEALTHY_PID"
-  exit $?
+  rc=$?
+  rm -f "$child_out" 2>/dev/null || true
+  child_out=
+  exit "$rc"
 fi
 print_watch_output "$child_out"
 cleanup_child
