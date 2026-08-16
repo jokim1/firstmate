@@ -99,6 +99,8 @@
 #                                   (default 3600)
 #          FM_ESCALATE_BATCH_SECS   buffer window for batched escalation
 #                                   digests; 0 = flush immediately (default 90)
+#          FM_REFILL_COVERED_SECS   seconds a capacity-freeing captain escalate
+#                                   covers a same-window refill (default 120)
 #          FM_HEARTBEAT_SCAN_SECS   cadence for the catch-all status scan
 #                                   (default 300)
 #          FM_HOUSEKEEPING_TICK     seconds between housekeeping passes while
@@ -460,7 +462,23 @@ classify_heartbeat() {
 # Advisory fleet refill: firstmate (or the away-mode primary injection) must
 # re-evaluate ready work against free capacity. The daemon never selects or
 # spawns from this wake itself.
-classify_refill() {
+# A capacity-freeing captain status already forces capacity re-evaluation. Its
+# same-window refill wake must not produce a second injection. Coverage is
+# one-shot and bounded so a later refill-only wake still escalates.
+REFILL_COVERED_SECS_DEFAULT=120
+classify_refill() {  # [state]
+  local state=${1:-} age covered
+  if [ -n "$state" ]; then
+    covered="$state/.subsuper-refill-covered"
+    if [ -f "$covered" ]; then
+      age=$(_file_age "$covered")
+      rm -f "$covered"
+      if [ "$age" -lt "${FM_REFILL_COVERED_SECS:-$REFILL_COVERED_SECS_DEFAULT}" ]; then
+        printf 'self|refill covered by capacity-freeing captain escalate'
+        return
+      fi
+    fi
+  fi
   printf 'escalate|refill: re-evaluate ready work against free capacity'
 }
 
@@ -1366,7 +1384,7 @@ handle_wake() {  # <reason> <state>
               esac ;;
     check:*)  decision=$(classify_check "$reason") ;;
     heartbeat|heartbeat:*) decision=$(classify_heartbeat) ;;
-    refill|refill:*) decision=$(classify_refill) ;;
+    refill|refill:*) decision=$(classify_refill "$state") ;;
     *)        decision=$(classify_unknown "$reason") ;;
   esac
   action=${decision%%|*}
@@ -1441,7 +1459,7 @@ handle_wake() {  # <reason> <state>
 }
 
 handle_durable_wakes() {  # <watcher-reason> <state>
-  local fallback_reason=$1 state=$2 out err tab epoch sequence kind key payload rest
+  local fallback_reason=$1 state=$2 out err tab epoch sequence kind key payload rest f last
   local handled=0 failed=0 ack_through ack_generation
   out=$(mktemp "$state/.subsuper-wake-drain.XXXXXX") || return 1
   err=$(mktemp "$state/.subsuper-wake-drain.XXXXXX") || { rm -f "$out"; return 1; }
@@ -1452,6 +1470,20 @@ handle_durable_wakes() {  # <watcher-reason> <state>
   fi
 
   tab=$(printf '\t')
+  while IFS="$tab" read -r epoch sequence kind key payload rest; do
+    case "$epoch" in ''|*[!0-9]*) continue ;; esac
+    case "$sequence" in ''|*[!0-9]*) continue ;; esac
+    [ "$kind" = signal ] || continue
+    for f in ${payload#signal: }; do
+      case "$f" in *.status) ;; *) continue ;; esac
+      [ -e "$f" ] || continue
+      last=$(last_status_line "$f")
+      if status_frees_capacity "$last"; then
+        _now > "$state/.subsuper-refill-covered"
+        break 2
+      fi
+    done
+  done < "$out"
   while IFS="$tab" read -r epoch sequence kind key payload rest; do
     case "$epoch" in ''|*[!0-9]*) continue ;; esac
     case "$sequence" in ''|*[!0-9]*) continue ;; esac
@@ -1620,13 +1652,26 @@ fm_super_main() {
 
   # --- shutdown: flush buffered escalations, reap child, release lock -------
   local WATCHER_PID="" CUR_TMP=""
+  stop_watcher_bounded() {  # <pid> [tenths-of-a-second]
+    local pid=$1 limit=${2:-50} i=0
+    [ -n "$pid" ] || return 0
+    fm_pid_alive "$pid" || return 0
+    kill -TERM "$pid" 2>/dev/null || true
+    while [ "$i" -lt "$limit" ] && fm_pid_alive "$pid"; do
+      sleep 0.1
+      i=$((i + 1))
+    done
+    if fm_pid_alive "$pid"; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    wait "$pid" 2>/dev/null || true
+  }
   cleanup() {
     trap - TERM INT
     wedge_alarm_stop_active_notifier
     escalate_flush "$STATE" 2>/dev/null || true
     if [ -n "${WATCHER_PID:-}" ]; then
-      kill "$WATCHER_PID" 2>/dev/null || true
-      wait "$WATCHER_PID" 2>/dev/null || true
+      stop_watcher_bounded "$WATCHER_PID"
     fi
     if [ -n "${CUR_TMP:-}" ]; then
       rm -f "$CUR_TMP" 2>/dev/null || true
