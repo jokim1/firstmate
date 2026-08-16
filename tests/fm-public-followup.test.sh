@@ -1110,13 +1110,14 @@ test_cleanup_refuses_while_a_public_reply_is_owed() {
   local home rc
   home=$(make_home cleanup-guard)
   seed_commitment "$home" pf-guard req-guard discord main ship-task
+  fm_git_init_commit "$home/projects/sample"
   fm_write_meta "$home/state/ship-task.meta" \
     "window=firstmate:fm-ship-task" \
-    "worktree=$home/projects/gone" \
+    "worktree=$home/projects/sample" \
     "project=$home/projects/sample" \
     "harness=codex" \
     "kind=ship" \
-    "mode=no-mistakes"
+    "mode=local-only"
 
   rc=0
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \

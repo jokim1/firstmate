@@ -732,7 +732,7 @@ fm_recovery_marker_arm_check() {
 }
 
 fm_lock_try_acquire() {
-  local lockdir=$1 pid steal cur rc steal_owner primary_owner
+  local lockdir=$1 pid steal cur rc steal_pid steal_owner primary_owner
   FM_LOCK_HELD_PID=
   FM_LOCK_OWNER_DIR=
   FM_LOCK_RECOVERED_PID=
@@ -751,11 +751,34 @@ fm_lock_try_acquire() {
     return 1
   fi
 
+  # A steal mutex is the terminal serialization layer. Never recurse into a
+  # .steal.steal chain when a caller encounters a stale mutex directly.
+  case "$lockdir" in
+    *.steal)
+      FM_LOCK_HELD_PID=$pid
+      return 1
+      ;;
+  esac
+
   steal="$lockdir.steal"
-  if ! fm_lock_try_acquire "$steal"; then
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
-    FM_LOCK_OWNER_DIR=
-    return 1
+  if ! fm_lock_try_create "$steal"; then
+    steal_pid=$(cat "$steal/pid" 2>/dev/null || true)
+    if fm_pid_alive "$steal_pid" || fm_lock_mid_acquire_is_fresh "$steal" "$steal_pid"; then
+      FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+      FM_LOCK_OWNER_DIR=
+      return 1
+    fi
+    steal_owner=
+    if [ -L "$steal" ]; then
+      steal_owner=$(fm_lock_link_owner "$steal" 2>/dev/null || true)
+    fi
+    if ! fm_lock_recheck_stale_owner "$steal" "$steal_owner" "$steal_pid" \
+      || ! fm_lock_remove_path "$steal" \
+      || ! fm_lock_try_create "$steal"; then
+      FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+      FM_LOCK_OWNER_DIR=
+      return 1
+    fi
   fi
   steal_owner=${FM_LOCK_OWNER_DIR:-}
 

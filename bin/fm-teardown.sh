@@ -2819,7 +2819,8 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   fi
   if [ -d "$WT" ]; then
     branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-    if [ "$branch" != "HEAD" ]; then
+    default_for_cleanup=$(default_branch 2>/dev/null || true)
+    if [ "$branch" != "HEAD" ] && [ "$branch" != "$default_for_cleanup" ]; then
       if git -C "$WT" checkout --detach -q 2>/dev/null; then
         git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
       fi
@@ -2837,7 +2838,8 @@ elif [ "$BACKEND" = playbot ] && [ "$KIND" != secondmate ]; then
   # only after endpoint proof (plan v3 §3.7).
   if [ -d "$WT" ]; then
     branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-    if [ "$branch" != "HEAD" ]; then
+    default_for_cleanup=$(default_branch 2>/dev/null || true)
+    if [ "$branch" != "HEAD" ] && [ "$branch" != "$default_for_cleanup" ]; then
       if git -C "$WT" checkout --detach -q 2>/dev/null; then
         git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
       fi
@@ -2856,7 +2858,8 @@ elif [ "$BACKEND" = playbot ] && [ "$KIND" != secondmate ]; then
   fi
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-  if [ "$branch" != "HEAD" ]; then
+  default_for_cleanup=$(default_branch 2>/dev/null || true)
+  if [ "$branch" != "HEAD" ] && [ "$branch" != "$default_for_cleanup" ]; then
     if git -C "$WT" checkout --detach -q 2>/dev/null; then
       git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
     fi
