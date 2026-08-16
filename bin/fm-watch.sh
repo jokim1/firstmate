@@ -757,6 +757,7 @@ if ! fm_lock_try_acquire "$WATCH_LOCK"; then
   fi
   exit 0
 fi
+WATCH_LOCK_OWNER=$FM_LOCK_OWNER_DIR
 WATCHER_RECOVERY_PENDING=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
@@ -802,6 +803,13 @@ FM_WATCH_DELIVERY_PID=$WATCHER_PID
 FM_WATCH_DELIVERY_IDENTITY=$(fm_pid_identity "$WATCHER_PID" 2>/dev/null || true)
 printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
 
+watcher_beat() {
+  touch "$STATE/.last-watcher-beat" || return 1
+  if [ "$(cat "$WATCH_LOCK_OWNER/beacon-identity" 2>/dev/null || true)" != "$FM_WATCH_DELIVERY_IDENTITY" ]; then
+    printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK_OWNER/beacon-identity" 2>/dev/null
+  fi
+}
+
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 
 # A merged poll may have queued its terminal wake and then lost the process
@@ -826,7 +834,7 @@ resurface_after_downtime() {
 }
 
 if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
-  touch "$STATE/.last-watcher-beat"
+  watcher_beat || true
   handling_wait=0
   while [ "$handling_wait" -lt 600 ]; do
     fm_recovery_marker_snapshot "$WATCHER_DOWNTIME_MARKER" || true
@@ -853,7 +861,7 @@ while :; do
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
-  touch "$STATE/.last-watcher-beat"
+  watcher_beat || true
 
   # Parent-owned secondmate pending-reply reconciliation: resolve correlated
   # parent reports, observe backend busy/idle turn completion, send one recovery

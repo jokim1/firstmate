@@ -298,6 +298,7 @@ fm_lock_clean_known_files() {
   rm -f \
     "$lockdir/pid" \
     "$lockdir/fm-home" \
+    "$lockdir/beacon-identity" \
     "$lockdir/pid-identity" \
     "$lockdir/role" \
     "$lockdir/watcher-path" \

@@ -210,6 +210,8 @@ test_arm_attaches_to_live_holder_with_stale_beacon() {
   [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$SEED_PID" ] \
     || fail "seed watcher lost the lock before the stale-beacon arm"
   is_live_non_zombie "$SEED_PID" || fail "seed watcher died before the stale-beacon arm"
+  [ "$(cat "$state/.watch.lock/beacon-identity" 2>/dev/null || true)" = "$(fm_test_pid_identity "$SEED_PID")" ] \
+    || fail "seed watcher did not publish generation-bound beacon proof"
 
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=2 FM_GUARD_GRACE=1 \
@@ -243,6 +245,42 @@ test_arm_attaches_to_live_holder_with_stale_beacon() {
   grep -qE '^(refill:|signal:)' "$armout" \
     || fail "attached stale-beacon arm did not surface the delivered wake: $(cat "$armout")"
   pass "watch-arm: attaches to a live identity-matched holder even when the beacon is stale"
+}
+
+test_arm_does_not_attach_before_peer_first_beacon() {
+  local dir home state fakebin armout holder owner identity arm_pid status
+  dir=$(make_case peer-before-first-beacon)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  owner="$state/.watch.lock.owner.fixture"
+  mkdir -p "$home/data" "$owner"
+
+  sleep 300 &
+  holder=$!
+  identity=$(fm_test_pid_identity "$holder") || fail "could not identify peer watcher fixture"
+  printf '%s\n' "$holder" > "$owner/pid"
+  printf '%s\n' "$home" > "$owner/fm-home"
+  printf '%s\n' "$WATCH" > "$owner/watcher-path"
+  printf '%s\n' "$identity" > "$owner/pid-identity"
+  ln -s "$owner" "$state/.watch.lock"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_ARM_CONFIRM_TIMEOUT=1 FM_GUARD_GRACE=1 FM_POLL=5 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  arm_pid=$!
+  wait_for_exit "$arm_pid" 100
+  status=$?
+  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] \
+    || fail "arm did not fail bounded confirmation for an unbeaconed peer (status $status)"
+  ! grep -qF "watcher: attached pid=$holder" "$armout" \
+    || fail "arm attached before the peer emitted its first beacon: $(cat "$armout")"
+  grep -qF 'watcher: FAILED - no live watcher with a fresh beacon' "$armout" \
+    || fail "arm did not fail closed for an unbeaconed peer: $(cat "$armout")"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  pass "watch-arm: a peer must emit its first beacon before attachment"
 }
 
 test_new_child_without_fresh_beacon_fails_confirmation() {
@@ -889,6 +927,7 @@ test_downtime_marker_does_not_follow_symlink() {
 
 test_attached_arm_reports_the_delivered_wake
 test_arm_attaches_to_live_holder_with_stale_beacon
+test_arm_does_not_attach_before_peer_first_beacon
 test_new_child_without_fresh_beacon_fails_confirmation
 test_attached_arm_reports_the_delivered_wake_after_drain
 test_attached_arm_still_fails_on_a_wake_it_did_not_deliver
