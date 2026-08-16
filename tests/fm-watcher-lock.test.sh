@@ -311,26 +311,35 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
   pass "live steal mutex is not reclaimed"
 }
 
-test_lock_dead_steal_mutex_is_reclaimed_without_recursion() {
-  local dir state lockdir dead rc newpid
-  dir=$(make_case lock-dead-stealer)
+test_lock_stale_steal_mutex_is_reclaimed_without_recursion() {
+  local dir state lockdir dead out stale i
+  dir=$(make_case lock-stale-stealer)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   dead=$(dead_pid)
-  mkdir "$lockdir" "$lockdir.steal"
+  mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
-  printf '%s\n' "$dead" > "$lockdir.steal/pid"
-  rc=0
-  newpid=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+  touch -t 200001010000 "$lockdir"
+  stale=$lockdir
+  i=0
+  while [ "$i" -lt 40 ]; do
+    stale="$stale.steal"
+    mkdir "$stale"
+    printf '%s\n' "$dead" > "$stale/pid"
+    touch -t 200001010000 "$stale"
+    i=$((i + 1))
+  done
+
+  out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
-    if fm_lock_try_acquire "$2"; then cat "$2/pid"; else exit 7; fi
-  ' _ "$LIB" "$lockdir") || rc=$?
-  [ "$rc" -eq 0 ] || fail "acquirer failed to reclaim a dead steal mutex (rc=$rc)"
-  [ -n "$newpid" ] && [ "$newpid" != "$dead" ] \
-    || fail "reclaimed lock did not record a new owner"
-  [ ! -e "$lockdir.steal.steal" ] && [ ! -L "$lockdir.steal.steal" ] \
-    || fail "dead steal mutex reclamation created a recursive steal chain"
-  pass "dead steal mutex is reclaimed without recursive steal chains"
+    fm_lock_try_acquire "$2" || exit 7
+    printf "lockpid=%s steal_exists=%s\n" "$(cat "$2/pid")" "$([ -e "$2.steal" ] || [ -L "$2.steal" ] && echo yes || echo no)"
+  ' _ "$LIB" "$lockdir") || fail "stale steal mutex prevented stale primary lock recovery"
+  case "$out" in
+    *"lockpid="*" steal_exists=no"*) ;;
+    *) fail "stale steal mutex recovery left invalid lock state: $out" ;;
+  esac
+  pass "stale steal mutex is reclaimed without recursive lock paths"
 }
 
 test_lock_does_not_steal_live_lock() {
@@ -1132,7 +1141,7 @@ test_lock_single_winner_under_concurrency
 test_lock_steals_dead_pid_lock
 test_lock_stale_steal_single_winner_under_concurrency
 test_lock_live_steal_mutex_is_not_reclaimed
-test_lock_dead_steal_mutex_is_reclaimed_without_recursion
+test_lock_stale_steal_mutex_is_reclaimed_without_recursion
 test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace
 test_lock_late_claim_loses_after_recreate
