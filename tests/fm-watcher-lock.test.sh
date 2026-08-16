@@ -317,6 +317,28 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
   pass "live steal mutex is not reclaimed"
 }
 
+test_lock_dead_steal_mutex_is_reclaimed_without_recursion() {
+  local dir state lockdir dead rc newpid
+  dir=$(make_case lock-dead-stealer)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  dead=$(dead_pid)
+  mkdir "$lockdir" "$lockdir.steal"
+  printf '%s\n' "$dead" > "$lockdir/pid"
+  printf '%s\n' "$dead" > "$lockdir.steal/pid"
+  rc=0
+  newpid=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    if fm_lock_try_acquire "$2"; then cat "$2/pid"; else exit 7; fi
+  ' _ "$LIB" "$lockdir") || rc=$?
+  [ "$rc" -eq 0 ] || fail "acquirer failed to reclaim a dead steal mutex (rc=$rc)"
+  [ -n "$newpid" ] && [ "$newpid" != "$dead" ] \
+    || fail "reclaimed lock did not record a new owner"
+  [ ! -e "$lockdir.steal.steal" ] && [ ! -L "$lockdir.steal.steal" ] \
+    || fail "dead steal mutex reclamation created a recursive steal chain"
+  pass "dead steal mutex is reclaimed without recursive steal chains"
+}
+
 test_lock_does_not_steal_live_lock() {
   local dir state lockdir live out lockpid
   dir=$(make_case lock-live-noop)
@@ -1133,6 +1155,7 @@ test_lock_single_winner_under_concurrency
 test_lock_steals_dead_pid_lock
 test_lock_stale_steal_single_winner_under_concurrency
 test_lock_live_steal_mutex_is_not_reclaimed
+test_lock_dead_steal_mutex_is_reclaimed_without_recursion
 test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace
 test_lock_late_claim_loses_after_recreate
