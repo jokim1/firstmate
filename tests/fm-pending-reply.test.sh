@@ -1272,7 +1272,7 @@ EOF
 }
 
 test_blank_parent_status_resolved_escalated_quarantines() {
-  local home state corr stuck dest log open
+  local home state corr dest log
   home=$(setup_parent stuck-blank-ps)
   state="$home/state"
   export FM_PENDING_REPLY_NOW=13000
