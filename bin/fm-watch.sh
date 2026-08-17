@@ -131,6 +131,11 @@ WATCHER_DOWNTIME_MARKER="$STATE/.watcher-down"
 # Defaults to the shared poll-derived grace (fm_guard_grace_seconds) so re-arm
 # stale detection stays calibrated with the guard/beacon contract.
 WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-$(fm_guard_grace_seconds)}
+PENDING_REPLY_BEAT_INTERVAL=$(awk -v grace="$WATCHER_STALE_GRACE" 'BEGIN {
+  interval = grace / 3
+  if (interval < 0.1) interval = 0.1
+  print interval
+}')
 # The singleton-lock acquisition, EXIT trap, and the blocking supervision loop
 # all live below the source guard at the very bottom of this file (see "Main
 # entry"). Sourcing this file for unit tests therefore loads the functions -
@@ -1047,6 +1052,7 @@ if ! fm_lock_try_acquire "$WATCH_LOCK"; then
   fi
   exit 0
 fi
+WATCH_LOCK_OWNER=$FM_LOCK_OWNER_DIR
 WATCHER_RECOVERY_PENDING=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
@@ -1098,6 +1104,13 @@ FM_WATCH_DELIVERY_PID=$WATCHER_PID
 FM_WATCH_DELIVERY_IDENTITY=$(fm_pid_identity "$WATCHER_PID" 2>/dev/null || true)
 printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
 
+watcher_beat() {
+  touch "$STATE/.last-watcher-beat" || return 1
+  if [ "$(cat "$WATCH_LOCK_OWNER/beacon-identity" 2>/dev/null || true)" != "$FM_WATCH_DELIVERY_IDENTITY" ]; then
+    printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK_OWNER/beacon-identity" 2>/dev/null
+  fi
+}
+
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 
 # A merged poll may have queued its terminal wake and then lost the process
@@ -1139,6 +1152,21 @@ resurface_after_downtime() {
   wake "check: rearm-resurface"
 }
 
+if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
+  watcher_beat || true
+  handling_wait=0
+  while [ "$handling_wait" -lt 600 ]; do
+    fm_recovery_marker_snapshot "$WATCHER_DOWNTIME_MARKER" || true
+    case "$FM_RECOVERY_MARKER_TOKEN" in
+      pending:downtime:*) ;;
+      *) break ;;
+    esac
+    sleep 0.05
+    handling_wait=$((handling_wait + 1))
+  done
+  [ "$handling_wait" -lt 600 ] || WATCHER_RECOVERY_PENDING=1
+fi
+
 while :; do
   # Self-eviction: if the singleton lock no longer names this process, a second
   # watcher has taken over (e.g. a transient duplicate from a racy arm). Stand
@@ -1152,13 +1180,16 @@ while :; do
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
-  touch "$STATE/.last-watcher-beat"
+  watcher_beat || true
 
   # Parent-owned secondmate pending-reply reconciliation: resolve correlated
   # parent reports, observe backend busy/idle turn completion, send one recovery
-  # repost after grace, and escalate once if the recovery turn is also missed.
+  # repost after grace, escalate once if the recovery turn is also missed, and
+  # retire answered records so the poll cannot accumulate settled files.
+  # Pass the liveness beacon so a large walk cannot starve grace mid-iteration.
   # No conversation scraping; unresolved records are never silently expired.
-  fm_pending_reply_tick "$STATE" || true
+  fm_pending_reply_tick "$STATE" "$STATE/.last-watcher-beat" "$PENDING_REPLY_BEAT_INTERVAL" \
+    "$WATCHER_PID" "$WATCH_PATH" "$FM_HOME" || true
 
   # A live secondmate endpoint does not prove that its own wake loop is alive.
   # Observe the foreign queue before the rest of this cycle so an aged row wakes

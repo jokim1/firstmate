@@ -181,6 +181,7 @@ write_watcher_lock() {
   printf '%s\n' "$home" > "$state/.watch.lock/fm-home"
   printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
   printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
+  printf '%s\n' "$identity" > "$state/.watch.lock/beacon-identity"
 }
 
 assert_valid_migration_marker() {
