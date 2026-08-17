@@ -566,11 +566,10 @@ test_arm_self_eviction_is_loud_without_successor() {
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
   mark_pr_check_migration_complete "$state"
-  # This case has deliberately installed an identity-mismatched lock holder, so
-  # only a short successor-confirmation window is needed. Keep it below the
-  # wait_for_exit budget so Linux and macOS test the typed failure rather than
-  # racing the fixture's own timeout.
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$armout" &
+  # Leave enough startup budget for the owned child to publish its identity-
+  # bound beacon under CI load. The outer wait remains bounded beyond the
+  # successor-confirmation window so this case observes the typed failure.
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=10 "$WATCH_ARM" > "$armout" &
   armpid=$!
   i=0
   while [ "$i" -lt 150 ]; do
@@ -585,7 +584,7 @@ test_arm_self_eviction_is_loud_without_successor() {
   # self-evict normally. With no verified successor, the arm must turn that
   # otherwise clean empty close into the typed nonzero failure.
   printf '%s\n' "$$" > "$state/.watch.lock/pid"
-  wait_for_exit "$armpid" 80
+  wait_for_exit "$armpid" 200
   status=$?
   [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "self-evicted arm did not fail nonzero (status $status)"
   grep -qF 'watcher: FAILED - cycle ended without an actionable reason' "$armout" || fail "self-evicted arm omitted the typed cycle-end failure"
@@ -894,7 +893,7 @@ SH
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_WATCH_PREDECESSOR_ARM_PID="$first_arm" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
   successor_arm=$!
   i=0
-  while [ "$i" -lt 80 ]; do
+  while [ "$i" -lt 200 ]; do
     grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
     sleep 0.1
     i=$((i + 1))
@@ -919,7 +918,7 @@ SH
     PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_WATCH_CYCLE_LOG_MAX_BYTES=1400 FM_WATCH_CYCLE_LOG_KEEP_LINES=2 FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
     successor_arm=$!
     i=0
-    while [ "$i" -lt 80 ]; do
+    while [ "$i" -lt 200 ]; do
       grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
       sleep 0.1
       i=$((i + 1))

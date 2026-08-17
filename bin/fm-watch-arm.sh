@@ -664,6 +664,16 @@ owned_child_finished() {
 # collapsing when startup begins just before the next second boundary.
 deadline=$(( $(date +%s) + CONFIRM_TIMEOUT + 1 ))
 while :; do
+  # An owned child can publish an actionable wake and exit before its first
+  # beacon. Reap it from that durable output event instead of relying on
+  # kill -0, which still reports an unreaped exited child as present.
+  if watch_output_has_wake "$child_out"; then
+    wait "$child"
+    rc=$?
+    child_done=1
+    owned_child_finished "$rc"
+    exit $?
+  fi
   if healthy_watcher; then
     if [ "$HEALTHY_PID" = "$child" ]; then
       cycle_refresh_lock_before
