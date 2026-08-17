@@ -8,8 +8,6 @@ fm_git_identity fmtest fmtest@example.invalid
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
 TMP_ROOT=$(fm_test_tmproot fm-teardown-husk)
 REAL_TMUX=$(command -v tmux || true)
-REAL_LSOF=$(command -v lsof || true)
-REAL_PGREP=$(command -v pgrep || true)
 UID_N=$(id -u)
 
 make_husk_case() {  # <name>
