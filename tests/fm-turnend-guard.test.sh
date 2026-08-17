@@ -278,6 +278,7 @@ watcher_identity() {
 
 record_watcher_lock() {
   local dir=$1 pid=$2 identity=$3 root bin_dir
+  local beacon_identity=${4-$identity}
   root=$(cd "$dir" && pwd)
   bin_dir=$(cd "$dir/bin" && pwd)
   mkdir -p "$dir/state/.watch.lock"
@@ -285,6 +286,7 @@ record_watcher_lock() {
   printf '%s\n' "$root" > "$dir/state/.watch.lock/fm-home"
   printf '%s\n' "$bin_dir/fm-watch.sh" > "$dir/state/.watch.lock/watcher-path"
   printf '%s\n' "$identity" > "$dir/state/.watch.lock/pid-identity"
+  [ -z "$beacon_identity" ] || printf '%s\n' "$beacon_identity" > "$dir/state/.watch.lock/beacon-identity"
 }
 
 test_hook_silent_when_no_work_in_flight() {
@@ -350,6 +352,27 @@ test_hook_silent_with_live_lock_and_fresh_beacon() {
   expect_code 0 "$status" "hook must exit 0 with a live identity-matched watcher lock and fresh beacon"
   [ -z "$out" ] || fail "hook produced output despite a live fresh watcher lock: $out"
   pass "fm-turnend-guard: silent no-op with a live watcher lock and fresh beacon"
+}
+
+test_hook_blocks_unbeaconed_live_lock_with_fresh_leftover() {
+  local dir pid identity out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-live-lock-unbeaconed")
+  : > "$dir/state/task1.meta"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify unbeaconed watcher holder"
+  }
+  record_watcher_lock "$dir" "$pid" "$identity" ''
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "hook must block when the current watcher generation has not beaconed"
+  assert_contains "$out" "$REQUIRED_REASON" "unbeaconed generation block must contain the required instruction"
+  pass "fm-turnend-guard: fresh leftover beacon cannot validate a new lock generation"
 }
 
 test_hook_non_claude_health_ignores_claude_budget_contention() {
@@ -538,6 +561,19 @@ test_hook_silent_in_idle_secondmate_home() {
   expect_code 0 "$status" "hook must stay silent in an idle, empty-queue secondmate home"
   [ -z "$out" ] || fail "idle secondmate home produced guard output: $out"
   pass "fm-turnend-guard: idle-by-default - silent in a secondmate home with nothing in flight"
+}
+
+# An idle secondmate with only an advisory queue row still needs a cycle: the
+# guard must not allow a blind stop while those rows sit and no watcher is live.
+test_hook_claude_mode_blocks_idle_secondmate_with_queued_advisory() {
+  local dir out status
+  dir=$(make_secondmate_dir "$TMP_ROOT/hook-secondmate-idle-queue")
+  printf '%s\t1\trefill\trefill\trefill: re-evaluate ready work against free capacity\n' \
+    "$(date +%s)" > "$dir/state/.wake-queue"
+  out=$(run_hook_claude "$dir" false); status=$?
+  expect_code 2 "$status" "Claude must not end blind with an idle secondmate advisory row queued"
+  assert_contains "$out" "TURN WOULD END BLIND" "queue-only blind stop must carry the block banner"
+  pass "fm-turnend-guard --claude: idle secondmate with only an advisory queue row blocks a blind stop"
 }
 
 # The stop_hook_active loop guard bounds the secondmate to one forced
@@ -2087,6 +2123,7 @@ test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_source_only_home
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
+test_hook_blocks_unbeaconed_live_lock_with_fresh_leftover
 test_hook_non_claude_health_ignores_claude_budget_contention
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary
@@ -2124,6 +2161,7 @@ test_pi_extension_injects_once_per_logical_agent_run
 test_pi_extension_retries_after_followup_delivery_failure
 test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy
 test_hook_claude_mode_reblocks_x_mode_without_tasks
+test_hook_claude_mode_blocks_idle_secondmate_with_queued_advisory
 test_hook_claude_mode_allows_when_autoarm_owner_alive
 test_hook_claude_mode_repeated_failed_to_arming_interleavings_reach_fail_open
 test_hook_claude_mode_terminal_boundary_excludes_starting_owner

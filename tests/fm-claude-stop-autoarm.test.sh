@@ -235,6 +235,7 @@ record_watcher_lock() {
   printf '%s\n' "$root" > "$dir/state/.watch.lock/fm-home"
   printf '%s\n' "$bin_dir/fm-watch.sh" > "$dir/state/.watch.lock/watcher-path"
   printf '%s\n' "$identity" > "$dir/state/.watch.lock/pid-identity"
+  printf '%s\n' "$identity" > "$dir/state/.watch.lock/beacon-identity"
 }
 
 # --- registration contract ----------------------------------------------------
@@ -562,6 +563,41 @@ test_benign_cycle_end_with_live_watcher_is_silent() {
   pass "auto-arm: benign cycle end with a live watcher and fresh beacon stays silent across the next cycle"
 }
 
+# Defect 2 evidence shape: arm returns FAILED (could not confirm fresh beacon)
+# while a live identity-matched holder still owns the lock. With a fresh beacon
+# the existing benign path treats this as clean. This case documents that a
+# starved beacon is still a hard failure for the auto-arm HEALTHY gate - the
+# arm layer (not auto-arm) is responsible for attaching to mid-poll holders so
+# the arm never returns FAILED while a live cycle continues. When the arm
+# fixture returns FAILED and the beacon is stale, auto-arm correctly exhausts
+# and alarms rather than falsely claiming clean supervision.
+test_failed_arm_with_stale_beacon_live_holder_fails_closed() {
+  local dir out status pid identity
+  dir=$(make_primary_dir "$TMP_ROOT/failed-stale-live")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" failed
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live holder for stale-beacon failure"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    touch -t 202001010000 "$dir/state/.last-watcher-beat" 2>/dev/null \
+      || fail "could not age the beacon on Darwin"
+  else
+    touch -d '2020-01-01 00:00:00' "$dir/state/.last-watcher-beat" 2>/dev/null \
+      || fail "could not age the beacon"
+  fi
+  out=$(FM_GUARD_GRACE=1 run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "a FAILED arm with only a stale-beacon live holder must fail closed"
+  assert_contains "$out" "automatic supervision mechanism is broken" \
+    "stale-beacon live holder must not be mistaken for a healthy cycle"
+  [ "$(epoch_outcome "$dir")" = failed ] \
+    || fail "epoch must record outcome=failed when only a stale-beacon holder exists, got: $(epoch_outcome "$dir")"
+  pass "auto-arm: FAILED arm with live-but-stale holder remains fail-closed (arm attach owns mid-poll)"
+}
+
 test_positive_recovery_budget_contention_preserves_episode() {
   local dir out status pid identity holder
   dir=$(make_primary_dir "$TMP_ROOT/recovery-budget-contention")
@@ -658,6 +694,24 @@ test_arms_for_registered_custom_check_without_inflight() {
   expect_code 2 "$status" "a registered custom check must keep the auto-arm active with zero tasks in flight"
   [ -e "$dir/state/arm-ran" ] || fail "hook did not arm for the registered custom check"
   pass "auto-arm: a registered custom check arms the cycle even with no tasks in flight"
+}
+
+# Idle-home gap: a secondmate with zero tasks in flight but an unread advisory
+# queue row (refill / focus-switch) must still hold one Stop-owned cycle so the
+# row can rewake the mate. Before the fix the hook exited inert, the beacon
+# aged out, and the parent stall predicate alarmed on that same advisory row.
+test_arms_for_queued_advisory_wake_in_idle_secondmate() {
+  local dir out status
+  dir=$(make_secondmate_dir "$TMP_ROOT/idle-queue-advisory")
+  printf '%s\t1\trefill\trefill\trefill: re-evaluate ready work against free capacity\n' \
+    "$(date +%s)" > "$dir/state/.wake-queue"
+  write_arm_fixture "$dir" actionable
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an idle secondmate with only an advisory queue row must rewake, not exit inert"
+  [ -e "$dir/state/arm-ran" ] || fail "hook did not arm for a queued advisory wake in an idle secondmate"
+  assert_contains "$out" "firstmate watcher wake" "queue-only cycle must carry the rewake banner"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "queue-only cycle must record outcome=rewake"
+  pass "auto-arm: idle secondmate with only an advisory queue row holds one Stop-owned cycle"
 }
 
 test_single_flight_admits_exactly_one_owner() {
@@ -1214,10 +1268,12 @@ test_failure_notice_marker_write_refuses_delivery_and_retries
 test_unverified_clean_close_exhausts_retries
 test_post_alarm_actionable_close_is_suppressed
 test_benign_cycle_end_with_live_watcher_is_silent
+test_failed_arm_with_stale_beacon_live_holder_fails_closed
 test_positive_recovery_budget_contention_preserves_episode
 test_owner_mutex_contention_preserves_failure_episode_reset
 test_arms_for_x_mode_poll_need_without_inflight
 test_arms_for_registered_custom_check_without_inflight
+test_arms_for_queued_advisory_wake_in_idle_secondmate
 test_single_flight_admits_exactly_one_owner
 test_abandoned_owner_claim_is_reclaimed_and_rearms
 test_arming_claim_with_fresh_beacon_is_never_reclaimed
