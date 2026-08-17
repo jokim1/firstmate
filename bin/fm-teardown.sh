@@ -3463,6 +3463,10 @@ fi
 echo "teardown $ID complete (window $T, worktree $WT)"
 # Capacity free: advisory refill so firstmate re-evaluates ready work.
 # Multiple teardowns before drain collapse to one refill record (dedupe by kind).
-fm_wake_enqueue_refill || \
-  echo "warning: could not enqueue fleet refill after teardown of $ID" >&2
+# A host-local remote-secondmate teardown removes the state directory it was
+# launched against. Its parent teardown owns the refill after remote success.
+if [ -d "$STATE" ]; then
+  fm_wake_enqueue_refill || \
+    echo "warning: could not enqueue fleet refill after teardown of $ID" >&2
+fi
 backlog_refresh_reminder
