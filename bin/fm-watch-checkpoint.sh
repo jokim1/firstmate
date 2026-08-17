@@ -4,6 +4,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"  # fm_run_timed: shared hard process-group bound
 SECONDS_ARG=${FM_CODEX_WATCH_CHECKPOINT:-180}
 
@@ -58,6 +59,7 @@ checkpoint_reconcile_watch_lock() {
     # A hard timeout can kill the watcher after its TERM trap starts but before
     # EXIT cleanup releases the lock. Reclaim only a provably dead holder, then
     # publish the same downtime evidence as normal watcher cleanup.
+    # shellcheck source=bin/fm-wake-lib.sh
     . "$SCRIPT_DIR/fm-wake-lib.sh"
     lock="$STATE/.watch.lock"
     [ -e "$lock/pid" ] || exit 0
