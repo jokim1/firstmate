@@ -560,6 +560,11 @@ teardown_tmux_any_live_server() {
   local uid path ans p lsof_out lsof_rc=0 pgrep_out pgrep_rc=0 paths_file found=0
   command -v tmux >/dev/null 2>&1 || return 2
   command -v lsof >/dev/null 2>&1 || return 2
+  if ! command -v gtimeout >/dev/null 2>&1 \
+    && ! command -v timeout >/dev/null 2>&1 \
+    && ! command -v perl >/dev/null 2>&1; then
+    return 2
+  fi
   uid=$(id -u)
 
   # Add-only secondary first: cheap refuse when standard tmux servers live.
