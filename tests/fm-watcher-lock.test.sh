@@ -764,13 +764,15 @@ test_arm_hup_cleans_child_and_temp_output() {
 }
 
 test_arm_propagates_immediate_wake_before_confirmation() {
-  local dir state fakebin armout drain_out check_file rc
+  local dir state fakebin armout drain_out check_file post_output post_output_ready rc
   dir=$(make_case arm-immediate-wake)
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
   drain_out="$dir/drain.out"
   check_file="$state/task.check.sh"
+  post_output="$dir/post-output"
+  post_output_ready="$dir/post-output.ready"
   printf '%s\n' fm-pr-check-migration-scan-v1 > "$state/.pr-check-migration-scan-v1"
   printf '%s\n' fm-pr-check-migration-v1 > "$state/.pr-check-migration-v1"
   chmod 0600 "$state/.pr-check-migration-scan-v1" "$state/.pr-check-migration-v1"
@@ -779,10 +781,29 @@ test_arm_propagates_immediate_wake_before_confirmation() {
 printf 'merged: https://example.test/pr/7\n'
 SH
   chmod 0700 "$check_file"
+  cat > "$post_output" <<'SH'
+#!/usr/bin/env bash
+# Keep the watcher inside its post-output path beyond the arm's confirmation
+# window. The wake is already durable and printed, but the watcher cannot be
+# confirmed healthy while FM_GUARD_GRACE=0.
+: > "$FM_TEST_POST_OUTPUT_READY"
+sleep 30
+SH
+  chmod 0700 "$post_output"
+  cat > "$fakebin/date" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = +%s ] && [ -s "$FM_TEST_POST_OUTPUT_READY" ]; then
+  now=$(command -p date +%s) || exit 1
+  printf '%s\n' "$((now + 120))"
+  exit 0
+fi
+command -p date "$@"
+SH
+  chmod 0700 "$fakebin/date"
   FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" task >/dev/null \
     || fail "could not register immediate-wake custom check"
   rc=0
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=0 FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" || rc=$?
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=0 FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=30 FM_WAKE_POST_OUTPUT_ACTION="$post_output" FM_TEST_POST_OUTPUT_READY="$post_output_ready" "$WATCH_ARM" > "$armout" || rc=$?
   [ "$rc" -eq 0 ] || fail "arm returned non-zero for an immediate wake (status $rc): $(cat "$armout")"
   grep -F "check: $check_file: merged: https://example.test/pr/7" "$armout" >/dev/null || fail "arm did not propagate the immediate check wake"
   ! grep -qF 'watcher: FAILED' "$armout" || fail "arm printed FAILED after a valid immediate wake"
@@ -945,7 +966,7 @@ SH
 }
 
 test_stopped_watcher_is_live_but_stale_then_exit_is_classified() {
-  local dir state fakebin armout armpid watcher_pid i status
+  local dir state fakebin armout armpid watcher_pid i status classified
   dir=$(make_case stopped-watcher)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -971,12 +992,26 @@ test_stopped_watcher_is_live_but_stale_then_exit_is_classified() {
   fi
 
   kill -CONT "$watcher_pid" 2>/dev/null || true
-  kill -TERM "$watcher_pid" 2>/dev/null || true
-  wait_for_exit "$armpid" 80
+  # This case owns STOP/live/stale classification, not watcher EXIT cleanup.
+  # Force the resumed watcher out so the arm can classify the child lifecycle,
+  # then synchronize on that ledger record before reaping the arm.
+  kill -KILL "$watcher_pid" 2>/dev/null || true
+  classified=0
+  i=0
+  while [ "$i" -lt 300 ]; do
+    if grep -Eq "watcher_pid=$watcher_pid.*reason=(nonzero-exit|signal-exit)" "$state/.watch-cycle-exits.log" 2>/dev/null; then
+      classified=1
+      break
+    fi
+    is_live_non_zombie "$armpid" || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$classified" -eq 1 ] \
+    || fail "terminated watcher exit was not classified before the arm ended: $(cat "$armout")"
+  wait_for_exit "$armpid" 10
   status=$?
   [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "terminated stopped-watcher cycle did not surface nonzero (status $status)"
-  grep -Eq 'reason=(nonzero-exit|signal-exit)' "$state/.watch-cycle-exits.log" \
-    || fail "terminated watcher exit was not classified in the lifecycle ledger"
   pass "SIGSTOP distinguishes live PID from stale beacon and termination records the exit class"
 }
 
