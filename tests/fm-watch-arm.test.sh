@@ -188,6 +188,134 @@ test_attached_arm_reports_the_delivered_wake() {
   pass "watch-arm: an attached arm reports the wake its cycle delivered instead of a false failure"
 }
 
+# Regression for the 2026-08-13/14 auto-arm episode: a live identity-matched
+# watcher mid long poll can present a beacon older than grace. Re-arm must
+# attach to that holder rather than failing or starting a second cycle.
+test_arm_attaches_to_live_holder_with_stale_beacon() {
+  local dir state fakebin out armout i
+  dir=$(make_case attach-stale-beacon)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  armout="$dir/arm.out"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  # Tiny grace so a deliberately aged beacon fails the healthy check.
+  start_seed_watcher "$state" "$fakebin" "$out"
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    touch -t 202001010000 "$state/.last-watcher-beat" 2>/dev/null \
+      || fail "could not age the seed watcher beacon on Darwin"
+  else
+    touch -d '2020-01-01 00:00:00' "$state/.last-watcher-beat" 2>/dev/null \
+      || fail "could not age the seed watcher beacon"
+  fi
+  # Confirm the seed still holds the lock while the aged beacon fails grace.
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$SEED_PID" ] \
+    || fail "seed watcher lost the lock before the stale-beacon arm"
+  is_live_non_zombie "$SEED_PID" || fail "seed watcher died before the stale-beacon arm"
+  [ "$(cat "$state/.watch.lock/beacon-identity" 2>/dev/null || true)" = "$(fm_test_pid_identity "$SEED_PID")" ] \
+    || fail "seed watcher did not publish generation-bound beacon proof"
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=2 FM_GUARD_GRACE=1 \
+    FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$WATCH_ARM" > "$armout" 2> "$dir/arm.err" &
+  ARM_PID=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$SEED_PID" "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$SEED_PID" "$armout" \
+    || fail "arm did not attach to the live stale-beacon watcher: $(cat "$armout")"
+  ! grep -qF 'watcher: FAILED' "$armout" \
+    || fail "stale-beacon live holder must not be reported as FAILED: $(cat "$armout")"
+  ! grep -qF 'watcher: started' "$armout" \
+    || fail "stale-beacon live holder must not start a second watcher: $(cat "$armout")"
+  [ ! -s "$dir/arm.err" ] \
+    || fail "stale-beacon arm launched a competing watcher: $(cat "$dir/arm.err")"
+  # Still the original singleton; a competing start would replace the lock pid.
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$SEED_PID" ] \
+    || fail "arm replaced the live stale-beacon holder instead of attaching"
+
+  printf 'resolved [key=fixture]: capacity freed\n' > "$state/demo.status"
+  wait_for_exit "$SEED_PID" 120
+  unset FM_FAKE_CREW_STATE
+  wait_for_exit "$ARM_PID" 120
+  ! grep -qF 'watcher: FAILED' "$armout" \
+    || fail "attached stale-beacon arm failed after the cycle delivered: $(cat "$armout")"
+  grep -qE '^(refill:|signal:)' "$armout" \
+    || fail "attached stale-beacon arm did not surface the delivered wake: $(cat "$armout")"
+  pass "watch-arm: attaches to a live identity-matched holder even when the beacon is stale"
+}
+
+test_arm_does_not_attach_before_peer_first_beacon() {
+  local dir home state fakebin armout holder owner identity arm_pid status
+  dir=$(make_case peer-before-first-beacon)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  owner="$state/.watch.lock.owner.fixture"
+  mkdir -p "$home/data" "$owner"
+
+  sleep 300 &
+  holder=$!
+  identity=$(fm_test_pid_identity "$holder") || fail "could not identify peer watcher fixture"
+  printf '%s\n' "$holder" > "$owner/pid"
+  printf '%s\n' "$home" > "$owner/fm-home"
+  printf '%s\n' "$WATCH" > "$owner/watcher-path"
+  printf '%s\n' "$identity" > "$owner/pid-identity"
+  ln -s "$owner" "$state/.watch.lock"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_ARM_CONFIRM_TIMEOUT=1 FM_GUARD_GRACE=1 FM_POLL=5 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  arm_pid=$!
+  wait_for_exit "$arm_pid" 100
+  status=$?
+  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] \
+    || fail "arm did not fail bounded confirmation for an unbeaconed peer (status $status)"
+  ! grep -qF "watcher: attached pid=$holder" "$armout" \
+    || fail "arm attached before the peer emitted its first beacon: $(cat "$armout")"
+  grep -qF 'watcher: FAILED - no live watcher with a fresh beacon' "$armout" \
+    || fail "arm did not fail closed for an unbeaconed peer: $(cat "$armout")"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  pass "watch-arm: a peer must emit its first beacon before attachment"
+}
+
+test_new_child_without_fresh_beacon_fails_confirmation() {
+  local dir state fakebin armout arm_pid status
+  dir=$(make_case new-child-no-beacon)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  cat > "$fakebin/touch" <<'SH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    */.last-watcher-beat) exit 0 ;;
+  esac
+done
+exec /usr/bin/touch "$@"
+SH
+  chmod +x "$fakebin/touch"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_ARM_CONFIRM_TIMEOUT=1 FM_GUARD_GRACE=1 FM_POLL=5 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  arm_pid=$!
+  wait_for_exit "$arm_pid" 100
+  status=$?
+  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] \
+    || fail "arm did not fail after its child withheld the first beacon (status $status)"
+  grep -qF 'watcher: FAILED - no live watcher with a fresh beacon' "$armout" \
+    || fail "arm did not report failed fresh-beacon confirmation: $(cat "$armout")"
+  ! grep -qF 'watcher: started' "$armout" \
+    || fail "arm reported its unconfirmed child as started: $(cat "$armout")"
+  pass "watch-arm: a newly started child requires a fresh beacon"
+}
+
 test_attached_arm_reports_the_delivered_wake_after_drain() {
   local dir state fakebin out armout status
   dir=$(make_case attached-drained-wake)
@@ -279,7 +407,7 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   is_live_non_zombie "$ARM_PID" || fail "pre-outage watcher did not stay live"
   watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   kill -KILL "$watcher_pid" 2>/dev/null || fail "could not abruptly stop pre-outage watcher"
-  wait "$ARM_PID" 2>/dev/null || true
+  wait_for_exit "$ARM_PID" 80 || true
   [ ! -e "$state/.watcher-down" ] || fail "abrupt watcher exit unexpectedly ran cleanup"
 
   # Two independent durable wakes arrive while no watcher exists. Neither gets
@@ -325,7 +453,7 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   # A later down interval can have no new queue rows at all. The unchanged
   # remote decision must still trigger a recovery wake and be folded again.
   kill "$ARM_PID" 2>/dev/null || true
-  wait "$ARM_PID" 2>/dev/null || true
+  wait_for_exit "$ARM_PID" 80 || true
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/decision-only-arm.out"
   wait_for_exit "$ARM_PID" 80 || fail "decision-only re-arm did not surface the open decision"
   decision_recovery_arm=$ARM_PID
@@ -347,7 +475,7 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
     || fail "decision-only handling successor emitted recursive recovery"
 
   kill -TERM "$decision_successor" 2>/dev/null || fail "could not interrupt decision handling successor"
-  wait "$decision_successor" 2>/dev/null || true
+  wait_for_exit "$decision_successor" 80 || true
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/interrupted-decision-arm.out"
   wait_for_exit "$ARM_PID" 80 || fail "interrupted decision handling was not recovered on successor re-arm"
   grep -F 'check: rearm-resurface' "$dir/interrupted-decision-arm.out" >/dev/null \
@@ -366,7 +494,7 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/decision-successor-arm.out"
   is_live_non_zombie "$ARM_PID" || fail "acknowledged decision recovery did not leave a live successor"
   kill "$ARM_PID" 2>/dev/null || true
-  wait "$ARM_PID" 2>/dev/null || true
+  wait_for_exit "$ARM_PID" 80 || true
   pass "watch-arm: re-arm surfaces every queued wake and an open remote decision after downtime"
 }
 
@@ -384,7 +512,7 @@ test_marker_publish_failure_retains_recovery_evidence() {
   watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   mkdir "$state/.watcher-down"
   kill -TERM "$watcher_pid" 2>/dev/null || fail "could not stop marker-failure fixture watcher"
-  wait "$first_arm" 2>/dev/null || true
+  wait_for_exit "$first_arm" 80 || true
 
   [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$watcher_pid" ] \
     || fail "marker publication failure discarded stale-lock recovery evidence"
@@ -435,7 +563,7 @@ test_delivery_gap_wake_is_recovered_once() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/stable-successor.out"
   is_live_non_zombie "$ARM_PID" || fail "successor looped after the delivery gap was drained"
   kill "$ARM_PID" 2>/dev/null || true
-  wait "$ARM_PID" 2>/dev/null || true
+  wait_for_exit "$ARM_PID" 80 || true
   pass "watch-arm: a wake queued after handling drain is recovered once at successor arm"
 }
 
@@ -507,7 +635,7 @@ test_interrupted_handling_is_redrained_on_rearm() {
   is_live_non_zombie "$ARM_PID" || fail "handling drain stopped its live successor"
 
   kill -TERM "$ARM_PID" 2>/dev/null || fail "could not interrupt the handling successor"
-  wait "$ARM_PID" 2>/dev/null || true
+  wait_for_exit "$ARM_PID" 80 || true
   case "$(cat "$state/.watcher-down" 2>/dev/null || true)" in
     pending:downtime:*|announced:downtime:*) ;;
     *) fail "interrupted pre-handling successor did not persist downtime recovery" ;;
@@ -554,7 +682,7 @@ test_malformed_marker_is_quarantined_once() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/stable-successor.out"
   is_live_non_zombie "$ARM_PID" || fail "malformed marker caused a persistent recovery loop"
   kill "$ARM_PID" 2>/dev/null || true
-  wait "$ARM_PID" 2>/dev/null || true
+  wait_for_exit "$ARM_PID" 80 || true
   pass "watch-arm: malformed recovery state is quarantined without a successor loop"
 }
 
@@ -796,7 +924,7 @@ test_downtime_marker_does_not_follow_symlink() {
   printf 'must remain intact\n' > "$sentinel"
   ln -s "$sentinel" "$state/.watcher-down"
   kill -TERM "$watcher_pid" 2>/dev/null || fail "could not stop symlink fixture watcher"
-  wait "$ARM_PID" 2>/dev/null || true
+  wait_for_exit "$ARM_PID" 80 || true
 
   [ "$(cat "$sentinel")" = "must remain intact" ] \
     || fail "downtime marker publication followed and truncated a symlink"
@@ -806,6 +934,9 @@ test_downtime_marker_does_not_follow_symlink() {
 }
 
 test_attached_arm_reports_the_delivered_wake
+test_arm_attaches_to_live_holder_with_stale_beacon
+test_arm_does_not_attach_before_peer_first_beacon
+test_new_child_without_fresh_beacon_fails_confirmation
 test_attached_arm_reports_the_delivered_wake_after_drain
 test_attached_arm_still_fails_on_a_wake_it_did_not_deliver
 test_rearm_resurfaces_durable_queue_and_remote_open_decision
