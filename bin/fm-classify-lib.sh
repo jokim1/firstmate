@@ -195,11 +195,74 @@ status_is_paused_or_captain_held() {  # <status-line>
 # the historical one-open-decision-per-task behavior (a bare "resolved:" closes
 # "default"). A stated key whose slug fails the charset below is rejected (the
 # folds skip the line), never rewritten to "default".
-# The parsers are pure reads of a single line; the verb parser strips any key
-# token before the colon so the leading word is recovered cleanly.
+# The parsers are pure reads of a single line. Status metadata may carry any
+# number of complete whitespace-separated "[name=value]" tags before the colon
+# (any name, typically corr= and key=). Verb recovery strips that suffix only
+# when every token is strictly well-formed: no whitespace or '[' in a token
+# body, and a locale-independent ASCII slug name (explicit A-Za-z0-9._-
+# allowlist, not locale-widened ranges). Incomplete or malformed bracket
+# material keeps the verb glued so the line stays inert. When the complete-tag
+# check fails, the historical peel from the first "[key=" is preserved so
+# key-led stray and unclosed-key lines keep folding as they do today.
+# head=${v%%\[*} below is only a candidate prefix assigned when the complete-tag
+# predicate passes - not an unconditional first-bracket peel.
+# 0 when <s> is empty or a whitespace-separated run of complete
+# "[name=value]" metadata tags with locale-independent ASCII slug names.
+_fm_is_wholly_complete_metadata_tags() {  # <before-colon-tag-suffix>
+  local s=$1 token rest name
+  while [ -n "$s" ]; do
+    s=${s#"${s%%[![:space:]]*}"}
+    [ -n "$s" ] || return 0
+    case "$s" in
+      \[*) ;;
+      *) return 1 ;;
+    esac
+    case "$s" in
+      *\]*) ;;
+      *) return 1 ;;
+    esac
+    rest=${s#\[}
+    token=${rest%%\]*}
+    rest=${rest#*\]}
+    # Fail-closed: token body may not contain whitespace or another '['.
+    case "$token" in
+      *[[:space:]]*|*\[*) return 1 ;;
+    esac
+    case "$token" in
+      *=*)
+        name=${token%%=*}
+        # Locale-independent ASCII slug name (explicit allowlist; no A-Z ranges).
+        case "$name" in
+          ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 1 ;;
+        esac
+        ;;
+      *) return 1 ;;
+    esac
+    if [ -n "$rest" ]; then
+      case "$rest" in
+        [[:space:]]*) ;;
+        *) return 1 ;;
+      esac
+    fi
+    s=$rest
+  done
+  return 0
+}
 status_line_verb() {  # <status-line> -> leading verb word
-  local v=${1%%:*}
-  v=${v%%\[key=*}
+  local v=${1%%:*} head tags_region
+  case "$v" in
+    *\[*)
+      head=${v%%\[*}
+      tags_region=${v#"$head"}
+      if _fm_is_wholly_complete_metadata_tags "$tags_region"; then
+        v=$head
+      else
+        case "$v" in
+          *\[key=*) v=${v%%\[key=*} ;;
+        esac
+      fi
+      ;;
+  esac
   v=${v#"${v%%[![:space:]]*}"}
   v=${v%"${v##*[![:space:]]}"}
   printf '%s' "$v"
@@ -454,7 +517,7 @@ _fm_open_decisions_cursor_path() {  # <status-file>
   printf '%s/.%s.open-decisions-cursor' "$dir" "${base%.status}"
 }
 
-FM_OPEN_DECISIONS_FOLD_VERSION=3
+FM_OPEN_DECISIONS_FOLD_VERSION=4
 
 # Portable device:inode identity for the rotation/recreation check below.
 _fm_open_decisions_file_ident() {  # <file> -> "dev:inode", empty on I/O failure

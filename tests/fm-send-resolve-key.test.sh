@@ -452,6 +452,90 @@ test_flag_misuse_refuses() {
   pass "fm-send --resolve-key: --key, empty message, explicit targets, and malformed keys refuse loudly"
 }
 
+# Filed adopted-stack regression: corr-tagged open key must be answerable.
+test_corr_tagged_open_key_is_answerable() {
+  local dir fb log home rc out
+  dir="$TMP_ROOT/corr-tagged"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_home corr-tagged)
+  fm_write_meta "$home/state/t-corr.meta" "window=sess:fm-t-corr" "kind=ship"
+  printf 'needs-decision [corr=d448ea86afa4bf67] [key=project-registration-path]: no proven IPC path\n' \
+    > "$home/state/t-corr.status"
+
+  out=$(drain_out "$home")
+  printf '%s' "$out" | grep -F '[key=project-registration-path]' >/dev/null \
+    || fail "precondition: corr-tagged decision should list as open: $out"
+
+  run_send "$fb" "$home" "$log" t-corr --resolve-key project-registration-path "use courier UI path"; rc=$?
+  expect_code 0 "$rc" "answering a corr-tagged open key should succeed"
+  assert_contains "$(cat "$log")" "use courier UI path" "the answer text should reach the worker"
+  grep -F 'resolved [key=project-registration-path]: answered: use courier UI path' \
+    "$home/state/t-corr.status" >/dev/null \
+    || fail "missing closing resolved line:"$'\n'"$(cat "$home/state/t-corr.status")"
+
+  out=$(drain_out "$home")
+  if printf '%s' "$out" | grep -F 'OPEN DECISIONS' >/dev/null; then
+    fail "answered corr-tagged decision still lists as open: $out"
+  fi
+  pass "fm-send --resolve-key: a corr-tagged open key is answerable end to end"
+}
+
+# Fail-closed: malformed metadata must not invent a phantom open key that sends.
+test_malformed_metadata_refuses_phantom_resolve_key() {
+  local dir fb log home err rc
+  dir="$TMP_ROOT/phantom-refuse"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"; err="$dir/send.err"
+  home=$(setup_home phantom-refuse)
+  fm_write_meta "$home/state/t-ph.meta" "window=sess:fm-t-ph" "kind=ship"
+
+  refuse_case() {  # <status-line> <label>
+    printf '%s\n' "$1" > "$home/state/t-ph.status"
+    : > "$log"
+    env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+      "$SEND" t-ph --resolve-key phantom "this must not send" >/dev/null 2>"$err"; rc=$?
+    [ "$rc" -ne 0 ] || fail "$2: expected refuse, got rc=0"
+    [ ! -s "$log" ] || fail "$2: transport received bytes: $(cat "$log")"
+    if grep -F 'resolved [key=phantom]' "$home/state/t-ph.status" >/dev/null; then
+      fail "$2: resolved line was appended: $(cat "$home/state/t-ph.status")"
+    fi
+  }
+
+  refuse_case 'needs-decision [draft] [corr=d448ea86afa4bf67] [key=phantom]: mixed' "mixed invalid+valid"
+  refuse_case 'needs-decision [corr=abc [key=phantom]: truncated corr' "truncated corr body"
+  refuse_case 'needs-decision [[key=phantom]: doubled bracket' "doubled bracket"
+  refuse_case 'needs-decision [draft!status=review] [key=phantom]: punct bang' "punctuated name"
+  refuse_case 'needs-decision [dräft=review] [key=phantom]: unicode name' "unicode name"
+
+  # Stock macOS Bash 3.2 + en_US.UTF-8: range patterns widen; allowlist must still refuse.
+  if [ -x /bin/bash ]; then
+    printf 'needs-decision [dräft=review] [key=phantom]: stock-bash unicode\n' > "$home/state/t-ph.status"
+    : > "$log"
+    env LC_ALL=en_US.UTF-8 PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
+      FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+      /bin/bash "$SEND" t-ph --resolve-key phantom "this must not send" >/dev/null 2>"$err"; rc=$?
+    [ "$rc" -ne 0 ] || fail "stock bash UTF-8 unicode name should refuse"
+    [ ! -s "$log" ] || fail "stock bash UTF-8 unicode name still sent: $(cat "$log")"
+  fi
+
+  pass "fm-send --resolve-key: malformed metadata never invents a sendable phantom key"
+}
+
+# Key-led stray preserve: still answerable under the historical peel.
+test_key_led_stray_preserve_is_answerable() {
+  local dir fb log home rc
+  dir="$TMP_ROOT/key-stray"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_home key-stray)
+  fm_write_meta "$home/state/t-ks.meta" "window=sess:fm-t-ks" "kind=ship"
+  printf 'needs-decision [key=stray-slug] stray prose: keep\n' > "$home/state/t-ks.status"
+
+  run_send "$fb" "$home" "$log" t-ks --resolve-key stray-slug "answered stray"; rc=$?
+  expect_code 0 "$rc" "key-led stray should remain answerable"
+  grep -F 'resolved [key=stray-slug]: answered: answered stray' "$home/state/t-ks.status" >/dev/null \
+    || fail "missing close for key-led stray:"$'\n'"$(cat "$home/state/t-ks.status")"
+  pass "fm-send --resolve-key: key-led stray preserve remains answerable"
+}
+
 test_answer_send_closes_open_decision
 test_colon_first_key_position_is_answerable
 test_rejected_close_fails_after_delivery
@@ -464,3 +548,6 @@ test_local_secondmate_answer_marked_and_closed
 test_remote_secondmate_answer_closes_locally
 test_remote_transport_failure_does_not_close
 test_flag_misuse_refuses
+test_corr_tagged_open_key_is_answerable
+test_malformed_metadata_refuses_phantom_resolve_key
+test_key_led_stray_preserve_is_answerable
