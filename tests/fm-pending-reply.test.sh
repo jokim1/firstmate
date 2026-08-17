@@ -84,6 +84,16 @@ setup_parent() {  # <name> -> home
   printf '%s\n' "$home"
 }
 
+setup_beat_owner() {  # <state> <home> <watch-path> <pid>
+  local state=$1 home=$2 watch_path=$3 pid=$4 lock="$1/.watch.lock" identity
+  identity=$(fm_test_pid_identity "$pid") || fail "could not identify beacon owner"
+  mkdir -p "$lock"
+  printf '%s\n' "$pid" > "$lock/pid"
+  printf '%s\n' "$home" > "$lock/fm-home"
+  printf '%s\n' "$watch_path" > "$lock/watcher-path"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
+}
+
 run_send() {
   local fb=$1 home=$2 log=$3; shift 3
   : > "$log"
@@ -642,15 +652,17 @@ test_delivery_confirmation_fallback_reconciles() {
       || fail "delivery-unknown escalation should publish once, got $escalations"
     printf 'done [corr=%s]: late report proves delivery\n' "$prepared_corr" >> "$state/hibit.status"
     fm_pending_reply_tick "$state" || fail "watcher should accept a late delivery report"
-    [ "$(phase_of "$state" "$prepared_corr")" = resolved ] \
-      || fail "late report should resolve escalated delivery-unknown"
-    [ "$(fm_pending_reply_get "$prepared_rec" delivered_epoch)" = 5760 ] \
-      || fail "late report should provide delivery evidence"
+    # Full tick retires answered records after closing any open escalation.
+    [ ! -f "$prepared_rec" ] \
+      || fail "late report should resolve and retire the escalated delivery-unknown record"
+    grep -Fq "resolved [key=pending-reply-$prepared_corr]: pending-reply-resolved:" \
+      "$state/hibit.status" \
+      || fail "late report should close the keyed delivery-unknown escalation"
     escalations=$(grep -Fc "blocked [key=pending-reply-$prepared_corr]:" "$state/hibit.status")
     [ "$escalations" = 1 ] || fail "late report must not re-escalate delivery-unknown"
-    fm_pending_reply_tick "$state" || fail "resolved late report should remain idempotent"
-    [ "$(phase_of "$state" "$prepared_corr")" = resolved ] \
-      || fail "late report resolution should remain durable"
+    fm_pending_reply_tick "$state" || fail "retired late report should remain idempotent"
+    [ ! -f "$prepared_rec" ] \
+      || fail "late report retirement must remain durable across a second tick"
     export FM_PENDING_REPLY_NOW=5800
     reported_corr=$(fm_pending_reply_create "$home" "$state" hibit "reported delivery")
     reported_rec=$(fm_pending_reply_path "$state" "$reported_corr")
@@ -1048,6 +1060,8 @@ test_tick_skips_terminal_and_reuses_target_observation() {
     rec=$(fm_pending_reply_path "$state" "$open2")
     [ "$(fm_pending_reply_get "$rec" turn_seen_busy)" = 1 ] \
       || fail "cached observation should update the second open record"
+    [ ! -f "$(fm_pending_reply_path "$state" "$resolved")" ] \
+      || fail "resolved records must be retired from the pending-replies directory"
     rec=$(fm_pending_reply_path "$state" "$escalated")
     snapshot=$(fm_pending_reply_get "$rec" wrong_home_scan_signature)
     [ -n "$snapshot" ] || fail "wrong-home scan should persist its file-set signature"
@@ -1057,8 +1071,10 @@ test_tick_skips_terminal_and_reuses_target_observation() {
       || fail "unchanged records should scan two open and one escalated status only once, got $scans"
     [ "$(fm_pending_reply_get "$rec" wrong_home_scan_signature)" = "$snapshot" ] \
       || fail "unchanged wrong-home logs should retain their scan signature"
+    [ -f "$(fm_pending_reply_path "$state" "$escalated")" ] \
+      || fail "unresolved escalated records must never be silently retired"
   ) || fail "terminal-skip and observation-cache regression failed"
-  pass "tick skips terminal records and reuses target observations"
+  pass "tick retires resolved records and reuses target observations"
 }
 
 test_correlations_reuse_only_for_matching_open_task() {
@@ -1251,6 +1267,347 @@ test_failed_send_discards_undelivered_expectation() {
   pass "failed transport discards undelivered expectation only"
 }
 
+# Regression for the 2026-08-14 watcher-down episode: hundreds of already-answered
+# pending-reply records remained on disk, so each poll walked them all, the
+# liveness beacon went stale mid-iteration, and guards raised false WATCHER DOWN
+# while the watcher was still alive. Resolved records must retire; unresolved
+# must stay; a large walk must keep a passed-in beacon fresh.
+test_large_resolved_population_retires_and_keeps_beacon_fresh() {
+  local home state dir beat watch_path owner_pid open_corr open_rec i corr rec mtime now after open_left resolved_left
+  home=$(setup_parent large-retire)
+  state="$home/state"
+  dir=$(fm_pending_reply_dir "$state")
+  beat="$state/.last-watcher-beat"
+  watch_path="$ROOT/bin/fm-watch.sh"
+  owner_pid=${BASHPID:-$$}
+  export FM_PENDING_REPLY_NOW=11000
+  setup_beat_owner "$state" "$home" "$watch_path" "$owner_pid"
+
+  # Seed a backlog shaped like the live home: many resolved, one still open.
+  mkdir -p "$dir" || fail "could not create pending-replies fixture dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  for i in $(seq 1 120); do
+    corr=$(printf 'a%015x' "$i")
+    rec="$dir/$corr"
+    cat > "$rec" <<EOF || fail "could not seed resolved record $i"
+schema=fm-pending-reply.v1
+corr_id=$corr
+task_id=oldtask
+parent_home=$home
+parent_status=$state/oldtask.status
+parent_status_scan_signature=
+request_summary=settled request $i
+created_epoch=10000
+delivered_epoch=10001
+phase=resolved
+turn_seen_busy=1
+request_turn_completed_epoch=
+recovery_attempted_epoch=
+recovery_sender_pid=
+recovery_sender_identity=
+recovery_sent_epoch=
+recovery_delivery_outcome=
+recovery_turn_seen_busy=0
+recovery_turn_completed_epoch=
+escalated_epoch=
+resolved_epoch=10050
+resolved_via=status
+wrong_home_hits=0
+wrong_home_sightings=
+wrong_home_scan_signature=
+grace_secs=120
+EOF
+    chmod 600 "$rec" || fail "could not chmod resolved record $i"
+  done
+  resolved_left=0
+  for rec in "$dir"/*; do
+    [ -f "$rec" ] || continue
+    case "$(basename "$rec")" in .*) continue ;; esac
+    resolved_left=$((resolved_left + 1))
+  done
+  [ "$resolved_left" -eq 120 ] \
+    || fail "fixture must seed 120 resolved records before the tick, got $resolved_left"
+  open_corr=$(fm_pending_reply_create "$home" "$state" "hibit" "still open")
+  fm_pending_reply_mark_delivered "$state" "$open_corr"
+  open_rec=$(fm_pending_reply_path "$state" "$open_corr")
+  : > "$beat"
+  # Age the beacon so a non-touching tick would leave it older than a tight grace.
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    touch -t 202001010000 "$beat" 2>/dev/null \
+      || fail "fixture could not age the beacon on Darwin"
+  else
+    touch -d '2020-01-01 00:00:00' "$beat" 2>/dev/null \
+      || fail "fixture could not age the beacon"
+  fi
+
+  fm_pending_reply_tick "$state" "$beat" 0.2 "$owner_pid" "$watch_path" "$home" \
+    || fail "large-population tick failed"
+
+  resolved_left=0
+  for rec in "$dir"/*; do
+    [ -f "$rec" ] || continue
+    case "$(basename "$rec")" in .*) continue ;; esac
+    if [ "$(fm_pending_reply_get "$rec" phase)" = resolved ]; then
+      resolved_left=$((resolved_left + 1))
+    fi
+  done
+  [ "$resolved_left" -eq 0 ] \
+    || fail "resolved backlog must be retired, left $resolved_left"
+  [ -f "$open_rec" ] || fail "open unresolved record must survive the large tick"
+  [ "$(fm_pending_reply_get "$open_rec" phase)" = awaiting_report ] \
+    || fail "open record phase must remain awaiting_report"
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    mtime=$(stat -f %m "$beat")
+  else
+    mtime=$(stat -c %Y "$beat")
+  fi
+  now=$(date +%s)
+  after=$((now - mtime))
+  [ "$after" -lt 30 ] \
+    || fail "large pending-reply tick must refresh the beacon (age=${after}s)"
+  open_left=0
+  for rec in "$dir"/*; do
+    [ -f "$rec" ] || continue
+    case "$(basename "$rec")" in .*) continue ;; esac
+    open_left=$((open_left + 1))
+  done
+  [ "$open_left" -eq 1 ] || fail "exactly one open record should remain, got $open_left"
+  pass "large resolved population retires and keeps the beacon fresh"
+}
+
+test_single_slow_observation_keeps_beacon_fresh_mid_poll() {
+  (
+    local home state beat checkpoint probe watch_path owner_pid replacement corr tick_pid i
+    home=$(setup_parent slow-observation-beat)
+    state="$home/state"
+    beat="$state/.last-watcher-beat"
+    checkpoint="$home/beat-checkpoint"
+    probe="$home/observation-started"
+    watch_path="$ROOT/bin/fm-watch.sh"
+    owner_pid=${BASHPID:-$$}
+    # This fixture clock is intentionally scoped to the isolated subshell.
+    # shellcheck disable=SC2030,SC2031
+    export FM_PENDING_REPLY_NOW=11500
+    setup_beat_owner "$state" "$home" "$watch_path" "$owner_pid"
+    corr=$(fm_pending_reply_create "$home" "$state" hibit "slow backend observation")
+    fm_pending_reply_mark_delivered "$state" "$corr"
+    fm_write_secondmate_meta "$state/hibit.meta" "$home/hibit" "sess:fm-hibit"
+    # Invoked indirectly through the pending-reply tick.
+    # shellcheck disable=SC2329
+    fm_backend_busy_state() {
+      : > "$probe"
+      sleep 3
+      printf 'busy'
+    }
+    fm_pending_reply_tick "$state" "$beat" 0.2 "$owner_pid" "$watch_path" "$home" &
+    tick_pid=$!
+    i=0
+    while [ "$i" -lt 40 ] && [ ! -f "$probe" ]; do
+      sleep 0.05
+      i=$((i + 1))
+    done
+    [ -f "$probe" ] || fail "slow observation did not start"
+    touch "$checkpoint"
+    sleep 1
+    kill -0 "$tick_pid" 2>/dev/null || fail "tick ended before the slow observation completed"
+    [ "$beat" -nt "$checkpoint" ] \
+      || fail "beacon was not refreshed while one record observation was still blocked"
+    sleep 5 &
+    replacement=$!
+    setup_beat_owner "$state" "$home" "$watch_path" "$replacement"
+    sleep 0.5
+    touch "$checkpoint"
+    sleep 0.8
+    kill -0 "$tick_pid" 2>/dev/null || fail "tick ended before lock-loss behavior was observed"
+    [ ! "$beat" -nt "$checkpoint" ] \
+      || fail "former owner refreshed the beacon after losing its watcher lock"
+    wait "$tick_pid" || fail "slow-observation tick failed"
+    kill "$replacement" 2>/dev/null || true
+    wait "$replacement" 2>/dev/null || true
+  ) || fail "single slow observation beacon regression failed"
+  pass "single slow observation beats only while its watcher owns the lock"
+}
+
+test_tick_retires_record_that_resolves_mid_poll() {
+  local home state corr
+  home=$(setup_parent mid-poll-retire)
+  state="$home/state"
+  # Reset the fixture clock after the isolated subshell test.
+  # shellcheck disable=SC2031
+  export FM_PENDING_REPLY_NOW=12000
+  corr=$(fm_pending_reply_create "$home" "$state" "hibit" "lands during tick")
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  printf 'done [corr=%s]: answered mid-poll\n' "$corr" > "$state/hibit.status"
+  fm_pending_reply_tick "$state" || fail "tick should resolve and retire"
+  [ ! -f "$(fm_pending_reply_path "$state" "$corr")" ] \
+    || fail "record resolved during the tick must leave pending-replies"
+  pass "tick retires a record that resolves mid-poll"
+}
+
+# Panel BREAK 1: resolved+escalated records that cannot close must leave the hot
+# walk via quarantine without losing open status-fold decisions.
+seed_stuck_resolved_escalated() {  # <state> <home> <corr> <parent_status> <summary>
+  local state=$1 home=$2 corr=$3 parent_status=$4 summary=$5 rec dir
+  dir=$(fm_pending_reply_dir "$state")
+  mkdir -p "$dir" || return 1
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  cat > "$rec" <<EOF
+schema=fm-pending-reply.v1
+corr_id=$corr
+task_id=hibit
+parent_home=$home
+parent_status=$parent_status
+parent_status_scan_signature=
+request_summary=$summary
+created_epoch=10000
+delivered_epoch=10001
+phase=resolved
+turn_seen_busy=1
+request_turn_completed_epoch=
+recovery_attempted_epoch=
+recovery_sender_pid=
+recovery_sender_identity=
+recovery_sent_epoch=
+recovery_delivery_outcome=
+recovery_turn_seen_busy=0
+recovery_turn_completed_epoch=
+escalated_epoch=10040
+escalation_closed_epoch=
+resolved_epoch=10050
+resolved_via=status
+wrong_home_hits=0
+wrong_home_sightings=
+wrong_home_scan_signature=
+grace_secs=120
+EOF
+  chmod 600 "$rec"
+}
+
+test_blank_parent_status_resolved_escalated_quarantines() {
+  local home state corr dest log
+  home=$(setup_parent stuck-blank-ps)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13000
+  corr=$(printf 'b%015x' 1)
+  seed_stuck_resolved_escalated "$state" "$home" "$corr" "" "blank parent status"
+  fm_pending_reply_retire_resolved "$state" "$corr" \
+    || fail "blank parent_status resolved+escalated must leave the hot path"
+  [ ! -f "$(fm_pending_reply_path "$state" "$corr")" ] \
+    || fail "hot pending-replies must not retain blank-parent_status stuck records"
+  dest=$(fm_pending_reply_stuck_path "$state" "$corr")
+  [ -f "$dest" ] || fail "stuck record must land in pending-replies-stuck/"
+  [ "$(fm_pending_reply_get "$dest" phase)" = resolved ] \
+    || fail "quarantined record must remain phase=resolved"
+  log=$(fm_pending_reply_stuck_log "$state")
+  [ -f "$log" ] || fail "stuck receipt log must exist"
+  grep -Fq "corr=$corr" "$log" || fail "stuck log must name the corr"
+  grep -Fq "reason=blank-parent-status" "$log" \
+    || fail "stuck log must classify blank-parent-status"
+  pass "blank parent_status resolved+escalated quarantines out of the hot walk"
+}
+
+test_unwritable_status_resolved_escalated_quarantines_preserves_open() {
+  local home state corr dest log open status
+  home=$(setup_parent stuck-unwritable)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13100
+  corr=$(printf 'b%015x' 2)
+  status="$state/hibit.status"
+  # Open escalation still in the fold; status is readable but not writable.
+  # chmod 444 (not 000) so the fold can still observe the open decision.
+  printf 'blocked [key=pending-reply-%s]: pending-reply-missed: task=hibit pending-reply-id=%s request=unwritable status\n' \
+    "$corr" "$corr" > "$status"
+  chmod 444 "$status" || fail "could not make parent status read-only"
+  seed_stuck_resolved_escalated "$state" "$home" "$corr" "$status" "unwritable status"
+  fm_pending_reply_retire_resolved "$state" "$corr" \
+    || fail "unwritable status resolved+escalated must leave the hot path"
+  [ ! -f "$(fm_pending_reply_path "$state" "$corr")" ] \
+    || fail "hot path must not retain unwritable-status stuck records"
+  dest=$(fm_pending_reply_stuck_path "$state" "$corr")
+  [ -f "$dest" ] || fail "unwritable-status record must quarantine"
+  log=$(fm_pending_reply_stuck_log "$state")
+  grep -Fq "corr=$corr" "$log" || fail "stuck log must name the unwritable corr"
+  grep -Eq 'reason=(status-unwritable|close-failed)' "$log" \
+    || fail "stuck log must classify unwritable/close-failed, got: $(cat "$log")"
+  open=$(status_open_decisions "$status")
+  assert_contains "$open" "pending-reply-$corr" \
+    "open escalation must remain open after quarantine (no false close)"
+  chmod 644 "$status" 2>/dev/null || true
+  pass "unwritable status quarantines without closing the open fold decision"
+}
+
+test_two_hundred_stuck_empty_parent_status_leave_hot_path() {
+  local home state dir i corr hot_left stuck_left
+  home=$(setup_parent stuck-scale)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13200
+  dir=$(fm_pending_reply_dir "$state")
+  mkdir -p "$dir" || fail "could not create hot pending-replies dir"
+  for i in $(seq 1 200); do
+    corr=$(printf 'c%015x' "$i")
+    seed_stuck_resolved_escalated "$state" "$home" "$corr" "" "stuck scale $i" \
+      || fail "could not seed stuck record $i"
+  done
+  fm_pending_reply_tick "$state" || fail "tick over stuck population failed"
+  hot_left=0
+  for corr in "$dir"/*; do
+    [ -f "$corr" ] || continue
+    case "$(basename "$corr")" in .*) continue ;; esac
+    hot_left=$((hot_left + 1))
+  done
+  [ "$hot_left" -eq 0 ] \
+    || fail "hot pending-replies must be empty after stuck quarantine, left $hot_left"
+  stuck_left=0
+  for corr in "$(fm_pending_reply_stuck_dir "$state")"/*; do
+    [ -f "$corr" ] || continue
+    case "$(basename "$corr")" in .*) continue ;; esac
+    stuck_left=$((stuck_left + 1))
+  done
+  [ "$stuck_left" -eq 200 ] \
+    || fail "all 200 stuck records must quarantine, got $stuck_left"
+  pass "200 stuck empty-parent_status records leave the hot walk in one tick"
+}
+
+test_unresolved_escalated_never_quarantines() {
+  local home state corr rec
+  home=$(setup_parent never-quarantine-open)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13300
+  corr=$(fm_pending_reply_create "$home" "$state" "hibit" "still open escalate")
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_set "$rec" phase escalated
+  fm_pending_reply_set "$rec" escalated_epoch 13290
+  if fm_pending_reply_retire_resolved "$state" "$corr" 2>/dev/null; then
+    fail "unresolved escalated must refuse retire"
+  fi
+  [ -f "$rec" ] || fail "unresolved escalated must remain on the hot path"
+  [ ! -f "$(fm_pending_reply_stuck_path "$state" "$corr")" ] \
+    || fail "unresolved escalated must never quarantine"
+  pass "unresolved escalated never quarantines"
+}
+
+test_quarantine_mv_failure_keeps_hot_record() {
+  local home state corr stuck_dir dest rec
+  home=$(setup_parent stuck-mv-fail)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=13400
+  corr=$(printf 'b%015x' 3)
+  seed_stuck_resolved_escalated "$state" "$home" "$corr" "" "mv failure"
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  stuck_dir=$(fm_pending_reply_stuck_dir "$state")
+  dest=$(fm_pending_reply_stuck_path "$state" "$corr")
+  # Non-file destination cannot be replaced by mv of the hot record.
+  mkdir -p "$dest" || fail "could not create blocking stuck destination"
+  if fm_pending_reply_quarantine_resolved "$state" "$corr" blank-parent-status 2>/dev/null; then
+    fail "quarantine must fail closed when the stuck destination cannot accept the move"
+  fi
+  [ -f "$rec" ] || fail "hot record must remain when quarantine mv cannot complete"
+  [ ! -f "$dest" ] || fail "blocking destination must not become the quarantined file"
+  rm -rf "$stuck_dir"
+  pass "quarantine mv failure keeps the hot record"
+}
+
 # --- run --------------------------------------------------------------------
 
 test_normal_correlated_reply_resolves_once
@@ -1285,5 +1642,13 @@ test_tick_end_to_end_missed_then_escalate
 test_failed_send_discards_undelivered_expectation
 test_remote_repost_waits_for_the_reply_channel
 test_mirrored_remote_reply_never_triggers_a_repost
+test_large_resolved_population_retires_and_keeps_beacon_fresh
+test_single_slow_observation_keeps_beacon_fresh_mid_poll
+test_tick_retires_record_that_resolves_mid_poll
+test_blank_parent_status_resolved_escalated_quarantines
+test_unwritable_status_resolved_escalated_quarantines_preserves_open
+test_two_hundred_stuck_empty_parent_status_leave_hot_path
+test_unresolved_escalated_never_quarantines
+test_quarantine_mv_failure_keeps_hot_record
 
 printf 'ok - all pending-reply tests passed\n'
