@@ -65,15 +65,15 @@ wait_live() {
 }
 
 wait_numeric_file() {
-  local file=$1 limit=${2:-30} i=0 value
-  while [ "$i" -lt "$limit" ]; do
+  local file=$1 seconds=${2:-30} deadline value
+  deadline=$((SECONDS + seconds))
+  while [ "$SECONDS" -lt "$deadline" ]; do
     value=$(cat "$file" 2>/dev/null || true)
     case "$value" in
       ''|*[!0-9]*) ;;
       *) return 0 ;;
     esac
     sleep 0.1
-    i=$((i + 1))
   done
   return 1
 }

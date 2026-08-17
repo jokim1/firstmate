@@ -600,10 +600,12 @@ const rows = () => existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
   : [];
 async function waitFor(predicate, message) {
-  for (let i = 0; i < 500; i += 1) {
+  const deadline = performance.now() + 30000;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+  if (predicate()) return;
   throw new Error(message);
 }
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
@@ -622,10 +624,10 @@ await waitFor(
 if (rows().length !== 2) throw new Error(`unretired arm overlapped before fallback: ${rows().join(" | ")}`);
 if (!prompts[0]?.includes("original wake")) throw new Error(`missing original fallback: ${prompts.join(" | ")}`);
 writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
-for (let i = 0; i < 500; i += 1) {
-  if (rows().length >= 3 && (process.env.FM_LATE_KIND !== "actionable" || prompts.some((message) => message.includes("late wake")))) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
-}
+await waitFor(
+  () => rows().length >= 3 && (process.env.FM_LATE_KIND !== "actionable" || prompts.some((message) => message.includes("late wake"))),
+  "late close did not restore its successor and classified delivery",
+);
 if (rows().length !== 3) throw new Error(`late close did not restore one successor: ${rows().join(" | ")}`);
 if (process.env.FM_LATE_KIND === "actionable") {
   if (prompts.length !== 2 || !prompts[1].includes("late wake")) throw new Error(`late actionable close was not delivered: ${prompts.join(" | ")}`);
@@ -941,11 +943,13 @@ function pidAlive(pid) {
   }
 }
 
-async function waitFor(pred, label, attempts = 250) {
-  for (let i = 0; i < attempts; i += 1) {
+async function waitFor(pred, label, timeoutMs = 30000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (pred()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  if (pred()) return;
   throw new Error(`timeout waiting for ${label}`);
 }
 
@@ -1338,20 +1342,18 @@ const hooks = await mod.FmPrimaryWatchArm({
 const event = { event: { type: "session.idle", properties: { sessionID: "session-test" } } };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, "999999\n");
 await hooks.event(event);
-await new Promise((resolve) => setTimeout(resolve, 120));
+const unownedStatus = await globalThis.__firstmateOpenCodeWatchArm.ensureArmed("session-test", client);
+if (unownedStatus !== "read-only") {
+  throw new Error(`unexpected unowned arm status: ${unownedStatus}`);
+}
 if (existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm ran without owning the session lock");
   process.exit(1);
 }
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event(event);
-for (let i = 0; i < 250 && !existsSync(process.env.FM_ARM_LOG); i += 1) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
-}
-if (!existsSync(process.env.FM_ARM_LOG)) {
-  console.error("watch arm did not run after the session lock matched");
-  process.exit(1);
-}
+await globalThis.__firstmateOpenCodeWatchArm.ensureArmed("session-test", client);
+if (!existsSync(process.env.FM_ARM_LOG)) throw new Error("watch arm did not run after the session lock matched");
 EOF
 )
   status=$?
@@ -1776,10 +1778,12 @@ const rows = () => existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
   : [];
 async function waitFor(predicate, message) {
-  for (let i = 0; i < 500; i += 1) {
+  const deadline = performance.now() + 30000;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+  if (predicate()) return;
   throw new Error(message);
 }
 const hooks = await mod.FmPrimaryWatchArm({
@@ -1801,10 +1805,10 @@ await waitFor(
 if (rows().length !== 2) throw new Error(`unretired arm overlapped before fallback: ${rows().join(" | ")}`);
 if (!prompts[0]?.includes("original wake")) throw new Error(`missing original fallback: ${prompts.join(" | ")}`);
 writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
-for (let i = 0; i < 500; i += 1) {
-  if (rows().length >= 3 && (process.env.FM_LATE_KIND !== "actionable" || prompts.some((message) => message.includes("late wake")))) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
-}
+await waitFor(
+  () => rows().length >= 3 && (process.env.FM_LATE_KIND !== "actionable" || prompts.some((message) => message.includes("late wake"))),
+  "late close did not restore its successor and classified delivery",
+);
 if (rows().length !== 3) throw new Error(`late close did not restore one successor: ${rows().join(" | ")}`);
 if (process.env.FM_LATE_KIND === "actionable") {
   if (prompts.length !== 2 || !prompts[1].includes("late wake")) throw new Error(`late actionable close was not delivered: ${prompts.join(" | ")}`);
