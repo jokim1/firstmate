@@ -307,6 +307,12 @@ wait_for_exit() {
     i=$((i + 1))
   done
   kill "$pid" 2>/dev/null || true
+  i=0
+  while [ "$i" -lt 50 ] && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  is_live_non_zombie "$pid" && kill -KILL "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   return 124
 }
