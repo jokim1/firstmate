@@ -732,6 +732,16 @@ while :; do
   sleep 0.2
 done
 
+# Close the deadline-boundary race where the child publishes its wake after the
+# loop's last observation but before timeout cleanup begins.
+if watch_output_has_wake "$child_out"; then
+  wait "$child"
+  rc=$?
+  child_done=1
+  owned_child_finished "$rc"
+  exit $?
+fi
+
 trap - HUP TERM INT
 # Confirmation budget exhausted. Prefer attaching to a different live holder
 # with a starved beacon over a false FAILED. Our own child still requires the
