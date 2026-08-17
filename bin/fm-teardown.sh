@@ -63,6 +63,12 @@
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
+# Endpoint-less tmux ship/scout husks (zero window= keys, exact endpoint_task_id,
+# worktree, project, backend absent-or-tmux) may teardown only after name-independent
+# proof that no live tmux server answers for this uid (protocol probe of uid unix
+# sockets, plus add-only unlinked secondary). Process name never authorizes absence.
+# Husk teardowns still require land/scout gates under --force; missing worktree or
+# missing lsof refuses. Records with endpoints keep existing --force semantics.
 # After a successful teardown (local or remote), enqueue one advisory fleet
 # refill wake (bin/fm-wake-lib.sh's fm_wake_enqueue_refill) so firstmate
 # re-evaluates ready work against free capacity. Refill never selects or spawns.
@@ -438,12 +444,184 @@ else
 fi
 [ "$remote_teardown_rc" -eq 3 ] || exit "$remote_teardown_rc"
 
+
+# --- endpoint-less tmux husk path (name-independent absence proof) -------------
+# A husk is a terminal ship/scout record with no window= target left. Teardown
+# may destroy it only after positive proof no live tmux server remains for this
+# uid, plus the ordinary land/scout gates (including under --force).
+
+TEARDOWN_IS_HUSK=0
+
+teardown_require_land_gates() {
+  # Husk never inherits --force's dirty/land/scout skip.
+  [ "${TEARDOWN_IS_HUSK:-0}" = 1 ] && return 0
+  [ "$FORCE" != "--force" ]
+}
+
+teardown_meta_key_count() {  # <meta> <key>
+  grep -c "^$2=" "$1" 2>/dev/null || true
+}
+
+teardown_is_tmux_husk() {  # <meta-file> <task-id>
+  local meta=$1 id=$2 window_count binding worktree project backend_count backend kind_count kind
+  local pr_count foreign
+  [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
+  case "$id" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+
+  window_count=$(teardown_meta_key_count "$meta" window)
+  [ "$window_count" = 0 ] || return 1
+
+  [ "$(teardown_meta_key_count "$meta" endpoint_task_id)" = 1 ] || return 1
+  binding=$(grep '^endpoint_task_id=' "$meta" | cut -d= -f2-)
+  [ "$binding" = "$id" ] || return 1
+
+  [ "$(teardown_meta_key_count "$meta" worktree)" = 1 ] || return 1
+  worktree=$(grep '^worktree=' "$meta" | cut -d= -f2-)
+  [ -n "$worktree" ] || return 1
+
+  [ "$(teardown_meta_key_count "$meta" project)" = 1 ] || return 1
+  project=$(grep '^project=' "$meta" | cut -d= -f2-)
+  [ -n "$project" ] || return 1
+
+  case "$worktree$project" in *$'\n'*|*$'\r'*|*$'\t'*) return 1 ;; esac
+
+  backend_count=$(teardown_meta_key_count "$meta" backend)
+  case "$backend_count" in
+    0) backend=tmux ;;
+    1)
+      backend=$(grep '^backend=' "$meta" | cut -d= -f2-)
+      [ "$backend" = tmux ] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+
+  kind_count=$(teardown_meta_key_count "$meta" kind)
+  [ "$kind_count" = 1 ] || return 1
+  kind=$(grep '^kind=' "$meta" | cut -d= -f2-)
+  case "$kind" in ship|scout) ;; *) return 1 ;; esac
+
+  pr_count=$(teardown_meta_key_count "$meta" pr)
+  case "$pr_count" in 0|1) ;; *) return 1 ;; esac
+
+  foreign=$(grep -cE '^(herdr_|zellij_|orca_|cmux_|playbot_|terminal=)' "$meta" 2>/dev/null || true)
+  [ "$foreign" = 0 ] || return 1
+
+  return 0
+}
+
+# Print unique live tmux server PIDs for this uid; rc 0 on success (incl empty).
+# Name-independent primary: protocol probe of connectable uid unix sockets.
+# Each probe is hard-bounded so a non-tmux socket cannot stall teardown.
+# Secondary: pgrep -x tmux may only ADD refuse PIDs (unlinked standard servers).
+teardown_tmux_protocol_pid_at_socket() {  # <socket-path>
+  # Prints answering server pid on stdout; rc 0 only on a live numeric pid.
+  local path=$1 ans
+  [ -S "$path" ] || return 1
+  # Prefer gtimeout/timeout; fall back to perl alarm (macOS has no timeout by default).
+  if command -v gtimeout >/dev/null 2>&1; then
+    ans=$(gtimeout 0.25 tmux -S "$path" display-message -p '#{pid}' 2>/dev/null) || return 1
+  elif command -v timeout >/dev/null 2>&1; then
+    ans=$(timeout 0.25 tmux -S "$path" display-message -p '#{pid}' 2>/dev/null) || return 1
+  else
+    ans=$(perl -e 'alarm 1; exec @ARGV' tmux -S "$path" display-message -p '#{pid}' 2>/dev/null) || return 1
+  fi
+  case "$ans" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$ans" 2>/dev/null || return 1
+  printf '%s\n' "$ans"
+}
+
+teardown_tmux_husk_endpoint_absent() {  # <task-id>
+  local id=$1 any_rc
+  command -v tmux >/dev/null 2>&1 || {
+    echo "REFUSED: husk $id: tmux is required to prove endpoint absence; preserving task state." >&2
+    return 1
+  }
+  command -v lsof >/dev/null 2>&1 || {
+    echo "REFUSED: husk $id: lsof is required to prove endpoint absence; preserving task state." >&2
+    return 1
+  }
+  # 0 = at least one live server, 1 = zero after complete enum, 2 = enum failed
+  teardown_tmux_any_live_server
+  any_rc=$?
+  if [ "$any_rc" -eq 2 ]; then
+    echo "REFUSED: husk $id: could not complete live tmux server enumeration; preserving task state." >&2
+    return 1
+  fi
+  if [ "$any_rc" -eq 0 ]; then
+    echo "REFUSED: husk $id: live tmux server(s) present; endpoint absence not positively proven." >&2
+    return 1
+  fi
+  return 0
+}
+
+# Return 0 if any live server, 1 if none, 2 on enum failure.
+# Short-circuits on first hit so refuse is cheap on busy fleet hosts.
+teardown_tmux_any_live_server() {
+  local uid path ans p lsof_out lsof_rc=0 pgrep_out pgrep_rc=0 paths_file found=0
+  command -v tmux >/dev/null 2>&1 || return 2
+  command -v lsof >/dev/null 2>&1 || return 2
+  uid=$(id -u)
+
+  # Add-only secondary first: cheap refuse when standard tmux servers live.
+  pgrep_out=$(pgrep -x tmux -u "$uid" 2>/dev/null) || pgrep_rc=$?
+  if [ "$pgrep_rc" -gt 1 ]; then
+    return 2
+  fi
+  while IFS= read -r p || [ -n "$p" ]; do
+    [ -n "$p" ] || continue
+    case "$p" in *[!0-9]*) continue ;; esac
+    if kill -0 "$p" 2>/dev/null; then
+      return 0
+    fi
+  done <<< "$pgrep_out"
+
+  # Name-independent completeness: protocol-probe connectable uid unix sockets.
+  lsof_out=$(lsof -a -U -u "$uid" -F n 2>/dev/null) || lsof_rc=$?
+  if [ "$lsof_rc" -ne 0 ] && [ -n "$lsof_out" ]; then
+    return 2
+  fi
+  paths_file=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-husk-socks.XXXXXX") || return 2
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      n/*) path=${line#n} ;;
+      *) continue ;;
+    esac
+    path=${path%% type=*}
+    path=${path%% (deleted)*}
+    path=${path%% \(deleted\)*}
+    [ -n "$path" ] || continue
+    [ -S "$path" ] || continue
+    printf '%s\n' "$path"
+  done <<< "$lsof_out" | sort -u > "$paths_file" || {
+    rm -f "$paths_file"
+    return 2
+  }
+  while IFS= read -r path || [ -n "$path" ]; do
+    [ -n "$path" ] || continue
+    if ans=$(teardown_tmux_protocol_pid_at_socket "$path"); then
+      found=1
+      break
+    fi
+  done < "$paths_file"
+  rm -f "$paths_file"
+  [ "$found" = 1 ] && return 0
+  return 1
+}
+
 # This is the first cleanup authorization check. It is metadata-only and must
 # complete before fm-guard, a backend command, file removal, branch deletion,
 # worktree return, registry change, or process termination can run.
-fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
-BACKEND=$FM_BACKEND_VALIDATED_BACKEND
-T=$FM_BACKEND_VALIDATED_TARGET
+TEARDOWN_IS_HUSK=0
+if teardown_is_tmux_husk "$META" "$ID"; then
+  teardown_tmux_husk_endpoint_absent "$ID" || exit 1
+  TEARDOWN_IS_HUSK=1
+  BACKEND=tmux
+  T=
+else
+  fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
+  BACKEND=$FM_BACKEND_VALIDATED_BACKEND
+  T=$FM_BACKEND_VALIDATED_TARGET
+fi
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
 T_ORCA=
@@ -1433,7 +1611,10 @@ teardown_treehouse_return_attempt() {
 
 validate_worktree_teardown_safety() {
   local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
-  [ "$FORCE" != "--force" ] || return 0
+  # Husk never inherits --force land/dirty skip (positive land still required).
+  if [ "$FORCE" = "--force" ] && [ "${TEARDOWN_IS_HUSK:-0}" != 1 ]; then
+    return 0
+  fi
   case "$KIND" in
     secondmate|scout) return 0 ;;
   esac
@@ -2711,7 +2892,7 @@ if [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
   cleanup_firstmate_home_children "$HOME_PATH" || exit $?
 fi
 
-if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
+if [ "$KIND" = scout ] && teardown_require_land_gates; then
   REPORT="$DATA/$ID/report.md"
   if [ ! -f "$REPORT" ]; then
     echo "REFUSED: scout task $ID has no report at $REPORT." >&2
@@ -2770,7 +2951,7 @@ if [ "$BACKEND" = playbot ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]
   }
 fi
 
-if [ "$FORCE" != "--force" ]; then
+if teardown_require_land_gates; then
   case "$KIND" in
     secondmate|scout) ;;
     *)
@@ -2872,7 +3053,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # the project. teardown_treehouse_return tolerates transient and stale git locks
   # left by a killed crew process; see the script header for retry and stale-lock proof.
   pre_return_check=
-  if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
+  if teardown_require_land_gates && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     pre_return_check=validate_worktree_teardown_safety_with_lock_recovery
   fi
   teardown_treehouse_return "$WT" "$PROJ" "worktree" "$pre_return_check" || {
@@ -2926,7 +3107,9 @@ elif [ "$BACKEND" = herdr ]; then
     echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
   fi
 elif [ "$BACKEND" != orca ] && [ "$BACKEND" != playbot ]; then
-  fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+  if [ "${TEARDOWN_IS_HUSK:-0}" != 1 ] && [ -n "$T" ]; then
+    fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+  fi
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then
