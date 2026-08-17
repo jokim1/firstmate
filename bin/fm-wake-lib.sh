@@ -196,6 +196,11 @@ fm_guard_grace_seconds() {
 
 FM_WATCHER_HEALTHY_PID=
 FM_WATCHER_HEALTHY_IDENTITY=
+fm_watcher_generation_beaconed() {
+  local state=$1 identity=$2
+  [ "$(cat "$state/.watch.lock/beacon-identity" 2>/dev/null || true)" = "$identity" ]
+}
+
 fm_watcher_healthy() {
   local state=$1 watch_path=$2 grace=${3:-} home=${4:-$FM_HOME} lockdir beat pid identity age
   [ -n "$grace" ] || grace=$(fm_guard_grace_seconds)
@@ -207,6 +212,7 @@ fm_watcher_healthy() {
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
   identity=$FM_WATCHER_MATCHED_IDENTITY
+  fm_watcher_generation_beaconed "$state" "$identity" || return 1
   age=$(fm_path_age "$beat")
   [ "$age" -lt "$grace" ] || return 1
   # shellcheck disable=SC2034 # Read by callers after fm_watcher_healthy returns.
@@ -298,6 +304,7 @@ fm_lock_clean_known_files() {
   rm -f \
     "$lockdir/pid" \
     "$lockdir/fm-home" \
+    "$lockdir/beacon-identity" \
     "$lockdir/pid-identity" \
     "$lockdir/role" \
     "$lockdir/watcher-path" \
@@ -386,7 +393,7 @@ fm_lock_claim_blocked_by_steal() {
 }
 
 fm_lock_claim() {
-  local lockdir=$1 ownerdir=$2 allowed_steal_owner=${3:-} mypid back
+  local lockdir=$1 ownerdir=$2 allowed_steal_owner=${3:-} ignore_nested_steal=${4:-false} mypid back
   mypid=${BASHPID:-$$}
   if ! { printf '%s\n' "$mypid" > "$ownerdir/pid"; } 2>/dev/null; then
     fm_lock_discard_owner "$ownerdir"
@@ -401,7 +408,8 @@ fm_lock_claim() {
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
-  if fm_lock_claim_blocked_by_steal "$lockdir" "$allowed_steal_owner"; then
+  if [ "$ignore_nested_steal" != true ] \
+    && fm_lock_claim_blocked_by_steal "$lockdir" "$allowed_steal_owner"; then
     if fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
       rm -f "$lockdir" 2>/dev/null || true
     fi
@@ -412,7 +420,7 @@ fm_lock_claim() {
 }
 
 fm_lock_try_create() {
-  local lockdir=$1 allowed_steal_owner=${2:-} ownerdir
+  local lockdir=$1 allowed_steal_owner=${2:-} ignore_nested_steal=${3:-false} ownerdir
   FM_LOCK_OWNER_DIR=
   ownerdir=$(fm_lock_owner_dir "$lockdir") || return 1
   if [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
@@ -424,7 +432,7 @@ fm_lock_try_create() {
     return 1
   fi
   if ln -s "$ownerdir" "$lockdir" 2>/dev/null && fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
-    if fm_lock_claim "$lockdir" "$ownerdir" "$allowed_steal_owner"; then
+    if fm_lock_claim "$lockdir" "$ownerdir" "$allowed_steal_owner" "$ignore_nested_steal"; then
       FM_LOCK_OWNER_DIR=$ownerdir
       return 0
     fi
@@ -731,8 +739,27 @@ fm_recovery_marker_arm_check() {
   fm_recovery_transition "$1" arm-check
 }
 
+fm_lock_try_acquire_steal() {
+  local lockdir=$1 pid owner=
+
+  if fm_lock_try_create "$lockdir"; then
+    return 0
+  fi
+
+  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  if fm_pid_alive "$pid" || fm_lock_mid_acquire_is_fresh "$lockdir" "$pid"; then
+    return 1
+  fi
+  if [ -L "$lockdir" ]; then
+    owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
+  fi
+  fm_lock_recheck_stale_owner "$lockdir" "$owner" "$pid" || return 1
+  fm_lock_remove_path "$lockdir" || true
+  fm_lock_try_create "$lockdir" '' true
+}
+
 fm_lock_try_acquire() {
-  local lockdir=$1 pid steal cur rc steal_pid steal_owner primary_owner
+  local lockdir=$1 pid steal cur rc steal_owner primary_owner
   FM_LOCK_HELD_PID=
   FM_LOCK_OWNER_DIR=
   FM_LOCK_RECOVERED_PID=
@@ -751,34 +778,11 @@ fm_lock_try_acquire() {
     return 1
   fi
 
-  # A steal mutex is the terminal serialization layer. Never recurse into a
-  # .steal.steal chain when a caller encounters a stale mutex directly.
-  case "$lockdir" in
-    *.steal)
-      FM_LOCK_HELD_PID=$pid
-      return 1
-      ;;
-  esac
-
   steal="$lockdir.steal"
-  if ! fm_lock_try_create "$steal"; then
-    steal_pid=$(cat "$steal/pid" 2>/dev/null || true)
-    if fm_pid_alive "$steal_pid" || fm_lock_mid_acquire_is_fresh "$steal" "$steal_pid"; then
-      FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
-      FM_LOCK_OWNER_DIR=
-      return 1
-    fi
-    steal_owner=
-    if [ -L "$steal" ]; then
-      steal_owner=$(fm_lock_link_owner "$steal" 2>/dev/null || true)
-    fi
-    if ! fm_lock_recheck_stale_owner "$steal" "$steal_owner" "$steal_pid" \
-      || ! fm_lock_remove_path "$steal" \
-      || ! fm_lock_try_create "$steal"; then
-      FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
-      FM_LOCK_OWNER_DIR=
-      return 1
-    fi
+  if ! fm_lock_try_acquire_steal "$steal"; then
+    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    FM_LOCK_OWNER_DIR=
+    return 1
   fi
   steal_owner=${FM_LOCK_OWNER_DIR:-}
 

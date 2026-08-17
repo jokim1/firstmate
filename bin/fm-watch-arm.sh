@@ -21,28 +21,33 @@
 # pre-execution seatbelt, not a substitute for the verification here.
 #
 # This script forks the watcher as a tracked child, then VERIFIES the outcome
-# before it settles in. It confirms a watcher process is genuinely alive AND the
-# liveness beacon (state/.last-watcher-beat) is fresh within the shared
-# poll-derived grace (fm_guard_grace_seconds / FM_GUARD_GRACE override), and prints
+# before it settles in. It confirms a watcher process is genuinely alive, prefers
+# a fresh liveness beacon (state/.last-watcher-beat within the shared
+# poll-derived grace from fm_guard_grace_seconds / FM_GUARD_GRACE), and prints
 # exactly one unambiguous status line:
 #   watcher: started pid=<N> (beacon fresh)              - it launched one and confirmed it
-#   watcher: attached pid=<N> (beacon <age>s)            - a live+fresh successor holds the lock;
-#                                                          this arm attaches and follows it
+#   watcher: attached pid=<N> (beacon <age>s)            - a live identity-matched successor
+#                                                          holds the lock; this arm attaches
+#                                                          and follows it (age may briefly
+#                                                          exceed grace while a poll is mid-
+#                                                          iteration; the holder is still live)
 #   watcher: FAILED - no live watcher with a fresh beacon  - could not confirm one
 #   watcher: FAILED - cycle ended without an actionable reason
 #                                                        - a clean cycle ended with no wake and no
 #                                                          verified healthy successor
-# It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
-# stale-beacon or dead-pid holder either self-heals (the fresh child steals the
-# dead lock per the singleton self-eviction/steal path and is confirmed) or this
-# returns the FAILED line. On started it waits the child and propagates the wake
-# reason; on attached it stays live across identity-matched successors. A cycle
-# that ends with no reason line and no healthy successor is resolved against the
-# watcher's identity-bound delivery record: a matching record reports that wake
-# and exits 0, and only a cycle that delivered nothing is the typed nonzero
-# failure. Neither is ever a clean empty completion. On FAILED it exits non-zero
-# so the failure is loud. A live cycle already present means re-arm attaches - do
-# not start a second watcher.
+# It NEVER reports started/attached/healthy off a dead or identity-mismatched pid.
+# A live identity-matched holder is attached even when its beacon is temporarily
+# stale mid-iteration, so a long poll cannot be mistaken for a finished cycle
+# and replaced with a second watcher. A dead-pid holder self-heals (the fresh
+# child steals the dead lock per the singleton self-eviction/steal path and is
+# confirmed) or this returns the FAILED line. On started it waits the child and
+# propagates the wake reason; on attached it stays live across identity-matched
+# successors. A cycle that ends with no reason line and no healthy successor is
+# resolved against the watcher's identity-bound delivery record: a matching
+# record reports that wake and exits 0, and only a cycle that delivered nothing
+# is the typed nonzero failure. Neither is ever a clean empty completion. On
+# FAILED it exits non-zero so the failure is loud. A live cycle already present
+# means re-arm attaches - do not start a second watcher.
 #
 # Every observed watcher cycle appends one tab-separated lifecycle record to
 # state/.watch-cycle-exits.log. The arm layer owns that bounded ledger; it records
@@ -223,21 +228,27 @@ cycle_mark_predecessor_successor() {
 }
 
 clear_stale_recorded_watcher_lock() {
-  local lock_home lock_path lock_identity
+  local disposition=${1:-recover} expected_identity=${2:-} lock_home lock_path lock_identity
   lock_home=$(cat "$WATCH_LOCK/fm-home" 2>/dev/null || true)
   lock_path=$(cat "$WATCH_LOCK/watcher-path" 2>/dev/null || true)
   lock_identity=$(cat "$WATCH_LOCK/pid-identity" 2>/dev/null || true)
   [ "$lock_home" = "$FM_HOME" ] || return 0
   [ "$lock_path" = "$WATCH" ] || return 0
   [ -n "$lock_identity" ] || return 0
-  fm_recovery_transition "$STATE/.watcher-down" clear-stale-lock "$WATCH_LOCK" downtime
+  [ -z "$expected_identity" ] || [ "$lock_identity" = "$expected_identity" ] || return 0
+  case "$disposition" in
+    recover) fm_recovery_transition "$STATE/.watcher-down" clear-stale-lock "$WATCH_LOCK" downtime ;;
+    restart) fm_lock_remove_path "$WATCH_LOCK" ;;
+    *) return 2 ;;
+  esac
 }
 
 # A watcher is "healthy" iff the lock names a live process that is genuinely THIS
 # home's watcher (the identity match guards against a recycled/reused pid) AND the
 # liveness beacon is fresh within GRACE. Sets HEALTHY_PID on success. This is the
-# single honesty gate: a dead pid, a reused pid, or a stale beacon all fail it, so
-# this script can never report a watcher that is not really there.
+# single honesty gate for started confirmation and benign cycle ends: a dead pid,
+# a reused pid, or a stale beacon all fail it, so this script can never report a
+# started/healthy watcher that is not really there.
 HEALTHY_PID=
 HEALTHY_IDENTITY=
 healthy_watcher() {
@@ -246,6 +257,28 @@ healthy_watcher() {
   fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" || return 1
   HEALTHY_PID=$FM_WATCHER_HEALTHY_PID
   HEALTHY_IDENTITY=$FM_WATCHER_HEALTHY_IDENTITY
+}
+
+# Live identity-matched holder of this home's lock, ignoring beacon age. A long
+# mid-poll iteration can starve the beacon without ending the cycle; attach paths
+# must follow that holder rather than treating it as cycle-end or starting a
+# second watcher. Sets HEALTHY_PID/HEALTHY_IDENTITY on success.
+identity_matched_watcher_holder() {
+  local pid identity
+  HEALTHY_PID=
+  HEALTHY_IDENTITY=
+  pid=$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)
+  fm_pid_alive "$pid" || return 1
+  fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$pid" "$FM_HOME" || return 1
+  identity=$FM_WATCHER_MATCHED_IDENTITY
+  HEALTHY_PID=$pid
+  HEALTHY_IDENTITY=$identity
+  return 0
+}
+
+live_watcher_holder() {
+  identity_matched_watcher_holder || return 1
+  fm_watcher_generation_beaconed "$STATE" "$HEALTHY_IDENTITY"
 }
 
 report_attached() {
@@ -305,10 +338,12 @@ close_unobserved_cycle() {
   return 1
 }
 
-# Stay alive across identity-matched healthy holders. If one cycle ends, attach
-# to a verified successor. With no successor, report the wake that cycle durably
-# delivered, or fail loudly - never a clean empty completion that an adapter could
-# mistake for a no-op.
+# Stay alive across identity-matched holders. Prefer a fresh-beacon healthy
+# holder; if the beacon is only temporarily stale while the same live process
+# still holds the lock, keep waiting (a long poll iteration, not cycle-end).
+# When the holder is gone, attach to a verified successor. With no successor,
+# report the wake that cycle durably delivered, or fail loudly - never a clean
+# empty completion that an adapter could mistake for a no-op.
 attach_and_wait() {
   local attached_pid=$1
   while :; do
@@ -322,8 +357,23 @@ attach_and_wait() {
       sleep "$ATTACH_POLL"
       continue
     fi
+    # Same live identity-matched holder with a starved beacon is still mid-cycle.
+    if fm_pid_alive "$attached_pid" \
+      && fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$attached_pid" "$FM_HOME"; then
+      sleep "$ATTACH_POLL"
+      continue
+    fi
     if wait_for_healthy_successor; then
       cycle_log_append unknown unknown attached-cycle-ended "attached:$HEALTHY_PID"
+      attached_pid=$HEALTHY_PID
+      cycle_begin "$attached_pid" attached "$HEALTHY_IDENTITY"
+      report_attached
+      continue
+    fi
+    # A different live holder may also be mid-poll with a stale beacon; follow it
+    # rather than failing while the singleton is still legitimately held.
+    if live_watcher_holder; then
+      cycle_log_append unknown unknown lock-replaced "attached:$HEALTHY_PID"
       attached_pid=$HEALTHY_PID
       cycle_begin "$attached_pid" attached "$HEALTHY_IDENTITY"
       report_attached
@@ -383,6 +433,29 @@ handling_successor_generation() {
   esac
 }
 
+stop_pid_bounded() {  # <pid> [tenths-of-a-second] [expected-identity]
+  local pid=$1 limit=${2:-50} expected_identity=${3:-} current_identity i=0
+  [ -n "$pid" ] || return 0
+  current_identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+  [ -n "$current_identity" ] || return 0
+  [ -z "$expected_identity" ] && expected_identity=$current_identity
+  [ "$current_identity" = "$expected_identity" ] || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  while [ "$i" -lt "$limit" ]; do
+    current_identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+    [ "$current_identity" = "$expected_identity" ] || return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  current_identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+  if [ "$current_identity" = "$expected_identity" ]; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+  current_identity=$(fm_pid_identity "$pid" 2>/dev/null || true)
+  [ "$current_identity" != "$expected_identity" ]
+}
+
 mode=arm
 handling_generation=
 handling_watcher_pid=
@@ -413,15 +486,18 @@ if [ "$mode" = restart ]; then
   lock_pid=$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)
   if fm_pid_alive "$lock_pid"; then
     if fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$lock_pid" "$FM_HOME"; then
-      kill -TERM "$lock_pid" 2>/dev/null || true
-      # Wait for it to actually exit before relaunching, so the fresh watcher
-      # either takes a released lock or reclaims a now-dead-pid stale lock instead
-      # of seeing the dying one as a live holder and no-opping.
-      i=0
-      while [ "$i" -lt 50 ] && fm_pid_alive "$lock_pid"; do
-        sleep 0.1
-        i=$((i + 1))
-      done
+      lock_identity=$FM_WATCHER_MATCHED_IDENTITY
+      if ! stop_pid_bounded "$lock_pid" 50 "$lock_identity"; then
+        echo "watcher: FAILED - recorded watcher did not stop within the bounded teardown" >&2
+        exit 1
+      fi
+      # A TERM-resistant or externally supplied holder cannot run the watcher's
+      # EXIT cleanup. Remove only the exact generation we just stopped. This is
+      # an attended restart, so the replacement arm itself closes the gap.
+      if ! clear_stale_recorded_watcher_lock restart "$lock_identity"; then
+        echo "watcher: FAILED - stopped watcher lock could not be cleared" >&2
+        exit 1
+      fi
     else
       if ! clear_stale_recorded_watcher_lock; then
         echo "watcher: FAILED - stale watcher recovery state could not be persisted" >&2
@@ -431,16 +507,44 @@ if [ "$mode" = restart ]; then
   fi
 fi
 
-# If a genuinely live+fresh watcher already holds the lock, do not start a second
-# one - attach to that cycle and wait until it ends so the harness notify fires
-# then, not as an immediate empty wake. (--restart skips this: it just stopped
-# this home's watcher and wants a fresh one.)
-if [ "$mode" = arm ] && healthy_watcher; then
-  cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
-  cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
-  report_attached
-  attach_and_wait "$HEALTHY_PID"
-  exit $?
+# If a genuinely live identity-matched watcher already holds the lock, do not
+# start a second one - attach to that cycle and wait until it ends so the
+# harness notify fires then, not as an immediate empty wake. Prefer a fresh
+# beacon, but still attach when the holder is live with a temporarily stale
+# beacon (mid long poll). (--restart skips this: it just stopped this home's
+# watcher and wants a fresh one.)
+if [ "$mode" = arm ]; then
+  if healthy_watcher || live_watcher_holder; then
+    cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
+    cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
+    report_attached
+    attach_and_wait "$HEALTHY_PID"
+    exit $?
+  fi
+  # A peer can publish its identity-bound lock just before its first beacon.
+  # Do not launch a competing child into that startup window. Wait directly for
+  # this generation's proof, and fail closed if the same holder never emits it.
+  if identity_matched_watcher_holder; then
+    peer_pid=$HEALTHY_PID
+    peer_identity=$HEALTHY_IDENTITY
+    deadline=$(( $(date +%s) + CONFIRM_TIMEOUT + 1 ))
+    while identity_matched_watcher_holder \
+      && [ "$HEALTHY_PID" = "$peer_pid" ] \
+      && [ "$HEALTHY_IDENTITY" = "$peer_identity" ]; do
+      if fm_watcher_generation_beaconed "$STATE" "$peer_identity"; then
+        cycle_mark_predecessor_successor "attached:$peer_pid"
+        cycle_begin "$peer_pid" attached "$peer_identity"
+        report_attached
+        attach_and_wait "$peer_pid"
+        exit $?
+      fi
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        echo "watcher: FAILED - no live watcher with a fresh beacon"
+        exit 1
+      fi
+      sleep 0.2
+    done
+  fi
 fi
 
 # Start a watcher as a tracked child and confirm it before settling in. The child
@@ -450,9 +554,7 @@ fi
 child=
 child_out=
 cleanup_child() {
-  if [ -n "$child" ] && fm_pid_alive "$child"; then
-    kill -TERM "$child" 2>/dev/null || true
-  fi
+  [ -z "$child" ] || stop_pid_bounded "$child"
   if [ -n "$child_out" ]; then
     rm -f "$child_out" 2>/dev/null || true
   fi
@@ -462,10 +564,8 @@ cleanup_child() {
 handle_arm_signal() {
   local signal=$1 rc=$2
   trap - HUP TERM INT
-  if [ -n "$child" ] && fm_pid_alive "$child"; then
-    kill -TERM "$child" 2>/dev/null || true
-    wait "$child" 2>/dev/null || true
-  fi
+  [ -z "$child" ] || stop_pid_bounded "$child"
+  clear_stale_recorded_watcher_lock || true
   cycle_log_append "$rc" "$signal" arm-interrupted none
   cleanup_child
   exit "$rc"
@@ -514,6 +614,22 @@ owned_child_finished() {
       attach_and_wait "$HEALTHY_PID"
       return $?
     fi
+    # Child stood down because a live identity-matched holder still owns the
+    # lock (possibly mid long poll with a starved beacon). Follow that holder.
+    if live_watcher_holder; then
+      cycle_log_append "$rc" "$signal" unexpected-clean-exit "attached:$HEALTHY_PID"
+      print_watch_output "$child_out"
+      child=
+      # Keep child_out until after attach so stand-down diagnostics stay visible.
+      cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
+      report_attached
+      cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
+      attach_and_wait "$HEALTHY_PID"
+      rc=$?
+      rm -f "$child_out" 2>/dev/null || true
+      child_out=
+      return "$rc"
+    fi
     print_watch_output "$child_out"
     rm -f "$child_out" 2>/dev/null || true
     child=
@@ -548,6 +664,16 @@ owned_child_finished() {
 # collapsing when startup begins just before the next second boundary.
 deadline=$(( $(date +%s) + CONFIRM_TIMEOUT + 1 ))
 while :; do
+  # An owned child can publish an actionable wake and exit before its first
+  # beacon. Reap it from that durable output event instead of relying on
+  # kill -0, which still reports an unreaped exited child as present.
+  if watch_output_has_wake "$child_out"; then
+    wait "$child"
+    rc=$?
+    child_done=1
+    owned_child_finished "$rc"
+    exit $?
+  fi
   if healthy_watcher; then
     if [ "$HEALTHY_PID" = "$child" ]; then
       cycle_refresh_lock_before
@@ -582,11 +708,60 @@ while :; do
     owned_child_finished "$rc"
     exit $?
   fi
+  # Another live identity-matched holder (not our child) may own the lock mid
+  # long poll with a starved beacon. Follow that holder instead of waiting for
+  # a fresh-beacon confirmation that never arrives from our stood-down child.
+  # Do not treat our own starting child as that case: it still needs a fresh
+  # beacon before we report started.
+  if live_watcher_holder && [ "$HEALTHY_PID" != "$child" ]; then
+    wait "$child" 2>/dev/null || true
+    child=
+    print_watch_output "$child_out"
+    # Leave child_out on disk until EXIT cleanup so peer-stand-down diagnostics
+    # (e.g. "watcher: already running pid …") remain readable during attach.
+    cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
+    report_attached
+    cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
+    attach_and_wait "$HEALTHY_PID"
+    rc=$?
+    rm -f "$child_out" 2>/dev/null || true
+    child_out=
+    exit "$rc"
+  fi
   [ "$(date +%s)" -ge "$deadline" ] && break
   sleep 0.2
 done
 
+# Close the deadline-boundary race where the child publishes its wake after the
+# loop's last observation but before timeout cleanup begins.
+if watch_output_has_wake "$child_out"; then
+  wait "$child"
+  rc=$?
+  child_done=1
+  owned_child_finished "$rc"
+  exit $?
+fi
+
 trap - HUP TERM INT
+# Confirmation budget exhausted. Prefer attaching to a different live holder
+# with a starved beacon over a false FAILED. Our own child still requires the
+# fresh beacon checked above before it can be reported as started.
+if live_watcher_holder && [ "$HEALTHY_PID" != "$child" ]; then
+  print_watch_output "$child_out"
+  if [ -n "$child" ] && fm_pid_alive "$child"; then
+    kill -TERM "$child" 2>/dev/null || true
+  fi
+  wait "$child" 2>/dev/null || true
+  child=
+  cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
+  report_attached
+  cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
+  attach_and_wait "$HEALTHY_PID"
+  rc=$?
+  rm -f "$child_out" 2>/dev/null || true
+  child_out=
+  exit "$rc"
+fi
 print_watch_output "$child_out"
 cleanup_child
 wait "$child" 2>/dev/null
