@@ -171,6 +171,140 @@ test_incremental_agrees_with_full_fold_across_appends() {
   pass "the incremental fold matches the full fold across appends in both key positions"
 }
 
+# Metadata-tag verb recovery: complete before-colon [name=value] tags (any
+# well-formed name, typically corr=) must not glue onto the verb. Fail-closed
+# on malformed bodies/names so phantom keys never open. Key-led stray still
+# peels via the historical [key= fallback.
+test_corr_then_key_opens_and_closes_under_stated_key() {
+  local dir expected
+  dir=$(case_dir corr-then-key)
+  printf 'needs-decision [corr=d448ea86afa4bf67] [key=project-registration-path]: no proven path\n' \
+    > "$dir/t.status"
+  expected=$(printf 'project-registration-path\tneeds-decision\tno proven path\n')
+  assert_fold "$dir/t.status" "$expected" "corr-then-key open"
+
+  printf 'resolved [corr=deadbeef] [key=project-registration-path]: answered: courier\n' \
+    >> "$dir/t.status"
+  assert_fold "$dir/t.status" "" "corr-tagged resolved closes stated key"
+  pass "corr-then-key opens and closes under the stated key"
+}
+
+test_shape_i_corr_before_colon_key_at_note_head() {
+  local dir expected
+  dir=$(case_dir shape-i)
+  printf 'needs-decision [corr=d448ea86afa4bf67]: [key=project-registration-path] pick path\n' \
+    > "$dir/t.status"
+  expected=$(printf 'project-registration-path\tneeds-decision\tpick path\n')
+  assert_fold "$dir/t.status" "$expected" "shape I open"
+  printf 'resolved [corr=d448ea86afa4bf67] [key=project-registration-path]: answered: courier\n' \
+    >> "$dir/t.status"
+  assert_fold "$dir/t.status" "" "shape I close"
+  pass "corr before colon with key at note head opens and closes the stated key"
+}
+
+test_key_led_stray_and_unclosed_still_fold() {
+  local dir
+  dir=$(case_dir key-led-preserve)
+  printf 'needs-decision [key=stray-slug] stray prose: keep key open\n' > "$dir/a.status"
+  assert_fold "$dir/a.status" \
+    "$(printf 'stray-slug\tneeds-decision\tkeep key open\n')" "key-led stray open"
+
+  printf 'needs-decision [key=k1]: open\n' > "$dir/b.status"
+  printf 'resolved [key=k1] stray prose: answered\n' >> "$dir/b.status"
+  assert_fold "$dir/b.status" "" "key-led stray close"
+
+  printf 'needs-decision [key=unclosed-slug: missing close\n' > "$dir/c.status"
+  assert_fold "$dir/c.status" \
+    "$(printf 'default\tneeds-decision\tmissing close\n')" "unclosed key peels to default"
+  pass "key-led stray and unclosed-key lines keep today's fold behavior"
+}
+
+test_malformed_metadata_never_opens_phantom_keys() {
+  local dir
+  dir=$(case_dir malformed-meta)
+  # Cross-token invalid+valid (round-2 codex).
+  printf 'needs-decision [draft] [corr=x]: must stay inert\n' > "$dir/mixed.status"
+  assert_fold "$dir/mixed.status" "" "draft then corr"
+  printf 'needs-decision [draft] [corr=x] [key=phantom]: must stay inert\n' > "$dir/mixedk.status"
+  assert_fold "$dir/mixedk.status" "" "draft then corr then key"
+
+  # Malformed bodies with embedded [key=...] (round-3).
+  printf 'needs-decision [corr=abc [key=phantom]: truncated corr\n' > "$dir/trunc.status"
+  assert_fold "$dir/trunc.status" "" "truncated corr embeds key"
+  printf 'needs-decision [[key=phantom]: doubled bracket\n' > "$dir/dbl.status"
+  assert_fold "$dir/dbl.status" "" "doubled open bracket"
+  printf 'needs-decision [draft[corr=x] [key=phantom]: nested open\n' > "$dir/nest.status"
+  assert_fold "$dir/nest.status" "" "nested open bracket"
+  printf 'needs-decision [draft status=review] [key=phantom]: spaced name\n' > "$dir/space.status"
+  assert_fold "$dir/space.status" "" "spaced name body"
+
+  # Punctuated / locale-widened names (round-4/5).
+  printf 'needs-decision [draft!status=review] [key=phantom]: punct bang\n' > "$dir/bang.status"
+  assert_fold "$dir/bang.status" "" "punctuated name bang"
+  printf 'needs-decision [dräft=review] [key=phantom]: unicode name\n' > "$dir/uni.status"
+  assert_fold "$dir/uni.status" "" "latin-extended name"
+
+  # Close-side twin: malformed closer must not close a real open key.
+  printf 'needs-decision [key=realc]: keep open\n' > "$dir/close.status"
+  printf 'resolved [drop!name=x] [key=realc]: must not close\n' >> "$dir/close.status"
+  assert_fold "$dir/close.status" \
+    "$(printf 'realc\tneeds-decision\tkeep open\n')" "malformed closer leaves realc open"
+
+  # Adjacent tags and empty name stay inert on the complete-tag path.
+  printf 'needs-decision [corr=x][key=adj]: adjacent\n' > "$dir/adj.status"
+  assert_fold "$dir/adj.status" "" "adjacent tags"
+  printf 'needs-decision [[=x]: empty-ish name\n' > "$dir/eq.status"
+  assert_fold "$dir/eq.status" "" "degenerate body"
+
+  # Shape C grammar control: end-of-note key is prose, opens default only.
+  printf 'needs-decision: no proven path [key=project-registration-path]\n' > "$dir/end.status"
+  assert_fold "$dir/end.status" \
+    "$(printf 'default\tneeds-decision\tno proven path [key=project-registration-path]\n')" \
+    "end-of-note key prose"
+
+  pass "malformed metadata never opens phantom keys; key-end grammar and close twin hold"
+}
+
+test_shared_verb_recovery_for_valid_corr_tags() {
+  local line
+  line='needs-decision [corr=d448ea86afa4bf67] [key=project-registration-path]: path'
+  status_is_captain_relevant "$line" \
+    || fail "corr-tagged needs-decision should be captain-relevant"
+  status_frees_capacity "$line" \
+    || fail "corr-tagged needs-decision should free capacity"
+
+  line='resolved [draft]: prose'
+  status_frees_capacity "$line" \
+    && fail "resolved [draft] must not free capacity"
+  line='resolved [draft] [corr=x]: prose'
+  status_frees_capacity "$line" \
+    && fail "resolved [draft] [corr=x] must not free capacity"
+
+  line='paused [corr=d448ea86afa4bf67]: waiting'
+  status_is_paused "$line" \
+    || fail "corr-tagged paused should match the pause verb"
+
+  local dir
+  dir=$(case_dir activity)
+  printf 'working [corr=abc] [key=work-slug]: phase one\n' > "$dir/a.status"
+  [ "$(status_open_activities "$dir/a.status")" = "$(printf 'work-slug\tworking\tphase one\n')" ] \
+    || fail "activity should open under corr-tagged working: $(status_open_activities "$dir/a.status")"
+  printf 'done [corr=x] [key=work-slug]: finished\n' >> "$dir/a.status"
+  [ -z "$(status_open_activities "$dir/a.status")" ] \
+    || fail "activity should close under corr-tagged done: $(status_open_activities "$dir/a.status")"
+
+  pass "valid corr tags recover shared classifiers; malformed draft tags stay inert"
+}
+
+test_captain_held_with_corr_closes() {
+  local dir
+  dir=$(case_dir captain-held-corr)
+  printf 'needs-decision [key=api-shape]: pick REST or RPC\n' > "$dir/t.status"
+  printf 'captain-held [corr=aaaa] [key=api-shape]: tracked by hold-1\n' >> "$dir/t.status"
+  assert_fold "$dir/t.status" "" "captain-held with corr closes"
+  pass "captain-held with a leading corr tag closes the stated key"
+}
+
 test_stated_key_is_honored_in_both_positions
 test_bare_keyless_line_still_folds_to_default
 test_resolution_closes_across_positions
@@ -179,3 +313,9 @@ test_two_colon_form_decisions_stay_distinct
 test_mid_note_prose_mention_is_not_a_stated_key
 test_malformed_stated_key_never_collapses_to_default
 test_incremental_agrees_with_full_fold_across_appends
+test_corr_then_key_opens_and_closes_under_stated_key
+test_shape_i_corr_before_colon_key_at_note_head
+test_key_led_stray_and_unclosed_still_fold
+test_malformed_metadata_never_opens_phantom_keys
+test_shared_verb_recovery_for_valid_corr_tags
+test_captain_held_with_corr_closes
