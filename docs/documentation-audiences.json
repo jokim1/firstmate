@@ -197,6 +197,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "FORK.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "CONTRIBUTING.md",
       "audience": "maintainer-architecture"
     },
