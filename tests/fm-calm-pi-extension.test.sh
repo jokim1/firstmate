@@ -1552,7 +1552,16 @@ TS
       fail "Pi follow-up $label case did not process the monitoring notification"
     fi
 
-    pane=$(tmux -L "$TMUX_SOCKET" capture-pane -p -t "$TMUX_SESSION" -S - 2>/dev/null || true)
+    i=0
+    while [ "$i" -lt 240 ]; do
+      pane=$(tmux -L "$TMUX_SOCKET" capture-pane -p -t "$TMUX_SESSION" -S - 2>/dev/null || true)
+      if printf '%s\n' "$pane" | grep -Fq "CAPTAIN_ANSWER_$label" \
+        && printf '%s\n' "$pane" | grep -Fq "MONITOR_HANDLED_${label}_ONE"; then
+        break
+      fi
+      sleep 0.05
+      i=$((i + 1))
+    done
     [ "$(printf '%s\n' "$pane" | grep -Fc "CAPTAIN_ANSWER_$label" || true)" -eq 1 ] \
       || fail "Pi follow-up $label case rendered a duplicate captain answer"
     assert_contains "$pane" "CAPTAIN_PROMPT_$label" "Pi follow-up $label case hid the genuine captain prompt"
@@ -3497,20 +3506,15 @@ JS
     i=$((i + 1))
   done
 
-  # Capture the last on-screen column and sail before settling so the next working
-  # period in this same Pi session can prove freeze/resume continuity.
+  # Escape aborts the run. Retain the last frame that was actually painted before
+  # removal, because a timer tick may land after input is queued under load.
   tmux -L "$TMUX_SOCKET" capture-pane -p -t "$TMUX_SESSION" >"$boat_freeze_snapshot"
   boat_freeze_column=$(awk 'index($0,"\\__/"){print index($0,"\\__/"); exit}' "$boat_freeze_snapshot")
   boat_freeze_sail=$(grep -E '<\||\|>' "$boat_freeze_snapshot" | tail -1 || true)
   case "$boat_freeze_sail" in
     *'<|'*) boat_freeze_sail='<|' ;;
     *'|>'*) boat_freeze_sail='|>' ;;
-    *) fail "could not read the freeze-frame sail heading" ;;
   esac
-  [ -n "$boat_freeze_column" ] && [ "$boat_freeze_column" -gt 1 ] \
-    || fail "freeze frame never left the left edge (column '${boat_freeze_column:-empty}')"
-
-  # Escape aborts the run, and the abort path removes the ship with no residue.
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Escape
   active_screen_wait=0
   while [ "$active_screen_wait" -lt 200 ]; do
@@ -3518,9 +3522,19 @@ JS
     if ! grep -Fq '\__/' "$boat_cleared_snapshot"; then
       break
     fi
+    cp "$boat_cleared_snapshot" "$boat_freeze_snapshot"
+    boat_freeze_column=$(awk 'index($0,"\\__/"){print index($0,"\\__/"); exit}' "$boat_freeze_snapshot")
+    boat_freeze_sail=$(grep -E '<\||\|>' "$boat_freeze_snapshot" | tail -1 || true)
+    case "$boat_freeze_sail" in
+      *'<|'*) boat_freeze_sail='<|' ;;
+      *'|>'*) boat_freeze_sail='|>' ;;
+    esac
     sleep 0.05
     active_screen_wait=$((active_screen_wait + 1))
   done
+  [ -n "$boat_freeze_column" ] && [ "$boat_freeze_column" -gt 1 ] \
+    || fail "freeze frame never left the left edge (column '${boat_freeze_column:-empty}')"
+  case "$boat_freeze_sail" in '<|'|'|>') : ;; *) fail "could not read the freeze-frame sail heading" ;; esac
   assert_not_contains "$(cat "$boat_cleared_snapshot")" '\__/' "Escape did not remove the working ship"
   assert_not_contains "$(cat "$boat_cleared_snapshot")" "CALM_WORKING_E2E_RESPONSE" "the long-delay fixture settled instead of aborting on Escape"
   assert_not_contains "$(cat "$boat_cleared_snapshot")" "FOCUSPROBE" "the editor kept the focus probe text after Escape"
