@@ -553,6 +553,7 @@ fi
 # wake exit propagates out so the harness re-notifies firstmate.
 child=
 child_out=
+
 cleanup_child() {
   [ -z "$child" ] || stop_pid_bounded "$child"
   if [ -n "$child_out" ]; then
