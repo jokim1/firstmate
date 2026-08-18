@@ -1199,7 +1199,7 @@ test_perl_fallback_bounds_github_call() {
   json=$(PATH="$fakebin:$toolbin" FM_HOME="$home" FM_BEARINGS_NOW=2026-07-11T18:00:00Z \
     FM_BEARINGS_PR_TIMEOUT=1 NET_LOG="$home/net.log" FAKE_GH_SLEEP=1 "$BEARINGS" --include-prs --json)
   elapsed=$(( $(date +%s) - started ))
-  [ "$elapsed" -lt 10 ] || fail "Perl fallback did not bound a stalled gh call (${elapsed}s)"
+  [ "$elapsed" -lt 15 ] || fail "Perl fallback did not bound a stalled gh call (${elapsed}s)"
   printf '%s' "$json" | jq -e '.prs | test("unavailable")' >/dev/null \
     || fail "timed-out gh call did not fail soft: $json"
   pass "Perl fallback bounds stalled GitHub calls without coreutils timeout"

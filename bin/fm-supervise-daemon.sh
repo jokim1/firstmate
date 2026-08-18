@@ -463,8 +463,9 @@ classify_heartbeat() {
 # re-evaluate ready work against free capacity. The daemon never selects or
 # spawns from this wake itself.
 # A capacity-freeing captain status already forces capacity re-evaluation. Its
-# same-window refill wake must not produce a second injection. Coverage is
-# one-shot and bounded so a later refill-only wake still escalates.
+# same-window refill wake must not produce a second injection — that was the
+# cf26324 / #2051 Scenario B double-marker regression. Coverage is one-shot and
+# bounded so a later refill-only wake still escalates.
 REFILL_COVERED_SECS_DEFAULT=120
 classify_refill() {  # [state]
   local state=${1:-} age covered

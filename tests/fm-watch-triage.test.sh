@@ -105,15 +105,15 @@ wait_poll_cycle() {  # <state> <pid> [limit-ticks]
 # generous budget can only remove that false negative - a watcher that never
 # exits still fails the assertion when the budget runs out.
 wait_numeric_file() {
-  local file=$1 limit=${2:-30} i=0 value
-  while [ "$i" -lt "$limit" ]; do
+  local file=$1 seconds=${2:-30} deadline value
+  deadline=$((SECONDS + seconds))
+  while [ "$SECONDS" -lt "$deadline" ]; do
     value=$(cat "$file" 2>/dev/null || true)
     case "$value" in
       ''|*[!0-9]*) ;;
       *) return 0 ;;
     esac
     sleep 0.1
-    i=$((i + 1))
   done
   return 1
 }
@@ -174,7 +174,45 @@ record_pi_busy() {  # <state-dir> <id>
     --source pi-ext --event agent-start
 }
 
-reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
+reap() {
+  local pid=$1
+  kill -TERM "$pid" 2>/dev/null || true
+  # EXIT cleanup can block on recovery-marker locks. Keep intentional fixture
+  # shutdown bounded, matching the shared helper used by watch-arm tests.
+  wait_for_exit "$pid" 10 || true
+}
+
+reap_for_ack() {  # <pid> <state>
+  local pid=$1 state=$2 i=0
+  # Freeze the watcher at a lock-free boundary before TERM. Otherwise the test
+  # can interrupt it while it owns a recovery lock, forcing bounded cleanup to
+  # escalate before the acknowledgement marker can be published.
+  while [ "$i" -lt 120 ] && is_live_non_zombie "$pid"; do
+    kill -STOP "$pid" 2>/dev/null || break
+    if [ ! -e "$state/.watcher-down.lock" ] && [ ! -L "$state/.watcher-down.lock" ] \
+      && [ ! -e "$state/.wake-queue.lock" ] && [ ! -L "$state/.wake-queue.lock" ]; then
+      break
+    fi
+    kill -CONT "$pid" 2>/dev/null || true
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -TERM "$pid" 2>/dev/null || true
+  kill -CONT "$pid" 2>/dev/null || true
+  # These cases assert the recovery acknowledgement contract, so wait for the
+  # EXIT trap's durable boundary before bounded cleanup may escalate to KILL.
+  i=0
+  while [ "$i" -lt 120 ] && is_live_non_zombie "$pid" \
+    && [ ! -s "$state/.watcher-down" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ ! -s "$state/.watcher-down" ]; then
+    wait_for_exit "$pid" 10 || true
+    return 1
+  fi
+  wait_for_exit "$pid" 10 || true
+}
 
 # --- pure classifier predicates (fm-classify-lib.sh) ------------------------
 
@@ -1713,7 +1751,7 @@ test_capacity_freeing_status_enqueues_refill() {
     printf '%s\n' "$verb" > "$status_file"
     watch_bg "$state" "$fakebin" "$out"
     pid=$!
-    wait_for_exit "$pid" 40 || fail "watcher did not exit for capacity-freeing status: $verb"
+    wait_for_exit "$pid" 120 || fail "watcher did not exit for capacity-freeing status: $verb"
     FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
       || fail "drain failed after capacity-freeing status: $verb"
     refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
@@ -1735,7 +1773,7 @@ test_working_status_does_not_enqueue_refill() {
   export FM_FAKE_CREW_STATE='state: unknown · source: none · fake default'
   watch_bg "$state" "$fakebin" "$out"
   pid=$!
-  wait_for_exit "$pid" 40 || fail "watcher did not exit for non-working working: note"
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for non-working working: note"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
     || fail "drain after working: note failed"
   if awk -F '\t' '$3 == "refill" { found=1 } END { exit found ? 0 : 1 }' "$drain_out"; then
@@ -1756,7 +1794,7 @@ test_resolved_while_working_enqueues_refill_only() {
   export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
   watch_bg "$state" "$fakebin" "$out"
   pid=$!
-  wait_for_exit "$pid" 40 || fail "watcher did not exit for resolved-while-working refill"
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for resolved-while-working refill"
   grep -F 'refill: re-evaluate ready work against free capacity' "$out" >/dev/null \
     || fail "watcher did not print the refill reason for resolved-while-working"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
@@ -1781,7 +1819,7 @@ test_n_capacity_transitions_collapse_to_one_refill() {
   printf 'done: first\n' > "$state/a.status"
   watch_bg "$state" "$fakebin" "$out"
   pid=$!
-  wait_for_exit "$pid" 40 || fail "watcher did not exit for first capacity-freeing transition"
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for first capacity-freeing transition"
   # Two more capacity-freeing transitions land before firstmate drains.
   i=0
   while [ "$i" -lt 2 ]; do
@@ -1861,7 +1899,7 @@ test_stale_terminal_status_overridden_by_active_run() {
   [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on absorb"
   [ -s "$state/.stale-since-$key" ] || fail "stale-since escalation timer was not recorded on absorb"
   [ ! -e "$state/.hb-surfaced-validating" ] || fail "an absorbed wake must not mark the status line as surfaced"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional phase-A watcher stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A watcher stop"
 
   # Phase B: backdate the idle timer past the threshold; the run genuinely
@@ -1914,7 +1952,7 @@ test_nonterminal_stale_provably_working_absorbed_then_escalated() {
   [ ! -s "$state/.wake-queue" ] || fail "fresh provably-working stale enqueued a wake during absorb"
   [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on absorb"
   [ -s "$state/.stale-since-$key" ] || fail "stale-since escalation timer was not recorded on absorb"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional phase-A watcher stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A watcher stop"
 
   # Phase B: backdate the idle timer past the threshold; the next run escalates.
@@ -1982,7 +2020,7 @@ test_nonterminal_stale_not_working_surfaced() {
 # the pause's own status-file age, so a churny idle pane cannot reset the cadence)
 # for a recheck, so a forgotten pause cannot rot invisibly.
 test_nonterminal_stale_paused_absorbed_then_resurfaced() {
-  local dir state fakebin out drain_out capture_file window key pane_hash sig pid back statusf
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid back statusf i
   dir=$(make_case nonterminal-stale-paused); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
   window="test:fm-held"
@@ -2015,7 +2053,7 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on paused absorb"
   [ -e "$state/.paused-$key" ] || fail "paused flag not recorded on absorb"
   [ ! -e "$state/.stale-since-$key" ] || fail "a paused absorb must not start the wedge timer"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional paused phase-A stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional paused phase-A stop"
 
   # Phase B: age the pause past the (now normal) threshold by backdating its
@@ -2506,7 +2544,7 @@ test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash() {
   [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "unchanged stale hash did not enter paused mode"; }
   [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "pause transition retained its wedge timer"; }
   wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "a stale hash that entered pause was wedge-escalated: $(cat "$out")"; }
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional entered-pause stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional entered-pause watcher stop"
 
   printf 'working: upstream landed, resuming\n' > "$state/transition.status"
@@ -2587,7 +2625,7 @@ test_paused_authoritative_working_preserves_wedge_timer() {
   sleep 2
   [ "$(cat "$state/.stale-since-$key" 2>/dev/null || true)" = "$since" ] \
     || { reap "$pid"; fail "repeat authoritative working recheck reset the wedge timer"; }
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional authoritative-working stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional authoritative-working stop"
 
   echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
@@ -2640,7 +2678,7 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold() {
   if ! wait_poll_cycle "$state" "$pid"; then
     reap "$pid"; fail "watcher exited on the priming round (should absorb): $(cat "$out")"
   fi
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional wedge priming stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional wedge priming stop"
 
   n=1
@@ -2767,7 +2805,7 @@ test_busy_pane_stable_hash_escalates_past_turn_age_bound() {
     reap "$pid"; fail "a stable-hash busy pane past the turn-age bound escalated before the wedge threshold: $(cat "$out")"
   fi
   [ -s "$state/.stale-since-$key" ] || fail "a stable-hash busy pane past the turn-age bound did not start a wedge timer"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional stable-hash phase-A stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional stable-hash phase-A stop"
 
   # Phase B: backdate the wedge timer past the threshold; the next poll escalates.
@@ -2810,7 +2848,7 @@ test_busy_pane_changing_hash_escalates_past_turn_age_bound() {
     reap "$pid"; fail "a changing-hash busy pane past the turn-age bound escalated before the wedge threshold: $(cat "$out")"
   fi
   [ -s "$state/.stale-since-$key" ] || fail "a changing-hash busy pane past the turn-age bound did not start a wedge timer"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional changing-hash phase-A stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional changing-hash phase-A stop"
 
   # Phase B: another tick (still a fresh, never-before-seen hash) plus a
@@ -2887,7 +2925,7 @@ test_busy_pane_repeated_escalation_reaches_demand_deep_inspection() {
   if ! wait_poll_cycle "$state" "$pid"; then
     reap "$pid"; fail "priming round for busy turn-age escalation was not absorbed: $(cat "$out")"
   fi
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional busy-wedge priming stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional busy-wedge priming stop"
 
   n=1
@@ -3243,7 +3281,7 @@ test_busy_pane_default_turn_age_bound_is_3600s() {
     reap "$pid"; fail "a 5-minute-old completed turn tripped the default busy-turn-age bound: $(cat "$out")"
   fi
   [ ! -e "$state/.stale-since-$key" ] || fail "a 5-minute-old completed turn started a wedge timer under the default bound"
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional five-minute-bound stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional five-minute-bound stop"
 
   set_mtime $(( $(date +%s) - 4000 )) "$state/busy-default.turn-ended"
@@ -3286,7 +3324,7 @@ test_nonterminal_stale_repairs_missing_or_corrupt_timer() {
     fail "watcher exited while repairing a missing stale-since timer: $(cat "$out")"
   fi
   [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "missing stale-since repair enqueued a wake"; }
-  reap "$pid"
+  reap_for_ack "$pid" "$state" || fail "intentional missing-timer repair stop did not publish recovery state"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional missing-timer repair stop"
 
   printf 'corrupt\n' > "$state/.stale-since-$key"

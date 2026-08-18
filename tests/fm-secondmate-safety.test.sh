@@ -2744,6 +2744,9 @@ EOF
     fail "watcher exited unexpectedly while supervising idle secondmate"
   fi
   kill "$pid" 2>/dev/null || true
+  if wait_live "$pid" 50; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
   wait "$pid" 2>/dev/null || true
   grep -F "stale: $window" "$out" >/dev/null && fail "idle secondmate pane triggered stale wake"
   pass "idle kind=secondmate pane is healthy and not stale"

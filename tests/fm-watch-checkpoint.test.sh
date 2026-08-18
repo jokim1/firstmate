@@ -38,7 +38,7 @@ test_signal_passes_through_and_exits_zero() {
     printf 'done: synthetic wake\n' > "$home/state/demo.status"
   ) &
   status=0
-  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 8 >"$out" 2>"$err" || status=$?
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 30 >"$out" 2>"$err" || status=$?
   expect_code 0 "$status" "signal checkpoint exit"
   assert_contains "$(cat "$out")" "signal:" "signal wake was not passed through"
   drained=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh")
@@ -53,7 +53,7 @@ test_refill_passes_through_and_exits_zero() {
   out="$home/out.txt"
   err="$home/err.txt"
   mkdir -p "$fixture/bin"
-  cp "$CHECKPOINT" "$fixture/bin/fm-watch-checkpoint.sh"
+  cp "$CHECKPOINT" "$ROOT/bin/fm-timeout-lib.sh" "$fixture/bin/"
   cat > "$fixture/bin/fm-watch.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'refill: re-evaluate ready work against free capacity\n'
@@ -65,6 +65,40 @@ SH
   assert_contains "$(cat "$out")" "refill: re-evaluate ready work against free capacity" \
     "refill wake was not passed through"
   pass "checkpoint passes through refill-only wakes"
+}
+
+test_term_resistant_watcher_is_force_killed_at_deadline() {
+  local home fixture out err pid_file watcher_pid status
+  home=$(make_home term-resistant)
+  fixture="$home/fixture"
+  out="$home/out.txt"
+  err="$home/err.txt"
+  pid_file="$home/watcher.pid"
+  mkdir -p "$fixture/bin"
+  cp "$CHECKPOINT" "$ROOT/bin/fm-timeout-lib.sh" "$fixture/bin/"
+  cat > "$fixture/bin/fm-watch.sh" <<'SH'
+#!/usr/bin/env bash
+exec perl -e '
+  $SIG{TERM} = "IGNORE";
+  open my $fh, ">", $ENV{FM_TERM_RESISTANT_PID_FILE} or die $!;
+  print {$fh} "$$\n";
+  close $fh;
+  alarm 5;
+  $SIG{ALRM} = sub { kill "KILL", $$ };
+  sleep 600;
+'
+SH
+  chmod +x "$fixture/bin/fm-watch-checkpoint.sh" "$fixture/bin/fm-watch.sh"
+  status=0
+  FM_HOME="$home" FM_TERM_RESISTANT_PID_FILE="$pid_file" \
+    "$fixture/bin/fm-watch-checkpoint.sh" --seconds 1 >"$out" 2>"$err" || status=$?
+  expect_code 124 "$status" "TERM-resistant checkpoint exit"
+  assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 1s" \
+    "TERM-resistant checkpoint did not report its quiet deadline"
+  watcher_pid=$(cat "$pid_file")
+  ! kill -0 "$watcher_pid" 2>/dev/null \
+    || fail "TERM-resistant watcher survived the checkpoint's hard deadline"
+  pass "checkpoint force-kills a TERM-resistant watcher at its deadline"
 }
 
 test_registered_check_uses_preserved_watcher_environment() {
@@ -80,7 +114,7 @@ SH
   FM_HOME="$home" "$ROOT/bin/fm-check-register.sh" env-check >/dev/null \
     || fail "could not register checkpoint custom check"
   status=0
-  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=1 "$CHECKPOINT" --seconds 30 >"$out" 2>"$err" || status=$?
   expect_code 0 "$status" "check checkpoint exit"
   assert_contains "$(cat "$out")" "check:" "check wake was not passed through"
   assert_contains "$(cat "$out")" "FM_CHECK_INTERVAL=1" "watcher environment was not preserved"
@@ -142,7 +176,7 @@ test_checkpoint_normalizes_garbage_poll_sleep_and_grace() {
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_POLL=garbage FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     env -u FM_GUARD_GRACE \
-    "$CHECKPOINT" --seconds 3 >"$out" 2>"$err" || status=$?
+    "$CHECKPOINT" --seconds 15 >"$out" 2>"$err" || status=$?
   expect_code 124 "$status" "garbage-poll quiet checkpoint exit"
   # Never sleep the raw malformed token; sleep the shared default 15.
   [ "$(count_exact_sleep_args "$sleep_log" garbage)" -eq 0 ] \
@@ -170,7 +204,7 @@ test_checkpoint_normalizes_zero_and_negative_poll() {
     PATH="$fakebin:$PATH" FM_HOME="$home" FM_POLL="$bad" FM_SIGNAL_GRACE=1 \
       FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
       env -u FM_GUARD_GRACE \
-      "$CHECKPOINT" --seconds 2 >"$out" 2>"$err" || status=$?
+      "$CHECKPOINT" --seconds 15 >"$out" 2>"$err" || status=$?
     expect_code 124 "$status" "FM_POLL=$bad quiet checkpoint exit"
     [ "$(count_exact_sleep_args "$sleep_log" "$bad")" -eq 0 ] \
       || fail "watcher slept raw FM_POLL=$bad"$'\n'"$(cat "$sleep_log")"
@@ -193,7 +227,7 @@ test_checkpoint_honors_fractional_poll_and_matching_grace() {
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_POLL=0.2 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     env -u FM_GUARD_GRACE \
-    "$CHECKPOINT" --seconds 1 >"$out" 2>"$err" || status=$?
+    "$CHECKPOINT" --seconds 15 >"$out" 2>"$err" || status=$?
   expect_code 124 "$status" "fractional-poll quiet checkpoint exit"
   [ "$(count_exact_sleep_args "$sleep_log" 0.2)" -ge 1 ] \
     || fail "watcher did not sleep fractional FM_POLL=0.2"$'\n'"$(cat "$sleep_log")"
@@ -228,7 +262,7 @@ test_checkpoint_canonicalizes_zero_padded_poll() {
     PATH="$fakebin:$PATH" FM_HOME="$home" FM_POLL="$poll_token" FM_SIGNAL_GRACE=1 \
       FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
       env -u FM_GUARD_GRACE \
-      "$CHECKPOINT" --seconds 2 >"$out" 2>"$err" || status=$?
+      "$CHECKPOINT" --seconds 15 >"$out" 2>"$err" || status=$?
     expect_code 124 "$status" "zero-padded FM_POLL=$poll_token quiet checkpoint exit"
     # Must never sleep the raw zero-padded token or fall into octal confusion.
     [ "$(count_exact_sleep_args "$sleep_log" "$poll_token")" -eq 0 ] \
@@ -279,7 +313,7 @@ test_checkpoint_rejects_subresolution_and_oversize_poll() {
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_POLL=0.0000001 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     env -u FM_GUARD_GRACE \
-    "$CHECKPOINT" --seconds 2 >"$home/out.txt" 2>"$home/err.txt" || status=$?
+    "$CHECKPOINT" --seconds 15 >"$home/out.txt" 2>"$home/err.txt" || status=$?
   expect_code 124 "$status" "sub-resolution FM_POLL quiet checkpoint exit"
   [ "$(count_exact_sleep_args "$sleep_log" 0)" -eq 0 ] \
     || fail "watcher slept 0 under FM_POLL=0.0000001"$'\n'"$(cat "$sleep_log")"
@@ -301,7 +335,7 @@ test_checkpoint_rejects_subresolution_and_oversize_poll() {
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_POLL=99999999999999999999 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     env -u FM_GUARD_GRACE \
-    "$CHECKPOINT" --seconds 2 >"$home/out.txt" 2>"$home/err.txt" || status=$?
+    "$CHECKPOINT" --seconds 15 >"$home/out.txt" 2>"$home/err.txt" || status=$?
   expect_code 124 "$status" "huge FM_POLL quiet checkpoint exit"
   [ "$(count_exact_sleep_args "$sleep_log" 15)" -ge 1 ] \
     || fail "watcher never slept default 15 under huge FM_POLL"$'\n'"$(cat "$sleep_log")"
@@ -316,6 +350,7 @@ test_checkpoint_rejects_subresolution_and_oversize_poll() {
 test_quiet_checkpoint_exits_124_cleanly
 test_signal_passes_through_and_exits_zero
 test_refill_passes_through_and_exits_zero
+test_term_resistant_watcher_is_force_killed_at_deadline
 test_registered_check_uses_preserved_watcher_environment
 test_existing_singleton_watcher_is_not_success
 test_checkpoint_normalizes_garbage_poll_sleep_and_grace

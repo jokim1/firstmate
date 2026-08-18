@@ -1472,6 +1472,9 @@ test_durable_wake_batch_handles_refill_before_acknowledgement() {
   pass "durable mixed wake batches handle refill before acknowledgement"
 }
 
+# cf26324 / #2051 regression: a capacity-freeing captain-relevant status (done:)
+# already forces firstmate to re-evaluate capacity. A same-window refill wake
+# must self-handle so away-mode does not inject a second U+2063 digest.
 test_capacity_freeing_captain_status_covers_same_window_refill() {
   local dir state decision
   dir=$(make_supercase refill-covered)
@@ -1489,12 +1492,13 @@ test_capacity_freeing_captain_status_covers_same_window_refill() {
   grep -F 'task.status: done: PR https://example.test/pr/42' "$state/.subsuper-escalations" >/dev/null \
     || fail "covered refill: done status was not escalated"
   if grep -F 'refill: re-evaluate ready work against free capacity' "$state/.subsuper-escalations" >/dev/null 2>&1; then
-    fail "covered refill: same-window refill still escalated"
+    fail "covered refill: same-window refill still escalated (would double-inject)"
   fi
   [ ! -e "$state/.subsuper-refill-covered" ] \
     || fail "covered refill: one-shot marker was not consumed"
   [ ! -s "$state/.wake-queue" ] || fail "covered refill: handled batch remained queued"
 
+  # After the window is consumed, a later refill-only wake must still escalate.
   append_wake "$state" refill refill "refill: re-evaluate ready work against free capacity" \
     || fail "covered refill: second refill append failed"
   decision=$(classify_refill "$state")
