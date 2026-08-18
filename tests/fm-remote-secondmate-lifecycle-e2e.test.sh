@@ -1027,7 +1027,7 @@ resolve_ios_pending
 
 # Structured fleet state comes from each home's own snapshot. The remote host is
 # explicit, and the local route remains alongside it.
-SNAPSHOT=$(remote_env "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+SNAPSHOT=$(FM_SNAPSHOT_SECONDMATE_TIMEOUT=30 remote_env "$ROOT/bin/fm-fleet-snapshot.sh" --json)
 if ! printf '%s' "$SNAPSHOT" | jq -e '.secondmate_current.records | any(.id == "ios" and .remote == true and .host == "remote-mac" and .provenance.selected == "structured-home")' >/dev/null; then
   printf 'secondmate projection:\n%s\n' "$(printf '%s' "$SNAPSHOT" | jq '.secondmate_current')" >&2
   fail "fleet snapshot did not select the remote structured-home projection"

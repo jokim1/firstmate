@@ -280,20 +280,21 @@ SH
 }
 
 wait_for_exit() {
-  local pid=$1 limit=${2:-50} i=0
-  while [ "$i" -lt "$limit" ]; do
+  local pid=$1 seconds=${2:-50} deadline
+  deadline=$((SECONDS + seconds))
+  while [ "$SECONDS" -lt "$deadline" ]; do
     if ! is_live_non_zombie "$pid"; then
       wait "$pid"
       return "$?"
     fi
     sleep 0.1
-    i=$((i + 1))
   done
-  kill "$pid" 2>/dev/null || true
-  i=0
-  while [ "$i" -lt 50 ] && is_live_non_zombie "$pid"; do
+  # TERM then escalate: EXIT-path cleanup can hang on recovery locks, and a bare
+  # wait after kill would wedge the whole suite (watch-arm rearm-resurface).
+  kill -TERM "$pid" 2>/dev/null || true
+  deadline=$((SECONDS + 5))
+  while [ "$SECONDS" -lt "$deadline" ] && is_live_non_zombie "$pid"; do
     sleep 0.1
-    i=$((i + 1))
   done
   is_live_non_zombie "$pid" && kill -KILL "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
