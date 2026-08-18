@@ -4,6 +4,8 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"  # fm_run_timed: shared hard process-group bound
 SECONDS_ARG=${FM_CODEX_WATCH_CHECKPOINT:-180}
 
 usage() {
@@ -51,39 +53,24 @@ ERR=$(mktemp "${TMPDIR:-/tmp}/fm-watch-checkpoint.err.XXXXXX") || {
 }
 trap 'rm -f "$OUT" "$ERR"' EXIT
 
-run_with_perl_timeout() {
-  perl -e '
-    my $seconds = shift;
-    my $pid = fork;
-    die "fork failed\n" unless defined $pid;
-    if (!$pid) {
-      setpgrp(0, 0);
-      exec @ARGV;
-      die "exec failed: $!\n";
-    }
-    local $SIG{ALRM} = sub {
-      kill "TERM", -$pid;
-      select undef, undef, undef, 0.2;
-      kill "KILL", -$pid;
-      exit 124;
-    };
-    alarm $seconds;
-    waitpid $pid, 0;
-    exit($? >> 8);
-  ' "$SECONDS_ARG" "$SCRIPT_DIR/fm-watch.sh"
+checkpoint_reconcile_watch_lock() {
+  [ -f "$SCRIPT_DIR/fm-wake-lib.sh" ] || return 0
+  (
+    # A hard timeout can kill the watcher after its TERM trap starts but before
+    # EXIT cleanup releases the lock. Reclaim only a provably dead holder, then
+    # publish the same downtime evidence as normal watcher cleanup.
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$SCRIPT_DIR/fm-wake-lib.sh"
+    lock="$STATE/.watch.lock"
+    [ -e "$lock/pid" ] || exit 0
+    fm_lock_try_acquire "$lock" || exit 0
+    fm_recovery_transition "$STATE/.watch-downtime" release-lock "$lock" downtime
+  )
 }
 
 set +e
-if command -v timeout >/dev/null 2>&1; then
-  timeout "$SECONDS_ARG" "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
-  RC=$?
-elif command -v gtimeout >/dev/null 2>&1; then
-  gtimeout "$SECONDS_ARG" "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
-  RC=$?
-else
-  run_with_perl_timeout >"$OUT" 2>"$ERR"
-  RC=$?
-fi
+fm_run_timed "$SECONDS_ARG" "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
+RC=$?
 set -e
 
 if grep -E '^(signal:|stale:|check:|heartbeat($|:)|refill($|:))' "$OUT" >/dev/null 2>&1; then
@@ -100,6 +87,7 @@ if grep -E '^watcher: already running' "$OUT" "$ERR" >/dev/null 2>&1; then
 fi
 
 if [ "$RC" -eq 124 ]; then
+  checkpoint_reconcile_watch_lock || true
   printf 'checkpoint: no actionable wake within %ss\n' "$SECONDS_ARG"
   exit 124
 fi
