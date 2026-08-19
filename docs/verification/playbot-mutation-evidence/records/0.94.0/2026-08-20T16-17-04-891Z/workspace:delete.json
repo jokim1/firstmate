@@ -1,0 +1,16 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence.v1",
+  "operation": "workspace:delete",
+  "appVersion": "0.94.0",
+  "smokeRunId": "2026-08-20T16-17-04-891Z",
+  "recordedAt": "2026-08-20T16:17:21.785Z",
+  "projectId": "project_07474ac1d119",
+  "projectRootId": "root_1274183bc1fe",
+  "request": {
+    "workspaceId": "ws_5e9cc3bc6d42"
+  },
+  "resultWasUndefined": true,
+  "requestSha256": "7422029c1687a2d370a1e163f03a32f76587136b5c53b2b0fa319e5975c613b4",
+  "verifiedAbsent": true,
+  "worktreePath": "/Users/josephkim/Library/Application Support/@playbot/desktop/worktrees/repo_c901e2099b94/fm-playbot-lane-smoke-1787242624891-e1154e99"
+}
