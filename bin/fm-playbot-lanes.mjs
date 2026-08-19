@@ -160,7 +160,8 @@ export const COMPATIBILITY_MANIFEST_SEED = {
   mcpPerThreadIdentity: PHASE1_MARKER,
   releases: {
     '0.90.0': releaseCompatibilityShape(),
-    '0.92.0': releaseCompatibilityShape()
+    '0.92.0': releaseCompatibilityShape(),
+    '0.93.1': releaseCompatibilityShape()
   }
 };
 
