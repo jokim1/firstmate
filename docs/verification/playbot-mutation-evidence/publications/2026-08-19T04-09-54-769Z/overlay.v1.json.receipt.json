@@ -1,0 +1,18 @@
+{
+  "schema": "firstmate.playbot.smoke-receipt.v1",
+  "smokeRunId": "2026-08-19T04-09-54-769Z",
+  "appVersion": "0.93.1",
+  "recordedAt": "2026-08-19T04:10:10.598Z",
+  "project": {
+    "projectId": "project_07474ac1d119",
+    "projectRootId": "root_1274183bc1fe",
+    "projectPath": "/Users/josephkim/dev/playbot-smoke-disposable",
+    "projectName": "playbot-smoke-disposable",
+    "mainWorkspaceId": "ws_00159507e225"
+  },
+  "fixture": false,
+  "publicationRelPath": "publications/2026-08-19T04-09-54-769Z",
+  "overlaySha256": "e6cd1baa2259c9d7bca18fd908f4b6f11731e1e2797480c1df150a8337b0a541",
+  "recordRootSha256": "ea10621be7ad490b5d7f424891bba924a74c7c1c2c593915cbff5c4c8982b649",
+  "lanesSha256": "0cdfa1e2c43d6730904eda463b40aed8d6f5842280e01e9cf6dcd8fc8533739c"
+}
