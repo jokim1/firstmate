@@ -1,0 +1,48 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence.v1",
+  "operation": "threads:stop",
+  "appVersion": "0.93.1",
+  "smokeRunId": "2026-08-19T04-09-54-769Z",
+  "recordedAt": "2026-08-19T04:10:07.329Z",
+  "projectId": "project_07474ac1d119",
+  "projectRootId": "root_1274183bc1fe",
+  "request": {
+    "threadId": "chat-1-1787112595259"
+  },
+  "resultKeys": [
+    "threadId",
+    "workspacePath",
+    "sessionId",
+    "sessionTitle",
+    "planMode",
+    "lastUserActivityAt",
+    "activeSinceMs",
+    "phase",
+    "error",
+    "errorCode",
+    "turns",
+    "turnDiffSummaries",
+    "turnDiffVersions",
+    "proposedFileChanges",
+    "subAgentItems",
+    "subAgentMetadata",
+    "contextUsage",
+    "plan",
+    "goal",
+    "pendingMessages",
+    "outboundMessages",
+    "approvalRequests",
+    "respondingRequestIds",
+    "userInputRequests",
+    "mcpElicitationRequests",
+    "agentStatus",
+    "hasUnread"
+  ],
+  "requestSha256": "b2f4a3b3ced18dff1e7da8711542cd538e6d43533a5f4241fb1a952672608f1c",
+  "resultSha256": "df8f0c9676e67790ecc181d8d7fd5a3a09e7084187a25436e3b9e1d916850a4d",
+  "afterStop": {
+    "agent_status": "ready",
+    "session_id": "01a01836-1f67-7e73-8a86-70dfaa5aa2c6",
+    "archived": 0
+  }
+}
