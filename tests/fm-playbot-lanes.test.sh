@@ -296,6 +296,7 @@ const {
   resolveWorkspaceIncludingArchived,
   verifyPlaybotRetirement,
   threadOpenContract,
+  workspaceCreateContract,
   validateThreadLaunchResult,
   scanFileForNeedles,
   COMPATIBILITY_MANIFEST,
@@ -501,18 +502,54 @@ if (!ipc094.includes('threads:launch') || !ipc094.includes('threads:setActiveThr
 if (ipc094.includes('threads:openThread') || ipc094.includes('db:workspaceThreads:open')) {
   throw new Error('0.94.0 IPC surface must not assert the removed openThread channels');
 }
-// The doctor's static IPC scan must pass against a bundle carrying the 0.94.0 surface.
+if (ipc094.includes('workspace:create')) {
+  throw new Error('0.94.0 IPC surface must not assert workspace:create; creation is fused into threads:launch');
+}
+// The doctor's static IPC scan (exact-token) must pass against a bundle carrying the 0.94.0 surface.
 const fixtureAsar = resolve(dirname(applicationDb), 'fixture-app.asar');
-if (!scanFileForNeedles(fixtureAsar, ipc094).ok) {
+if (!scanFileForNeedles(fixtureAsar, ipc094, { exactToken: true }).ok) {
   throw new Error('0.94.0 IPC needle scan should pass against the fixture bundle');
 }
-if (scanFileForNeedles(fixtureAsar, ['threads:definitelyAbsentChannel']).ok) {
+if (scanFileForNeedles(fixtureAsar, ['threads:definitelyAbsentChannel'], { exactToken: true }).ok) {
   throw new Error('IPC needle scan must fail closed when a channel is absent');
 }
+
+// --- exact-token hardening: an event string must never satisfy a command channel ---
+const tokenFixture = resolve(dirname(applicationDb), 'exact-token-fixture.txt');
+writeFileSync(tokenFixture, 'const events = ["workspace:created", "workspace:archiveEligibility"];\n');
+if (scanFileForNeedles(tokenFixture, ['workspace:create'], { exactToken: true }).ok) {
+  throw new Error('exact-token scan must reject workspace:create matched only inside workspace:created');
+}
+if (scanFileForNeedles(tokenFixture, ['workspace:archive'], { exactToken: true }).ok) {
+  throw new Error('exact-token scan must reject workspace:archive matched only inside workspace:archiveEligibility');
+}
+if (!scanFileForNeedles(tokenFixture, ['workspace:create']).ok) {
+  throw new Error('substring scan (default) should still match workspace:create inside workspace:created');
+}
+writeFileSync(tokenFixture, 'invoke("workspace:create");\n');
+if (!scanFileForNeedles(tokenFixture, ['workspace:create'], { exactToken: true }).ok) {
+  throw new Error('exact-token scan must accept a genuine bounded workspace:create channel');
+}
+
+// --- workspace-create contract (0.94.0 fuses create into threads:launch) ---
+const legacyCreate = workspaceCreateContract('0.93.1');
+if (legacyCreate.wireChannel !== 'workspace:create' || legacyCreate.fused !== false) {
+  throw new Error('0.93.1 must keep the standalone workspace:create channel');
+}
+const fusedCreate = workspaceCreateContract('0.94.0');
+if (fusedCreate.wireChannel !== 'threads:launch' || fusedCreate.fused !== true) {
+  throw new Error('0.94.0 must fuse workspace creation into threads:launch');
+}
+if (workspaceCreateContract('9.9.9').fused !== false) {
+  throw new Error('unknown releases must keep the standalone workspace:create contract');
+}
+
 const launchExpr = buildMutationEvaluateExpression('threads:launch', { destination: { kind: 'existing-workspace', workspaceId: 'workspace-task' }, thread: { title: 't', approvalMode: 'default', planMode: false } });
 if (!launchExpr.includes('"threads:launch"') || !launchExpr.includes('"existing-workspace"')) {
   throw new Error('threads:launch IPC expression must JSON-serialize the launch payload');
 }
+
+// existing-workspace open: createdWorkspace must be false
 if (validateThreadLaunchResult({ createdWorkspace: false, workspace: { id: 'workspace-task' }, thread: { id: 'chat-abc123' } }, 'workspace-task') !== 'chat-abc123') {
   throw new Error('validateThreadLaunchResult must return the app-minted thread id');
 }
@@ -528,6 +565,16 @@ for (const [bad, rx] of [
   } catch (error) {
     if (!rx.test(error.message)) throw error;
   }
+}
+// new-workspace fused create: createdWorkspace must be true, id discovered from result
+if (validateThreadLaunchResult({ createdWorkspace: true, workspace: { id: 'ws-new' }, thread: { id: 'chat-new' } }, 'ws-new', { expectCreatedWorkspace: true }) !== 'chat-new') {
+  throw new Error('validateThreadLaunchResult must accept a new-workspace fused launch');
+}
+try {
+  validateThreadLaunchResult({ createdWorkspace: false, workspace: { id: 'ws-new' }, thread: { id: 'chat-new' } }, 'ws-new', { expectCreatedWorkspace: true });
+  throw new Error('new-workspace launch that did not create a workspace must fail');
+} catch (error) {
+  if (!/must report createdWorkspace/.test(error.message)) throw error;
 }
 if (assertWorkspaceMutationTarget(applicationDb, 'workspace-task').kind !== 'worktree') throw new Error('worktree mutation target should pass');
 if (assertProjectMutationTarget(applicationDb, 'project-alpha', 'root-alpha').project_root_id !== 'root-alpha') {
