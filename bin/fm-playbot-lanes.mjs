@@ -1561,7 +1561,6 @@ async function waitForWorkspaceProvisioned(applicationDbPath, workspaceId, reque
       last = resolveWorkspaceIncludingArchived(applicationDbPath, workspaceId);
       if (last.project_root_id === request.projectRootId
         && last.archive_state === 'active'
-        && typeof last.path === 'string' && last.path !== ''
         && (request.branch == null || last.branch === request.branch)) {
         return last;
       }
@@ -1625,21 +1624,6 @@ async function mutationWorkspaceCreateLegacy(request, options = {}) {
   return { ...invoked, result, wireChannel: 'workspace:create', fused: false };
 }
 
-// Shared thread/activate block of a 0.94.0 threads:launch payload, so the two
-// launch destinations (new-workspace fused create, existing-workspace open)
-// cannot drift apart.
-function launchThreadPayload(request, title) {
-  return {
-    thread: {
-      title,
-      approvalMode: request.approvalMode ?? 'default',
-      planMode: request.planMode === true,
-      ephemeral: request.ephemeral === true
-    },
-    activate: request.activate !== false
-  };
-}
-
 // 0.94.0: creating a workspace is a threads:launch with a new-workspace
 // destination that also opens the first thread. We return the workspace as
 // `result` (from the authoritative DB row, so downstream shape checks are
@@ -1664,7 +1648,13 @@ async function mutationWorkspaceCreateFusedLaunch(request, options = {}) {
         expectedCommit: request.expectedCommit
       }
     },
-    ...launchThreadPayload(request, request.threadTitle ?? request.title ?? 'firstmate-smoke')
+    thread: {
+      title: request.threadTitle ?? request.title ?? 'firstmate-smoke',
+      approvalMode: request.approvalMode ?? 'default',
+      planMode: request.planMode === true,
+      ephemeral: request.ephemeral === true
+    },
+    activate: request.activate !== false
   };
   const paths = options.paths ?? playbotPaths(options.env);
   assertProjectMutationTarget(paths.applicationDb, request.projectId, request.projectRootId);
@@ -1777,12 +1767,15 @@ async function mutationOpenThreadLaunch(request, options = {}) {
   if (typeof request.workspaceId !== 'string' || !request.workspaceId) {
     throw new Error('threads:openThread (threads:launch) requires workspaceId');
   }
-  if (request.id != null) {
-    throw new Error('threads:openThread (threads:launch) cannot honor a caller-chosen thread id on 0.94.0; the app mints the id');
-  }
   const payload = {
     destination: { kind: 'existing-workspace', workspaceId: request.workspaceId },
-    ...launchThreadPayload(request, request.title ?? 'firstmate-smoke')
+    thread: {
+      title: request.title ?? 'firstmate-smoke',
+      approvalMode: request.approvalMode ?? 'default',
+      planMode: request.planMode === true,
+      ephemeral: request.ephemeral === true
+    },
+    activate: request.activate !== false
   };
   const paths = options.paths ?? playbotPaths(options.env);
   const workspace = assertWorkspaceMutationTarget(paths.applicationDb, request.workspaceId, 'threads:openThread');
