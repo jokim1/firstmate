@@ -99,11 +99,50 @@ export const NATIVE_REQUIRED_OPERATIONS = Object.freeze([
   'workspace:delete'
 ]);
 
+// Wire channels the mutation invoker may drive. This is the IPC-channel
+// allowlist, distinct from the abstract MUTATION_OPERATIONS evidence keys:
+// 0.94.0 replaced the single threads:openThread channel with threads:launch,
+// so the "open a thread" operation keeps its stable evidence key while its
+// wire channel became release-dependent (see releaseCompatibilityShape).
+export const MUTATION_WIRE_CHANNELS = Object.freeze([
+  ...MUTATION_OPERATIONS,
+  'threads:launch'
+]);
+
 function defaultMutationEvidence() {
   return Object.fromEntries(MUTATION_OPERATIONS.map((op) => [op, PHASE1_MARKER]));
 }
 
-function releaseCompatibilityShape() {
+// Legacy (<=0.93.1) thread-open contract: a dedicated threads:openThread wire
+// channel, a caller-minted chat-N-N id, and an undefined result acknowledged
+// only by the persisted row. 0.94.0 overrides this in COMPATIBILITY_MANIFEST_SEED.
+const LEGACY_THREAD_OPEN = Object.freeze({
+  wireChannel: 'threads:openThread',
+  idSource: 'client',
+  resultUndefined: true
+});
+
+// Legacy (<=0.93.1) workspace-create is a standalone workspace:create channel.
+// 0.94.0 removed that channel and fused workspace creation into
+// threads:launch with a new-workspace destination (one call creates the
+// workspace and opens its first thread), overridden in COMPATIBILITY_MANIFEST_SEED.
+const LEGACY_WORKSPACE_CREATE = Object.freeze({
+  wireChannel: 'workspace:create',
+  fused: false
+});
+
+const LEGACY_IPC_CHANNEL_STRINGS = Object.freeze([
+  'workspace:create',
+  'threads:openThread',
+  'db:workspaceThreads:open',
+  'threads:send',
+  'threads:stop',
+  'threads:archiveThread',
+  'workspace:archive',
+  'workspace:delete'
+]);
+
+function releaseCompatibilityShape(overrides = {}) {
   return {
     applicationDb: {
       userVersion: 0,
@@ -129,16 +168,9 @@ function releaseCompatibilityShape() {
       pendingInputAgentStatus: 'pending_input',
       pendingInputRolloutPayloadType: PHASE1_MARKER
     },
-    ipcChannelStrings: [
-      'workspace:create',
-      'threads:openThread',
-      'db:workspaceThreads:open',
-      'threads:send',
-      'threads:stop',
-      'threads:archiveThread',
-      'workspace:archive',
-      'workspace:delete'
-    ],
+    ipcChannelStrings: [...(overrides.ipcChannelStrings ?? LEGACY_IPC_CHANNEL_STRINGS)],
+    threadOpen: { ...LEGACY_THREAD_OPEN, ...(overrides.threadOpen ?? {}) },
+    workspaceCreate: { ...LEGACY_WORKSPACE_CREATE, ...(overrides.workspaceCreate ?? {}) },
     genericPreloadBridgeStrings: ['electronAPI', 'ipcRenderer.invoke'],
     mutationEvidence: defaultMutationEvidence(),
     confinement: PHASE1_MARKER
@@ -161,7 +193,40 @@ export const COMPATIBILITY_MANIFEST_SEED = {
   releases: {
     '0.90.0': releaseCompatibilityShape(),
     '0.92.0': releaseCompatibilityShape(),
-    '0.93.1': releaseCompatibilityShape()
+    '0.93.1': releaseCompatibilityShape(),
+    // 0.94.0 restructured thread lifecycle around threads:launch:
+    //  - threads:openThread and db:workspaceThreads:open are gone; opening a
+    //    thread in an existing workspace is threads:launch (existing-workspace),
+    //    which the app mints the id for and returns { workspace, thread, ... }.
+    //    Activation is threads:setActiveThread.
+    //  - workspace:create is gone; creating a workspace is fused into
+    //    threads:launch (new-workspace), which creates the workspace AND opens
+    //    its first thread in one call.
+    // The abstract evidence keys stay workspace:create and threads:openThread;
+    // only the wire contract and static IPC surface differ. Every channel below
+    // is an exact-token channel the live 0.94.0 app.asar invokes (verified
+    // read-only); workspace:create is deliberately absent because it does not
+    // exist in 0.94.0 (the old static scan false-positived it on workspace:created).
+    '0.94.0': releaseCompatibilityShape({
+      ipcChannelStrings: [
+        'threads:launch',
+        'threads:setActiveThread',
+        'threads:send',
+        'threads:stop',
+        'threads:archiveThread',
+        'workspace:archive',
+        'workspace:delete'
+      ],
+      threadOpen: {
+        wireChannel: 'threads:launch',
+        idSource: 'app',
+        resultUndefined: false
+      },
+      workspaceCreate: {
+        wireChannel: 'threads:launch',
+        fused: true
+      }
+    })
   }
 };
 
@@ -493,6 +558,19 @@ export function loadCompatibilityManifest(options = {}) {
 
 // Frozen seed-only view for callers that intentionally ignore the overlay.
 export const COMPATIBILITY_MANIFEST = deepFreeze(cloneJson(COMPATIBILITY_MANIFEST_SEED));
+
+// The thread-open wire contract is structural (part of the seed), not evidence,
+// so it is resolved from the frozen seed view regardless of the overlay. An
+// unknown release falls back to the legacy contract.
+export function threadOpenContract(appVersion) {
+  const release = COMPATIBILITY_MANIFEST.releases?.[appVersion];
+  return release?.threadOpen ?? { ...LEGACY_THREAD_OPEN };
+}
+
+export function workspaceCreateContract(appVersion) {
+  const release = COMPATIBILITY_MANIFEST.releases?.[appVersion];
+  return release?.workspaceCreate ?? { ...LEGACY_WORKSPACE_CREATE };
+}
 
 export function mutationEvidenceState(manifest, appVersion, operation) {
   const release = manifest.releases?.[appVersion];
@@ -960,7 +1038,23 @@ export function mappedRollout(applicationDbPath, codexDbPath, threadId, options 
 // Static bundle inspection and app-run/CDP discovery (lifted from the lab).
 // ---------------------------------------------------------------------------
 
+// IPC channel tokens use [A-Za-z0-9:_-]; a byte outside that class (a quote,
+// dot, brace, newline, or EOF) bounds a token. -1 marks a file boundary.
+function isChannelTokenByte(byte) {
+  return (byte >= 48 && byte <= 57)   // 0-9
+    || (byte >= 65 && byte <= 90)     // A-Z
+    || (byte >= 97 && byte <= 122)    // a-z
+    || byte === 58                    // :
+    || byte === 95                    // _
+    || byte === 45;                   // -
+}
+
+// options.exactToken requires each needle to appear bounded by non-channel-token
+// bytes, so an event string like "workspace:created" can never satisfy a
+// command-channel needle like "workspace:create" by substring. Default (false)
+// keeps plain substring matching for non-channel markers (the preload bridge).
 export function scanFileForNeedles(filePath, needles, options = {}) {
+  const exactToken = options.exactToken === true;
   const canonicalPath = assertRegularFile(filePath);
   const chunkSize = options.chunkSize ?? 1024 * 1024;
   const longest = Math.max(...needles.map((needle) => Buffer.byteLength(needle)), 1);
@@ -968,15 +1062,42 @@ export function scanFileForNeedles(filePath, needles, options = {}) {
   const fd = openSync(canonicalPath, 'r');
   const buffer = Buffer.alloc(chunkSize);
   let carry = Buffer.alloc(0);
+  // Byte immediately preceding carry[0]; -1 at file start. Lets a needle that
+  // lands at carry[0] next chunk still see its true left neighbor.
+  let leftContext = -1;
+  let fileEnded = false;
   try {
-    while (found.size < needles.length) {
+    while (found.size < needles.length && !fileEnded) {
       const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      const combined = Buffer.concat([carry, buffer.subarray(0, bytesRead)]);
+      if (bytesRead === 0) fileEnded = true;
+      const combined = fileEnded ? carry : Buffer.concat([carry, buffer.subarray(0, bytesRead)]);
       for (const needle of needles) {
-        if (!found.has(needle) && combined.includes(Buffer.from(needle))) found.add(needle);
+        if (found.has(needle)) continue;
+        const nb = Buffer.from(needle);
+        if (!exactToken) {
+          if (combined.includes(nb)) found.add(needle);
+          continue;
+        }
+        let from = 0;
+        for (;;) {
+          const idx = combined.indexOf(nb, from);
+          if (idx === -1) break;
+          const end = idx + nb.length;
+          const leftByte = idx > 0 ? combined[idx - 1] : leftContext;
+          let rightByte;
+          if (end < combined.length) rightByte = combined[end];
+          else if (fileEnded) rightByte = -1; // EOF bounds the token
+          else { from = idx + 1; continue; } // defer: right neighbor is in the next chunk
+          if (!isChannelTokenByte(leftByte) && !isChannelTokenByte(rightByte)) { found.add(needle); break; }
+          from = idx + 1;
+        }
       }
-      carry = combined.subarray(Math.max(0, combined.length - longest + 1));
+      if (!fileEnded) {
+        const keep = Math.min(combined.length, longest);
+        const dropIndex = combined.length - keep - 1;
+        if (dropIndex >= 0) leftContext = combined[dropIndex];
+        carry = Buffer.from(combined.subarray(combined.length - keep));
+      }
     }
   } finally {
     closeSync(fd);
@@ -1261,8 +1382,8 @@ export function parseIpcErrorMessage(envelope) {
 }
 
 export async function invokePlaybotIpc(channel, payload, options = {}) {
-  if (!MUTATION_OPERATIONS.includes(channel)) {
-    throw new Error(`IPC channel is outside the mutation allowlist: ${channel}`);
+  if (!MUTATION_WIRE_CHANNELS.includes(channel)) {
+    throw new Error(`IPC wire channel is outside the mutation allowlist: ${channel}`);
   }
   const paths = options.paths ?? playbotPaths(options.env);
   const port = options.port ?? readDevToolsPort(paths.devToolsPortFile);
@@ -1377,7 +1498,9 @@ async function gatedInvoke(channel, payload, options = {}) {
   if (options.workspaceMutationTarget) {
     assertWorkspaceMutationTarget(paths.applicationDb, options.workspaceMutationTarget, channel);
   }
-  return invokePlaybotIpc(channel, payload, {
+  // The evidence gate keys off the abstract operation (channel); the wire
+  // channel may differ per release (e.g. 0.94.0 opens threads via threads:launch).
+  return invokePlaybotIpc(options.wireChannel ?? channel, payload, {
     ...options,
     paths,
     preferredProjectName: options.preferredProjectName
@@ -1426,7 +1549,58 @@ function assertThreadIdentityStable(before, after, expectedThreadId, operation) 
   return after;
 }
 
+// 0.94.0's fused launch commits the workspace record but provisions its
+// worktree root (workspace_roots: project_root_id, path, branch) asynchronously
+// after returning. Poll until that root row lands so downstream identity and
+// branch assertions see a fully provisioned workspace, not a half-written one.
+async function waitForWorkspaceProvisioned(applicationDbPath, workspaceId, request, timeoutMs = 60_000, pollMs = 250) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  for (;;) {
+    try {
+      last = resolveWorkspaceIncludingArchived(applicationDbPath, workspaceId);
+      if (last.project_root_id === request.projectRootId
+        && last.archive_state === 'active'
+        && (request.branch == null || last.branch === request.branch)) {
+        return last;
+      }
+    } catch (error) {
+      last = { error: error.message };
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`workspace:create (threads:launch) timed out waiting for workspace ${workspaceId} provisioning; last=${JSON.stringify(last)}`);
+    }
+    await sleepMs(pollMs);
+  }
+}
+
+function assertCreatedWorkspaceRow(paths, workspaceId, request, resultKind, resultArchiveState, operation) {
+  const persisted = assertWorkspaceMutationTarget(paths.applicationDb, workspaceId, operation);
+  if (persisted.project_id !== request.projectId
+    || persisted.project_root_id !== request.projectRootId
+    || persisted.archive_state !== 'active'
+    || (resultArchiveState != null && persisted.archive_state !== resultArchiveState)
+    || (resultKind != null && persisted.kind !== resultKind)) {
+    throw new Error(`${operation} persisted workspace identity does not match the request and result`);
+  }
+  return persisted;
+}
+
+// Release-aware "create a workspace". The abstract operation and evidence key
+// stay workspace:create; on 0.94.0 the workspace is created by the fused
+// threads:launch(new-workspace) call, which also opens its first thread.
 export async function mutationWorkspaceCreate(request, options = {}) {
+  const paths = options.paths ?? playbotPaths(options.env);
+  const appVersion = resolveAppVersion(paths, options);
+  const contract = workspaceCreateContract(appVersion);
+  const baseOptions = { ...options, paths, appVersion };
+  if (contract.fused) {
+    return mutationWorkspaceCreateFusedLaunch(request, baseOptions);
+  }
+  return mutationWorkspaceCreateLegacy(request, baseOptions);
+}
+
+async function mutationWorkspaceCreateLegacy(request, options = {}) {
   const payload = {
     strategy: 'quick',
     projectId: request.projectId,
@@ -1446,18 +1620,115 @@ export async function mutationWorkspaceCreate(request, options = {}) {
   const invoked = await gatedInvoke('workspace:create', payload, { ...options, paths });
   if (!invoked.ok) throw new Error(`workspace:create failed: ${invoked.error}`);
   const result = validateWorkspaceCreateResult(invoked.envelope.result, payload.projectId);
-  const persisted = assertWorkspaceMutationTarget(paths.applicationDb, result.id, 'workspace:create');
-  if (persisted.project_id !== payload.projectId
-    || persisted.project_root_id !== payload.projectRootId
-    || persisted.archive_state !== 'active'
-    || persisted.archive_state !== result.archiveState
-    || persisted.kind !== result.kind) {
-    throw new Error('workspace:create persisted workspace identity does not match the request and result');
-  }
-  return { ...invoked, result };
+  assertCreatedWorkspaceRow(paths, result.id, payload, result.kind, result.archiveState, 'workspace:create');
+  return { ...invoked, result, wireChannel: 'workspace:create', fused: false };
 }
 
+// 0.94.0: creating a workspace is a threads:launch with a new-workspace
+// destination that also opens the first thread. We return the workspace as
+// `result` (from the authoritative DB row, so downstream shape checks are
+// unchanged) plus the fused thread id so the smoke can adopt it instead of
+// opening a second thread.
+async function mutationWorkspaceCreateFusedLaunch(request, options = {}) {
+  for (const key of ['projectId', 'projectRootId', 'baseRef', 'branch', 'expectedCommit']) {
+    if (typeof request[key] !== 'string' || !request[key]) {
+      throw new Error(`workspace:create requires ${key}`);
+    }
+  }
+  const payload = {
+    destination: {
+      kind: 'new-workspace',
+      workspace: {
+        strategy: 'quick',
+        projectId: request.projectId,
+        projectRootId: request.projectRootId,
+        mode: request.mode ?? 'open',
+        baseRef: request.baseRef,
+        branch: request.branch,
+        expectedCommit: request.expectedCommit
+      }
+    },
+    thread: {
+      title: request.threadTitle ?? request.title ?? 'firstmate-smoke',
+      approvalMode: request.approvalMode ?? 'default',
+      planMode: request.planMode === true,
+      ephemeral: request.ephemeral === true
+    },
+    activate: request.activate !== false
+  };
+  const paths = options.paths ?? playbotPaths(options.env);
+  assertProjectMutationTarget(paths.applicationDb, request.projectId, request.projectRootId);
+  const invoked = await gatedInvoke('workspace:create', payload, { ...options, paths, wireChannel: 'threads:launch' });
+  if (!invoked.ok) throw new Error(`workspace:create (threads:launch new-workspace) failed: ${invoked.error}`);
+  const raw = invoked.envelope.result;
+  if (!isPlainObject(raw) || !isPlainObject(raw.workspace) || typeof raw.workspace.id !== 'string' || !raw.workspace.id) {
+    throw new Error('workspace:create (threads:launch) result missing workspace.id');
+  }
+  const threadId = validateThreadLaunchResult(raw, raw.workspace.id, { expectCreatedWorkspace: true });
+  // The worktree root is provisioned asynchronously after launch returns.
+  await waitForWorkspaceProvisioned(paths.applicationDb, raw.workspace.id, request, options.provisionTimeoutMs ?? 60_000);
+  const persisted = assertCreatedWorkspaceRow(paths, raw.workspace.id, request, null, null, 'workspace:create');
+  // Reconstruct the legacy workspace result shape from the authoritative row so
+  // downstream callers and evidence keep the same contract across releases.
+  const result = {
+    id: persisted.id,
+    projectId: persisted.project_id,
+    kind: persisted.kind,
+    archiveState: persisted.archive_state
+  };
+  validateWorkspaceCreateResult(result, request.projectId);
+  const threadRow = findThreadRow(paths.applicationDb, threadId);
+  if (!threadRow || threadRow.workspace_id !== persisted.id || Number(threadRow.archived) !== 0) {
+    throw new Error('workspace:create (threads:launch) fused thread was not persisted against the new workspace');
+  }
+  return { ...invoked, result, threadId, wireChannel: 'threads:launch', fused: true };
+}
+
+// Validate a 0.94.0 threads:launch result and return the app-minted thread id.
+// options.expectCreatedWorkspace distinguishes the two launch destinations:
+//  - false (default): existing-workspace open; the app must NOT have created a
+//    workspace, and the thread must be bound to expectedWorkspaceId.
+//  - true: new-workspace fused create; the app MUST report createdWorkspace and
+//    the workspace id is discovered from the result rather than pre-known.
+export function validateThreadLaunchResult(result, expectedWorkspaceId, options = {}) {
+  const expectCreatedWorkspace = options.expectCreatedWorkspace === true;
+  if (!isPlainObject(result)) throw new Error('threads:launch result must be an object');
+  if (expectCreatedWorkspace) {
+    if (result.createdWorkspace !== true) {
+      throw new Error('threads:launch (new-workspace) must report createdWorkspace');
+    }
+  } else if (result.createdWorkspace === true) {
+    throw new Error('threads:launch unexpectedly created a workspace; the disposable workspace must already exist');
+  }
+  if (!isPlainObject(result.thread) || typeof result.thread.id !== 'string' || !result.thread.id) {
+    throw new Error('threads:launch result missing thread.id');
+  }
+  if (!/^chat-/.test(result.thread.id)) {
+    throw new Error(`threads:launch minted an unexpected thread id: ${result.thread.id}`);
+  }
+  if (!expectCreatedWorkspace && isPlainObject(result.workspace) && typeof result.workspace.id === 'string'
+    && expectedWorkspaceId != null && result.workspace.id !== expectedWorkspaceId) {
+    throw new Error(`threads:launch bound the thread to workspace ${result.workspace.id}; expected ${expectedWorkspaceId}`);
+  }
+  return result.thread.id;
+}
+
+// Release-aware "open a thread". The abstract operation and evidence key stay
+// threads:openThread; the wire channel and result contract are chosen from the
+// release's threadOpen descriptor (legacy threads:openThread vs 0.94.0
+// threads:launch).
 export async function mutationOpenThread(request, options = {}) {
+  const paths = options.paths ?? playbotPaths(options.env);
+  const appVersion = resolveAppVersion(paths, options);
+  const contract = threadOpenContract(appVersion);
+  const baseOptions = { ...options, paths, appVersion };
+  if (contract.wireChannel === 'threads:launch') {
+    return mutationOpenThreadLaunch(request, baseOptions);
+  }
+  return mutationOpenThreadLegacy(request, baseOptions);
+}
+
+async function mutationOpenThreadLegacy(request, options = {}) {
   const payload = {
     id: request.id ?? mintNativeThreadId(),
     workspaceId: request.workspaceId,
@@ -1486,7 +1757,38 @@ export async function mutationOpenThread(request, options = {}) {
     || Number(persisted.archived) !== 0) {
     throw new Error('threads:openThread persisted thread identity does not match the request');
   }
-  return { ...invoked, threadId: payload.id, result: null };
+  return { ...invoked, threadId: payload.id, result: null, wireChannel: 'threads:openThread' };
+}
+
+// 0.94.0 contract: the app owns id minting and returns the persisted thread, so
+// we launch into the existing disposable workspace and consume the returned
+// thread.id rather than asserting a caller-minted id or an undefined result.
+async function mutationOpenThreadLaunch(request, options = {}) {
+  if (typeof request.workspaceId !== 'string' || !request.workspaceId) {
+    throw new Error('threads:openThread (threads:launch) requires workspaceId');
+  }
+  const payload = {
+    destination: { kind: 'existing-workspace', workspaceId: request.workspaceId },
+    thread: {
+      title: request.title ?? 'firstmate-smoke',
+      approvalMode: request.approvalMode ?? 'default',
+      planMode: request.planMode === true,
+      ephemeral: request.ephemeral === true
+    },
+    activate: request.activate !== false
+  };
+  const paths = options.paths ?? playbotPaths(options.env);
+  const workspace = assertWorkspaceMutationTarget(paths.applicationDb, request.workspaceId, 'threads:openThread');
+  if (workspace.archive_state !== 'active') throw new Error(`threads:openThread workspace ${workspace.id} is not active`);
+  const invoked = await gatedInvoke('threads:openThread', payload, { ...options, paths, wireChannel: 'threads:launch' });
+  if (!invoked.ok) throw new Error(`threads:openThread (threads:launch) failed: ${invoked.error}`);
+  const threadId = validateThreadLaunchResult(invoked.envelope.result, request.workspaceId);
+  const persisted = findThreadRow(paths.applicationDb, threadId);
+  if (!persisted || persisted.id !== threadId || persisted.workspace_id !== request.workspaceId
+    || Number(persisted.archived) !== 0) {
+    throw new Error('threads:openThread (threads:launch) persisted thread identity does not match the launched thread');
+  }
+  return { ...invoked, threadId, result: invoked.envelope.result, wireChannel: 'threads:launch' };
 }
 
 export async function mutationSend(request, options = {}) {
@@ -2145,14 +2447,18 @@ export async function runPhase1Smoke(options = {}) {
   };
 
   try {
-    // 1. workspace:create
+    // 1. workspace:create (0.94.0: fused threads:launch(new-workspace) that
+    //    also opens the first thread, adopted as the open-thread step below)
+    const smokeThreadTitle = `fm-playbot-lane-smoke ${smokeRunId}`;
     const create = await mutationWorkspaceCreate({
       projectId: project.projectId,
       projectRootId: project.projectRootId,
       mode: 'open',
       baseRef: options.baseRef ?? 'main',
       branch,
-      expectedCommit
+      expectedCommit,
+      threadTitle: smokeThreadTitle,
+      approvalMode: 'default'
     }, smokeOpts);
     created.workspaceId = create.result.id;
     if (created.workspaceId === project.mainWorkspaceId) {
@@ -2163,33 +2469,55 @@ export async function runPhase1Smoke(options = {}) {
     if (workspaceRow.branch !== branch) throw new Error(`created branch mismatch: ${workspaceRow.branch}`);
     created.worktreePath = workspaceRow.path;
     recordOp('workspace:create', {
+      wireChannel: create.wireChannel ?? 'workspace:create',
+      fused: create.fused === true,
       request: create.request,
       result: create.result,
       requestSha256: sha256Text(JSON.stringify(create.request)),
       resultSha256: sha256Text(JSON.stringify(create.result)),
       workspaceId: created.workspaceId,
       worktreePath: created.worktreePath,
-      branch
+      branch,
+      ...(create.fused ? { fusedThreadId: create.threadId } : {})
     });
 
-    // 2. threads:openThread
-    const threadId = mintNativeThreadId();
-    const opened = await mutationOpenThread({
-      id: threadId,
-      workspaceId: created.workspaceId,
-      title: `fm-playbot-lane-smoke ${smokeRunId}`,
-      approvalMode: 'default'
-    }, smokeOpts);
+    // 2. threads:openThread. On 0.94.0 the fused create above already opened the
+    //    thread, so adopt it rather than opening a second one; otherwise open
+    //    the thread discretely. Both paths record the open-thread guarantee.
+    let opened;
+    if (create.fused) {
+      opened = {
+        threadId: create.threadId,
+        request: create.request,
+        envelope: create.envelope,
+        result: create.envelope.result,
+        wireChannel: 'threads:launch',
+        fusedWith: 'workspace:create'
+      };
+    } else {
+      opened = await mutationOpenThread({
+        workspaceId: created.workspaceId,
+        title: smokeThreadTitle,
+        approvalMode: 'default'
+      }, smokeOpts);
+    }
     created.threadId = opened.threadId;
     const openedRow = exactThreadRow(paths.applicationDb, created.threadId, project.projectId);
     if (openedRow.workspace_id !== created.workspaceId) throw new Error('opened thread bound to wrong workspace');
     if (Number(openedRow.archived) === 1) throw new Error('opened thread is already archived');
+    const openedViaLaunch = opened.wireChannel === 'threads:launch';
     recordOp('threads:openThread', {
+      wireChannel: opened.wireChannel,
+      idSource: openedViaLaunch ? 'app' : 'client',
+      fusedWith: opened.fusedWith ?? null,
       request: opened.request,
-      resultWasUndefined: true,
+      resultWasUndefined: opened.envelope.resultWasUndefined,
       threadId: created.threadId,
       workspaceId: created.workspaceId,
       requestSha256: sha256Text(JSON.stringify(opened.request)),
+      ...(openedViaLaunch
+        ? { resultThreadId: opened.result?.thread?.id ?? null, resultSha256: sha256Text(JSON.stringify(opened.result)) }
+        : {}),
       persisted: { session_id: openedRow.session_id, agent_status: openedRow.agent_status, archived: openedRow.archived }
     });
 
@@ -2914,7 +3242,7 @@ export async function doctor(options) {
     const codex = verifyDatabaseSchema(paths.codexDb, release.codexDb, 'codex');
     dimensions.push(dimension('codex_database_schema', codex.ok ? 'pass' : 'fail', codex));
     try {
-      const ipc = scanFileForNeedles(paths.appBundle, release.ipcChannelStrings);
+      const ipc = scanFileForNeedles(paths.appBundle, release.ipcChannelStrings, { exactToken: true });
       dimensions.push(dimension('ipc_channel_strings_static', ipc.ok ? 'pass' : 'fail', ipc));
       const bridge = scanFileForNeedles(paths.appBundle, release.genericPreloadBridgeStrings);
       dimensions.push(dimension('generic_preload_invoke_static', bridge.ok ? 'pass' : 'fail', bridge));
@@ -3675,12 +4003,14 @@ async function main() {
           branch: args.branch,
           baseRef: args['base-ref'],
           expectedCommit: args['expected-commit'],
-          mode: args.mode
+          mode: args.mode,
+          threadTitle: args.title
         }, { paths, appVersion });
-        if (args.json) output({ workspaceId: result.result.id, result: result.result });
+        // On 0.94.0 create is fused with the first thread's launch; surface its id.
+        if (args.json) output({ workspaceId: result.result.id, result: result.result, ...(result.fused ? { fusedThreadId: result.threadId } : {}) });
         else {
           const row = resolveWorkspace(paths.applicationDb, { id: result.result.id });
-          process.stdout.write(`${result.result.id}\t${row.path}\n`);
+          process.stdout.write(`${result.result.id}\t${row.path}${result.fused ? `\t${result.threadId}` : ''}\n`);
         }
         return;
       }
