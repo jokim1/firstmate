@@ -99,11 +99,41 @@ export const NATIVE_REQUIRED_OPERATIONS = Object.freeze([
   'workspace:delete'
 ]);
 
+// Wire channels the mutation invoker may drive. This is the IPC-channel
+// allowlist, distinct from the abstract MUTATION_OPERATIONS evidence keys:
+// 0.94.0 replaced the single threads:openThread channel with threads:launch,
+// so the "open a thread" operation keeps its stable evidence key while its
+// wire channel became release-dependent (see releaseCompatibilityShape).
+export const MUTATION_WIRE_CHANNELS = Object.freeze([
+  ...MUTATION_OPERATIONS,
+  'threads:launch'
+]);
+
 function defaultMutationEvidence() {
   return Object.fromEntries(MUTATION_OPERATIONS.map((op) => [op, PHASE1_MARKER]));
 }
 
-function releaseCompatibilityShape() {
+// Legacy (<=0.93.1) thread-open contract: a dedicated threads:openThread wire
+// channel, a caller-minted chat-N-N id, and an undefined result acknowledged
+// only by the persisted row. 0.94.0 overrides this in COMPATIBILITY_MANIFEST_SEED.
+const LEGACY_THREAD_OPEN = Object.freeze({
+  wireChannel: 'threads:openThread',
+  idSource: 'client',
+  resultUndefined: true
+});
+
+const LEGACY_IPC_CHANNEL_STRINGS = Object.freeze([
+  'workspace:create',
+  'threads:openThread',
+  'db:workspaceThreads:open',
+  'threads:send',
+  'threads:stop',
+  'threads:archiveThread',
+  'workspace:archive',
+  'workspace:delete'
+]);
+
+function releaseCompatibilityShape(overrides = {}) {
   return {
     applicationDb: {
       userVersion: 0,
@@ -129,16 +159,8 @@ function releaseCompatibilityShape() {
       pendingInputAgentStatus: 'pending_input',
       pendingInputRolloutPayloadType: PHASE1_MARKER
     },
-    ipcChannelStrings: [
-      'workspace:create',
-      'threads:openThread',
-      'db:workspaceThreads:open',
-      'threads:send',
-      'threads:stop',
-      'threads:archiveThread',
-      'workspace:archive',
-      'workspace:delete'
-    ],
+    ipcChannelStrings: [...(overrides.ipcChannelStrings ?? LEGACY_IPC_CHANNEL_STRINGS)],
+    threadOpen: { ...LEGACY_THREAD_OPEN, ...(overrides.threadOpen ?? {}) },
     genericPreloadBridgeStrings: ['electronAPI', 'ipcRenderer.invoke'],
     mutationEvidence: defaultMutationEvidence(),
     confinement: PHASE1_MARKER
@@ -161,7 +183,30 @@ export const COMPATIBILITY_MANIFEST_SEED = {
   releases: {
     '0.90.0': releaseCompatibilityShape(),
     '0.92.0': releaseCompatibilityShape(),
-    '0.93.1': releaseCompatibilityShape()
+    '0.93.1': releaseCompatibilityShape(),
+    // 0.94.0 restructured thread-open: threads:openThread and
+    // db:workspaceThreads:open are gone. "Open a thread" now flows through
+    // threads:launch (the app mints the id and returns { workspace, thread, ... }),
+    // and activation is threads:setActiveThread. The abstract evidence key stays
+    // threads:openThread; only the wire contract and static IPC surface differ.
+    // IPC surface verified read-only against the live 0.94.0 app.asar.
+    '0.94.0': releaseCompatibilityShape({
+      ipcChannelStrings: [
+        'workspace:create',
+        'threads:launch',
+        'threads:setActiveThread',
+        'threads:send',
+        'threads:stop',
+        'threads:archiveThread',
+        'workspace:archive',
+        'workspace:delete'
+      ],
+      threadOpen: {
+        wireChannel: 'threads:launch',
+        idSource: 'app',
+        resultUndefined: false
+      }
+    })
   }
 };
 
@@ -493,6 +538,14 @@ export function loadCompatibilityManifest(options = {}) {
 
 // Frozen seed-only view for callers that intentionally ignore the overlay.
 export const COMPATIBILITY_MANIFEST = deepFreeze(cloneJson(COMPATIBILITY_MANIFEST_SEED));
+
+// The thread-open wire contract is structural (part of the seed), not evidence,
+// so it is resolved from the frozen seed view regardless of the overlay. An
+// unknown release falls back to the legacy contract.
+export function threadOpenContract(appVersion) {
+  const release = COMPATIBILITY_MANIFEST.releases?.[appVersion];
+  return release?.threadOpen ?? { ...LEGACY_THREAD_OPEN };
+}
 
 export function mutationEvidenceState(manifest, appVersion, operation) {
   const release = manifest.releases?.[appVersion];
@@ -1261,8 +1314,8 @@ export function parseIpcErrorMessage(envelope) {
 }
 
 export async function invokePlaybotIpc(channel, payload, options = {}) {
-  if (!MUTATION_OPERATIONS.includes(channel)) {
-    throw new Error(`IPC channel is outside the mutation allowlist: ${channel}`);
+  if (!MUTATION_WIRE_CHANNELS.includes(channel)) {
+    throw new Error(`IPC wire channel is outside the mutation allowlist: ${channel}`);
   }
   const paths = options.paths ?? playbotPaths(options.env);
   const port = options.port ?? readDevToolsPort(paths.devToolsPortFile);
@@ -1377,7 +1430,9 @@ async function gatedInvoke(channel, payload, options = {}) {
   if (options.workspaceMutationTarget) {
     assertWorkspaceMutationTarget(paths.applicationDb, options.workspaceMutationTarget, channel);
   }
-  return invokePlaybotIpc(channel, payload, {
+  // The evidence gate keys off the abstract operation (channel); the wire
+  // channel may differ per release (e.g. 0.94.0 opens threads via threads:launch).
+  return invokePlaybotIpc(options.wireChannel ?? channel, payload, {
     ...options,
     paths,
     preferredProjectName: options.preferredProjectName
@@ -1457,7 +1512,43 @@ export async function mutationWorkspaceCreate(request, options = {}) {
   return { ...invoked, result };
 }
 
+// Validate a 0.94.0 threads:launch result and return the app-minted thread id.
+// The launch reuses the existing disposable workspace (createdWorkspace false)
+// and returns the persisted thread whose id the app owns.
+export function validateThreadLaunchResult(result, expectedWorkspaceId) {
+  if (!isPlainObject(result)) throw new Error('threads:launch result must be an object');
+  if (result.createdWorkspace === true) {
+    throw new Error('threads:launch unexpectedly created a workspace; the disposable workspace must already exist');
+  }
+  if (!isPlainObject(result.thread) || typeof result.thread.id !== 'string' || !result.thread.id) {
+    throw new Error('threads:launch result missing thread.id');
+  }
+  if (!/^chat-/.test(result.thread.id)) {
+    throw new Error(`threads:launch minted an unexpected thread id: ${result.thread.id}`);
+  }
+  if (isPlainObject(result.workspace) && typeof result.workspace.id === 'string'
+    && expectedWorkspaceId != null && result.workspace.id !== expectedWorkspaceId) {
+    throw new Error(`threads:launch bound the thread to workspace ${result.workspace.id}; expected ${expectedWorkspaceId}`);
+  }
+  return result.thread.id;
+}
+
+// Release-aware "open a thread". The abstract operation and evidence key stay
+// threads:openThread; the wire channel and result contract are chosen from the
+// release's threadOpen descriptor (legacy threads:openThread vs 0.94.0
+// threads:launch).
 export async function mutationOpenThread(request, options = {}) {
+  const paths = options.paths ?? playbotPaths(options.env);
+  const appVersion = resolveAppVersion(paths, options);
+  const contract = threadOpenContract(appVersion);
+  const baseOptions = { ...options, paths, appVersion };
+  if (contract.wireChannel === 'threads:launch') {
+    return mutationOpenThreadLaunch(request, baseOptions);
+  }
+  return mutationOpenThreadLegacy(request, baseOptions);
+}
+
+async function mutationOpenThreadLegacy(request, options = {}) {
   const payload = {
     id: request.id ?? mintNativeThreadId(),
     workspaceId: request.workspaceId,
@@ -1486,7 +1577,38 @@ export async function mutationOpenThread(request, options = {}) {
     || Number(persisted.archived) !== 0) {
     throw new Error('threads:openThread persisted thread identity does not match the request');
   }
-  return { ...invoked, threadId: payload.id, result: null };
+  return { ...invoked, threadId: payload.id, result: null, wireChannel: 'threads:openThread' };
+}
+
+// 0.94.0 contract: the app owns id minting and returns the persisted thread, so
+// we launch into the existing disposable workspace and consume the returned
+// thread.id rather than asserting a caller-minted id or an undefined result.
+async function mutationOpenThreadLaunch(request, options = {}) {
+  if (typeof request.workspaceId !== 'string' || !request.workspaceId) {
+    throw new Error('threads:openThread (threads:launch) requires workspaceId');
+  }
+  const payload = {
+    destination: { kind: 'existing-workspace', workspaceId: request.workspaceId },
+    thread: {
+      title: request.title ?? 'firstmate-smoke',
+      approvalMode: request.approvalMode ?? 'default',
+      planMode: request.planMode === true,
+      ephemeral: request.ephemeral === true
+    },
+    activate: request.activate !== false
+  };
+  const paths = options.paths ?? playbotPaths(options.env);
+  const workspace = assertWorkspaceMutationTarget(paths.applicationDb, request.workspaceId, 'threads:openThread');
+  if (workspace.archive_state !== 'active') throw new Error(`threads:openThread workspace ${workspace.id} is not active`);
+  const invoked = await gatedInvoke('threads:openThread', payload, { ...options, paths, wireChannel: 'threads:launch' });
+  if (!invoked.ok) throw new Error(`threads:openThread (threads:launch) failed: ${invoked.error}`);
+  const threadId = validateThreadLaunchResult(invoked.envelope.result, request.workspaceId);
+  const persisted = findThreadRow(paths.applicationDb, threadId);
+  if (!persisted || persisted.id !== threadId || persisted.workspace_id !== request.workspaceId
+    || Number(persisted.archived) !== 0) {
+    throw new Error('threads:openThread (threads:launch) persisted thread identity does not match the launched thread');
+  }
+  return { ...invoked, threadId, result: invoked.envelope.result, wireChannel: 'threads:launch' };
 }
 
 export async function mutationSend(request, options = {}) {
@@ -2172,10 +2294,8 @@ export async function runPhase1Smoke(options = {}) {
       branch
     });
 
-    // 2. threads:openThread
-    const threadId = mintNativeThreadId();
+    // 2. threads:openThread (release-aware: 0.94.0 launches and the app mints the id)
     const opened = await mutationOpenThread({
-      id: threadId,
       workspaceId: created.workspaceId,
       title: `fm-playbot-lane-smoke ${smokeRunId}`,
       approvalMode: 'default'
@@ -2184,12 +2304,18 @@ export async function runPhase1Smoke(options = {}) {
     const openedRow = exactThreadRow(paths.applicationDb, created.threadId, project.projectId);
     if (openedRow.workspace_id !== created.workspaceId) throw new Error('opened thread bound to wrong workspace');
     if (Number(openedRow.archived) === 1) throw new Error('opened thread is already archived');
+    const openedViaLaunch = opened.wireChannel === 'threads:launch';
     recordOp('threads:openThread', {
+      wireChannel: opened.wireChannel,
+      idSource: openedViaLaunch ? 'app' : 'client',
       request: opened.request,
-      resultWasUndefined: true,
+      resultWasUndefined: opened.envelope.resultWasUndefined,
       threadId: created.threadId,
       workspaceId: created.workspaceId,
       requestSha256: sha256Text(JSON.stringify(opened.request)),
+      ...(openedViaLaunch
+        ? { resultThreadId: opened.result?.thread?.id ?? null, resultSha256: sha256Text(JSON.stringify(opened.result)) }
+        : {}),
       persisted: { session_id: openedRow.session_id, agent_status: openedRow.agent_status, archived: openedRow.archived }
     });
 
