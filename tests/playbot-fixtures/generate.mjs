@@ -186,10 +186,15 @@ writeFileSync(resolve(target, 'playbot-app-run-state.json'), JSON.stringify({
   startedAt: '2026-08-13T00:00:00.000Z'
 }) + '\n');
 
+// Contains both the legacy (<=0.93.1) thread-open channels and the 0.94.0
+// launch/setActive channels so a hermetic doctor run at either release passes
+// the static IPC-surface scan. Extra strings are harmless to a legacy scan.
 writeFileSync(resolve(target, 'fixture-app.asar'), [
   'workspace:create',
   'threads:openThread',
   'db:workspaceThreads:open',
+  'threads:launch',
+  'threads:setActiveThread',
   'threads:send',
   'threads:stop',
   'threads:archiveThread',
