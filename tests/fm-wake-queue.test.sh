@@ -332,12 +332,17 @@ SH
   chmod +x "$fakebin/tmux"
   out="$dir/watch.out"
 
+  # Publication now takes TWO watcher ticks: the first records the row at the
+  # head of the queue, and only a later tick whose marker has aged past the
+  # threshold publishes. The budget must fit both plus watcher startup; the
+  # original 3s was written for the single-visit predicate and goes intermittently
+  # red against this one.
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_WINDOW='firstmate:fm-mate' \
     FM_FAKE_TMUX_LOG="$dir/tmux.log" FM_FAKE_TMUX_CAPTURE="$dir/fake-tmux/pane.txt" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 3 > "$out" 2> "$dir/watch.err" || true
+    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 10 > "$out" 2> "$dir/watch.err" || true
   grep -F 'check: secondmate wake-loop stalled: mate=mate row=7' "$out" >/dev/null \
     || fail "an aged foreign row did not wake the parent checkpoint: $(cat "$out"); err=$(cat "$dir/watch.err"); meta=$(cat "$state/mate.meta"); foreign=$(cat "$sub/state/.wake-queue")"
   [ -s "$state/.wake-queue" ] || fail "the parent notification was not durable"
@@ -385,6 +390,97 @@ SH
   ! grep -F 'secondmate wake-loop stalled' "$dir/watch-healthy.out" >/dev/null \
     || fail "a healthy foreign queue produced a stall notification"
   pass "foreign secondmate queue stalls notify once, remain byte-stable, and stay quiet when empty or healthy"
+}
+
+# A busy-but-healthy mate carries a backlog: its oldest row ages past any fixed
+# age while the wake loop keeps acknowledging rows. In the specimen that motivated
+# this gate, 47 parent alarms fired over two days; 40 of them at a row age under
+# 200s (median 74s), and in all 44 consecutive same-mate pairs the alarm named a
+# NEWER row than the one before - proof the loop was advancing, not stalled.
+# Only a head row that does not move for the whole window is a stall.
+test_advancing_secondmate_queue_is_not_a_stall() {
+  local dir state sub fakebin base
+  dir=$(make_case secondmate-advancing-queue)
+  state="$dir/state"
+  sub="$dir/secondmate"
+  mkdir -p "$sub/state" "$sub/data"
+  printf 'mate\n' > "$sub/.fm-secondmate-home"
+  printf 'window=firstmate:fm-mate\nkind=secondmate\nharness=claude\nbackend=tmux\nhome=%s\n' \
+    "$sub" > "$state/mate.meta"
+  fakebin="$dir/fakebin"
+  base=$(( $(date +%s) - 600 ))
+
+  # Round 1: a deeply aged head row. Old enough for the age gate, but this is the
+  # first time the parent has seen it at the head, so nothing is published yet.
+  printf '%s\t7\tcheck\trouted\tcheck: routed row\n' "$base" > "$sub/state/.wake-queue"
+  run_stall_checkpoint "$dir" "$state" "$fakebin" one 2
+  ! grep -F 'secondmate wake-loop stalled' "$dir/watch-one.out" >/dev/null \
+    || fail "a first observation of an aged head row published a stall"
+
+  # Round 2: the mate acknowledged row 7. The next head row is just as aged, but
+  # the loop demonstrably advanced, so the window restarts instead of alarming.
+  sleep 3
+  printf '%s\t8\tcheck\trouted\tcheck: routed row\n' "$base" > "$sub/state/.wake-queue"
+  run_stall_checkpoint "$dir" "$state" "$fakebin" two 2
+  ! grep -F 'secondmate wake-loop stalled' "$dir/watch-two.out" >/dev/null \
+    || fail "an advancing wake loop published a stall on backlog age alone"
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "an advancing wake loop left a durable stall notification queued"
+
+  # Round 3: nothing moves for the whole window, so the stall still surfaces.
+  sleep 3
+  run_stall_checkpoint "$dir" "$state" "$fakebin" three 8
+  grep -F 'check: secondmate wake-loop stalled: mate=mate row=8' "$dir/watch-three.out" >/dev/null \
+    || fail "a head row unmoved for the whole window did not publish a stall: $(cat "$dir/watch-three.out")"
+  pass "a secondmate whose wake loop keeps advancing is never alarmed, while an unmoved head row still is"
+}
+
+# The window is measured from when a row reaches the HEAD, not from when it was
+# queued, so a stall that begins with an empty queue surfaces after ONE window
+# rather than two.
+#
+# This case has to exclude the rejected predicate, not merely agree with the
+# current one. The pre-rework code tested the row's own age BEFORE recording the
+# head, so a row that arrives young could not be recorded until it had already
+# aged one full window, and publication landed near 2x. The budget below is
+# therefore pinned between the two: comfortably past one window plus a poll, and
+# comfortably short of two windows. Verified by running this case against the
+# pre-rework watcher, where it fails.
+test_fresh_head_row_alarms_after_one_window() {
+  local dir state sub fakebin threshold budget started elapsed
+  dir=$(make_case secondmate-fresh-stall)
+  state="$dir/state"
+  sub="$dir/secondmate"
+  mkdir -p "$sub/state" "$sub/data"
+  printf 'mate\n' > "$sub/.fm-secondmate-home"
+  printf 'window=firstmate:fm-mate\nkind=secondmate\nharness=claude\nbackend=tmux\nhome=%s\n' \
+    "$sub" > "$state/mate.meta"
+  fakebin="$dir/fakebin"
+  threshold=10
+  budget=15
+
+  # A wake arrives at an empty queue and the mate never picks it up.
+  printf '%s\t7\tcheck\trouted\tcheck: routed row\n' "$(date +%s)" > "$sub/state/.wake-queue"
+  started=$(date +%s)
+  run_stall_checkpoint "$dir" "$state" "$fakebin" fresh "$budget" "$threshold"
+  elapsed=$(( $(date +%s) - started ))
+  grep -F 'check: secondmate wake-loop stalled: mate=mate row=7' "$dir/watch-fresh.out" >/dev/null \
+    || fail "a freshly queued row that never moved did not alarm within one window (${elapsed}s elapsed, threshold ${threshold}s): $(cat "$dir/watch-fresh.out")"
+  [ "$elapsed" -lt $(( threshold * 2 )) ] \
+    || fail "the alarm took ${elapsed}s, which is two windows or more for threshold ${threshold}s"
+  pass "a stall that begins with an empty queue surfaces after one window, not two"
+}
+
+# One parent checkpoint over the foreign queue. Args: dir state fakebin label seconds [threshold]
+run_stall_checkpoint() {
+  local dir=$1 state=$2 fakebin=$3 label=$4 seconds=$5 threshold=${6:-2}
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_WINDOW='firstmate:fm-mate' \
+    FM_FAKE_TMUX_LOG="$dir/tmux.log" FM_FAKE_TMUX_CAPTURE="$dir/fake-tmux/pane.txt" \
+    FM_SECONDMATE_WAKE_STALL_SECS="$threshold" FM_POLL=1 FM_SIGNAL_GRACE=0 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$ROOT/bin/fm-watch-checkpoint.sh" --seconds "$seconds" \
+    > "$dir/watch-$label.out" 2> "$dir/watch-$label.err" || true
 }
 
 test_secondmate_stall_marker_rejects_symlink() {
@@ -1270,6 +1366,8 @@ test_historical_annotation_skips_announced_status() {
 
 test_self_held_lock_reclaims_instead_of_deadlocking
 test_secondmate_foreign_queue_stall_is_one_shot_and_read_only
+test_advancing_secondmate_queue_is_not_a_stall
+test_fresh_head_row_alarms_after_one_window
 test_secondmate_stall_marker_rejects_symlink
 test_acknowledged_stall_publication_survives_pre_marker_crash
 test_empty_prefix_mate_preserves_other_mate_receipt
