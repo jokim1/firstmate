@@ -322,6 +322,55 @@ test_pool_slot_another_task_records_refuses_without_touching_it() {
   pass "a pool slot another task's record claims is refused without returning, resetting, or reaping it"
 }
 
+# bin/fm-status-gc.sh refuses to retire a status log while /tmp/fm-<id> exists,
+# and treats that as the earliest durable trace that a spawn ran for the id. That
+# is only true if the temp root is created before the endpoint: every backend
+# creates its window or task before the worktree settles and long before the meta
+# is published, so a spawn that dies in between would otherwise leave a live
+# endpoint that no gate can see. Proven from observed state at endpoint-creation
+# time, not from source order.
+test_task_temp_root_exists_before_the_endpoint() {
+  local rec id out status
+  id="pool-temp-order-r8-$$"
+  rec=$(make_case temp-order "$id")
+  read_case_record "$rec"
+  rm -rf "/tmp/fm-$id"
+
+  # Snapshot whether the temp root already exists at the moment the backend is
+  # asked to create this task's window.
+  cat > "$FAKEBIN_DIR/tmux" <<SH
+#!/usr/bin/env bash
+set -u
+case "\$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+esac
+case "\${1:-}" in
+  new-window)
+    if [ -d "/tmp/fm-$id" ]; then
+      printf 'present\n' >> '$CASE_DIR/temp-at-endpoint'
+    else
+      printf 'absent\n' >> '$CASE_DIR/temp-at-endpoint'
+    fi
+    exit 0 ;;
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  list-windows|has-session|new-session|kill-window|send-keys) exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$FAKEBIN_DIR/tmux"
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  rm -rf "/tmp/fm-$id"
+  expect_code 0 "$status" "temp-order: spawn should succeed: $out"
+  assert_present "$CASE_DIR/temp-at-endpoint" \
+    "temp-order: the backend was never asked to create a window"
+  if grep -qx absent "$CASE_DIR/temp-at-endpoint"; then
+    fail "temp-order: the endpoint was created before /tmp/fm-<id> existed"
+  fi
+  pass "the per-task temp root exists before any endpoint is created"
+}
+
 # The guard above is only meaningful if the fixture's treehouse fake would in
 # fact destroy the slot when invoked. Prove that directly, so a future stub that
 # silently stops modelling the real binary cannot make the case vacuous again.
@@ -361,6 +410,7 @@ test_dirty_pool_refuses_without_discarding_work
 test_unresolved_remote_default_refuses_pool
 test_unreachable_origin_refuses_stale_pool_base
 test_pool_slot_another_task_records_refuses_without_touching_it
+test_task_temp_root_exists_before_the_endpoint
 test_destructive_treehouse_fake_actually_destroys
 
 echo "# all fm-spawn-pool-base-freshen tests passed"
