@@ -1,0 +1,7 @@
+overlayPresent: true
+refusals: 0
+verified scope count: 28
+0.101.0 verified scopes: ["0.101.0/workspace:create","0.101.0/threads:openThread","0.101.0/threads:send","0.101.0/threads:stop","0.101.0/threads:archiveThread","0.101.0/workspace:delete","0.101.0/confinement"]
+0.101.0 confinement: {"recordedAt":"2026-08-27T16:27:50.906Z","recordRelPath":"records/0.101.0/2026-08-27T16-27-32-783Z/confinement.json","contentSha256":"0e5dad2e27de0122b740dee3dee09d9c8f6ac86b50d301941a54ec74a9486a3c","verified":true,"readAllowed":true,"writeDenied":true,"rationalePointer":"docs/playbot-lanes.md#confinement-gate-8-re-scope"}
+
+PASS: committed signed 0.101.0 phase-1 smoke evidence verifies against the production evidence root (28 scopes, 0 refusals).

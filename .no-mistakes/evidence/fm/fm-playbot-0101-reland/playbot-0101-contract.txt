@@ -1,0 +1,11 @@
+ok - 0.101.0 is present in the compatibility manifest
+ok - 0.101.0 thread-open uses app-minted threads:launch ({"wireChannel":"threads:launch","idSource":"app","resultUndefined":false})
+ok - 0.101.0 workspace-create fused into threads:launch ({"wireChannel":"threads:launch","fused":true})
+ok - 0.101.0 IPC surface asserts threads:launch + threads:setActiveThread
+ok - 0.101.0 IPC surface omits removed openThread channels
+ok - 0.101.0 IPC surface omits workspace:create (fused)
+ok - 0.101.0 IPC channel list byte-identical to 0.94.0
+ok - 0.101.0 thread-open contract matches 0.94.0
+ok - 0.101.0 workspace-create contract matches 0.94.0
+
+PASS: Playbot 0.101.0 native-lane certification reuses the byte-verified 0.94.0 fused threads:launch contract.
