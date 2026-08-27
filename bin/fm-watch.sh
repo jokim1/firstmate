@@ -81,9 +81,14 @@
 #                          upstream receipt
 #   check: secondmate wake-loop stalled: mate=<id> row=<seq> age=<seconds>s
 #                          the oldest valid row in an endpoint-recorded local
-#                          secondmate home's durable wake queue exceeded
-#                          FM_SECONDMATE_WAKE_STALL_SECS; observation is read-only
-#                          and one parent receipt suppresses repeats for that row
+#                          secondmate home's durable wake queue stayed unmoved at
+#                          the head of that queue for FM_SECONDMATE_WAKE_STALL_SECS
+#                          measured from when it reached the head, so the mate's
+#                          wake loop made no progress at all rather than merely
+#                          carrying a backlog whose tail row is old; the reported
+#                          age is the row's own age, which is at least that
+#                          window. Observation is read-only and one parent receipt
+#                          suppresses repeats for that row
 #   refill: ...            advisory fleet refill after a capacity-freeing lifecycle
 #                          transition (status done/failed/blocked/paused/
 #                          needs-decision/resolved, merged PR poll, or teardown);
@@ -231,9 +236,14 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # turn-ended and resets the age. Set generously above any legitimate interval
 # between completed turns, including long tool calls, builds, or test runs.
 BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-3600}
-# A local secondmate's foreign queue is checked on every poll, but only after this
-# bounded age can it produce a parent notification.
-SECONDMATE_WAKE_STALL_SECS=${FM_SECONDMATE_WAKE_STALL_SECS:-60}
+# A local secondmate's foreign queue is checked on every poll, but only after its
+# oldest row has stayed unmoved at the head of that queue for this long - measured
+# from when it reached the head, not from when it was queued - can it produce a
+# parent notification. Set above a normal per-wake handling turn: a mate that
+# drains one row per turn is healthy, and only a loop that moves nothing for this
+# long is stalled. Zero or invalid values fall back to this same default rather
+# than to a shorter window that would reintroduce the false alarms.
+SECONDMATE_WAKE_STALL_SECS=${FM_SECONDMATE_WAKE_STALL_SECS:-300}
 # A crew that declared a pause is idling on a known external wait, so its stale
 # pane is absorbed rather than wedge-escalated.
 # A captain-held or paused crew whose agent has confidently exited uses the same
@@ -644,7 +654,7 @@ secondmate_oldest_queue_row() {  # <queue-path>
 secondmate_wake_stall_tick() {
   local now=$(( $(date +%s) )) threshold=$SECONDMATE_WAKE_STALL_SECS
   local meta task kind remote_host home queue row epoch seq row_key marker receipt receipt_dir notify_key queued age reason
-  case "$threshold" in ''|*[!0-9]*|0) threshold=60 ;; esac
+  case "$threshold" in ''|*[!0-9]*|0) threshold=300 ;; esac
   # Endpoint metadata admits this queue-loop check; secondmate-liveness owns registered mates whose endpoint is missing or dead.
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
@@ -677,13 +687,29 @@ EOF
     case "$epoch" in ''|*[!0-9]*) continue ;; esac
     case "$seq" in ''|*[!0-9]*) continue ;; esac
     age=$((now - epoch))
-    [ "$age" -ge "$threshold" ] || continue
     row_key="$epoch-$seq"
     receipt="$receipt_dir/$row_key"
     if [ -e "$marker" ] || [ -L "$marker" ]; then
       [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
     fi
-    [ "$(cat "$marker" 2>/dev/null || true)" = "$row_key" ] && continue
+    # A row's own age counts every second it waited BEHIND rows the mate was
+    # already handling, so a busy-but-healthy mate's backlog ages past any fixed
+    # age while its wake loop advances normally. Alarm only when the SAME row
+    # stays at the head for the whole window, which measures the mate's own
+    # progress instead of the queue's depth. The marker records the row currently
+    # at the head and when it got there; a mate that drains anything replaces it
+    # and restarts the window, while a genuinely stalled loop leaves it untouched
+    # and still alarms. It is recorded on FIRST SIGHT, before any age test, so
+    # the window always starts when the row reached the head: gating the record
+    # on the row's age too would make a stall that begins with an empty queue
+    # take two full windows to surface instead of one. The receipt (written
+    # before any publication, and by the drain's acknowledgement commit) remains
+    # the durable one-shot record.
+    if [ "$(cat "$marker" 2>/dev/null || true)" != "$row_key" ]; then
+      fm_wake_secondmate_stall_marker_write "$task" "$row_key" || return 1
+      continue
+    fi
+    [ "$(age_of "$marker")" -ge "$threshold" ] || continue
     [ "$(cat "$receipt" 2>/dev/null || true)" = "$row_key" ] && continue
     notify_key="secondmate-wake-loop-$task-$row_key"
     reason="check: secondmate wake-loop stalled: mate=$task row=$seq age=${age}s"
@@ -692,7 +718,6 @@ EOF
       fm_wake_append check "$notify_key" "$reason" || return 1
     fi
     fm_wake_secondmate_stall_receipt_write "$task" "$row_key" || return 1
-    fm_wake_secondmate_stall_marker_write "$task" "$row_key" || return 1
     wake "$reason"
   done
   return 0
