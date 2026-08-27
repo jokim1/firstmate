@@ -37,22 +37,35 @@ make_spawn_fakebin() {
 #!/usr/bin/env bash
 set -u
 case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *"#{pane_current_path}"*)
+    # Real treehouse leases a DIFFERENT slot per `treehouse get`. A case that
+    # needs that (batch dispatch) sets FM_FAKE_PANE_POOL to a file listing one
+    # slot per line; the pane then reports whichever slot was handed out last.
+    if [ -n "${FM_FAKE_PANE_POOL:-}" ] && [ -s "${FM_FAKE_PANE_POOL}.current" ]; then
+      cat "${FM_FAKE_PANE_POOL}.current"
+    else
+      printf '%s\n' "${FM_FAKE_PANE_PATH:-}"
+    fi
+    exit 0 ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
   send-keys)
-    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
-      prev=
-      for a in "$@"; do
-        if [ "$prev" = "-l" ]; then
-          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
-        fi
-        prev=$a
-      done
-    fi
+    prev=
+    for a in "$@"; do
+      [ "$prev" != "-l" ] || [ -z "${FM_FAKE_LAUNCH_LOG:-}" ] \
+        || printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+      # Typing `treehouse get` is what moves the pane into the next slot.
+      if [ "$a" = 'treehouse get' ] && [ -n "${FM_FAKE_PANE_POOL:-}" ]; then
+        n=$(cat "${FM_FAKE_PANE_POOL}.n" 2>/dev/null || echo 0)
+        n=$((n + 1))
+        printf '%s\n' "$n" > "${FM_FAKE_PANE_POOL}.n"
+        sed -n "${n}p" "$FM_FAKE_PANE_POOL" > "${FM_FAKE_PANE_POOL}.current"
+      fi
+      prev=$a
+    done
     exit 0
     ;;
 esac
@@ -129,6 +142,7 @@ run_spawn() {
     FM_FAKE_LAUNCH_LOG="$launchlog" FM_FAKE_PI_VERSION="${FM_TEST_PI_VERSION:-0.84.0}" \
     FM_FAKE_CURSOR_MODELS="${FM_TEST_CURSOR_MODELS:-}" \
     FM_FAKE_CURSOR_LIST_STATUS="${FM_TEST_CURSOR_LIST_STATUS:-0}" \
+    FM_FAKE_PANE_POOL="${FM_TEST_PANE_POOL:-}" \
     GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -242,6 +256,10 @@ test_home_defaults_preserve_absolute_or_resolve_relative_paths() {
   assert_contains "$launch" "< '$home_real/data/$relative_id/brief.md'" \
     "relative FM_HOME leaked into the default cross-process brief path"
 
+  # Both spawns in this case share one fake pane path. Spawn now refuses a
+  # worktree another live record already claims (upstream #3075), so retire the
+  # first task's record the way a completed teardown would before reusing it.
+  rm -f "$HOME_DIR/state/$relative_id.meta"
   linked_home="$CASE_DIR/home-link"
   ln -s "$HOME_DIR" "$linked_home"
   : > "$LAUNCH_LOG"
@@ -749,10 +767,17 @@ test_batch_forwards_shared_profile_flags() {
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
 
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+  # Real treehouse leases a DIFFERENT slot to each batch member, and spawn now
+  # refuses a slot another live record already claims (upstream #3075). The
+  # shared fake pins one path for the whole home, so give this case a real pool.
+  fm_git_worktree "$PROJ_DIR" "$CASE_DIR/wt-batch-b" wt-profile-batch-b
+  printf '%s\n%s\n' "$WT_DIR" "$CASE_DIR/wt-batch-b" > "$CASE_DIR/pool"
+
+  out=$(FM_TEST_PANE_POOL="$CASE_DIR/pool" \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness codex --model gpt-5 --effort high)
   status=$?
-  expect_code 0 "$status" "batch spawn with shared profile flags should succeed"
+  expect_code 0 "$status" "batch spawn with shared profile flags should succeed: $out"
   assert_contains "$out" "spawned $id1 harness=codex" "first batch task did not use shared harness"
   assert_contains "$out" "spawned $id2 harness=codex" "second batch task did not use shared harness"
   assert_meta_profile "$HOME_DIR/state/$id1.meta" codex gpt-5 high

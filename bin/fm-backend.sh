@@ -564,6 +564,38 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   return 0
 }
 
+# fm_backend_metas_claiming_worktree: the task ids, space separated, whose
+# record in <state-dir> names the same PHYSICAL directory as <worktree>,
+# excluding <self-id>. Empty when nothing else claims it.
+#
+# A treehouse pool slot whose task was never returned can be handed to a later
+# spawn while the earlier record still names it (upstream #3075), so both spawn
+# allocation and teardown ask this before touching a slot. Physical comparison
+# is the exact test: a record naming the same directory through a symlink or a
+# non-canonical form is the same claim. Callers must already hold the task-set
+# lock (bin/fm-wake-lib.sh's fm_task_set_lock_path), because a record published
+# after this scan expands its glob is invisible to it.
+fm_backend_metas_claiming_worktree() {  # <state-dir> <self-id> <worktree>
+  # Local names are deliberately specific: a short name like `other` here is
+  # visible to ShellCheck's --external-sources analysis of every script that
+  # sources this file, where it turns unrelated `VAR=word-word` assignments into
+  # false arithmetic warnings.
+  local state=$1 self=$2 wt=$3 abs meta claim_id claim_wt claim_abs out=''
+  abs=$(cd "$wt" 2>/dev/null && pwd -P) || abs=$wt
+  for meta in "$state"/*.meta; do
+    [ -e "$meta" ] || continue
+    claim_id=${meta##*/}
+    claim_id=${claim_id%.meta}
+    [ "$claim_id" != "$self" ] || continue
+    claim_wt=$(fm_meta_get "$meta" worktree)
+    [ -n "$claim_wt" ] || continue
+    claim_abs=$(cd "$claim_wt" 2>/dev/null && pwd -P) || claim_abs=$claim_wt
+    [ "$claim_abs" = "$abs" ] || continue
+    out="${out:+$out }$claim_id"
+  done
+  printf '%s\n' "$out"
+}
+
 fm_backend_meta_for_window() {  # <target> <state-dir>
   local target=$1 state=$2 meta window terminal
   for meta in "$state"/*.meta; do

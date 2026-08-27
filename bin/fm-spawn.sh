@@ -1090,7 +1090,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   }
   if ! fm_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
-    echo "error: this home's task set is locked by another operation (a forced teardown is enumerating or removing its tasks); refusing to create task $ID rather than racing it" >&2
+    echo "error: this home's task set is locked by another operation (a teardown is claiming, enumerating, or removing its tasks); refusing to create task $ID rather than racing it" >&2
     exit 1
   fi
   SPAWN_TASK_SET_LOCK_HELD=1
@@ -2500,6 +2500,29 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$BACKEND" != play
     echo "error: treehouse get acquired pool slot $WT bound to a different clone (git common dir ${WT_COMMON_DIR_REAL:-unknown}, expected $PROJ_COMMON_DIR_REAL)." >&2
     echo "That slot's object store belongs to another home's clone of the same origin; continuing would tangle this task with that home and break when it retires." >&2
     echo "Destroy the foreign-bound slot with: treehouse destroy $WT --yes  (then respawn). Inspect window $T" >&2
+    exit 1
+  fi
+
+  # Upstream #3075, allocation half: a pool slot whose task was never returned
+  # can be handed back out while that task's record still names it. Everything
+  # below treats the slot as this task's own - freshen_spawn_worktree_base runs
+  # `git reset --hard` on it, which discards the earlier task's unpushed commits
+  # before this task's meta exists for any teardown-side check to see. This runs
+  # under the task-set lock a fresh spawn already holds, and teardown takes the
+  # same lock around its own claim check, so the two cannot interleave.
+  #
+  # The refusal MUTATES NOTHING. `treehouse return`, with or without --force,
+  # terminates the processes running in that directory and resets it - the exact
+  # destruction this refusal exists to prevent, and the one the teardown half
+  # refuses to perform in this same situation. A slot left leased to this failed
+  # spawn cannot be handed out again, so leaving it is the fail-closed direction:
+  # a stale lease is recoverable, a reset occupant is not.
+  WT_CLAIMED_BY=$(fm_backend_metas_claiming_worktree "$STATE" "$ID" "$WT")
+  if [ -n "$WT_CLAIMED_BY" ]; then
+    echo "error: treehouse get acquired pool slot $WT, but task(s) $WT_CLAIMED_BY already record that worktree." >&2
+    echo "Nothing was changed: returning the slot here would reset that copy and kill the processes running in it, which is what this refusal exists to prevent." >&2
+    echo "Read 'bin/fm-crew-state.sh <id>' for each id above, and check where its endpoint is actually running, before deciding which record is real." >&2
+    echo "If a claimant is genuinely working in that directory, the pool handed out a slot it should not have: leave that task alone and respawn to get a different slot. If a record is stale instead, clear that record's worktree= line, then respawn - tearing the stale task down is not a way out, because once two records name one directory each teardown refuses on the other. Inspect window $T" >&2
     exit 1
   fi
 fi

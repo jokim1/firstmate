@@ -107,6 +107,10 @@ test_stale_pool_base_refreshes_before_branching() {
   id='pool-current-base-repeat-r1'
   mkdir -p "$HOME_DIR/data/$id"
   printf 'brief for %s\n' "$id" > "$HOME_DIR/data/$id/brief.md"
+  # A pool slot is only handed out again once its previous task is gone; spawn
+  # now refuses a slot another live record still claims (upstream #3075), so the
+  # repeat models a returned slot rather than two live tasks in one directory.
+  rm -f "$HOME_DIR/state/pool-current-base-r1.meta"
   out=$(run_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
   expect_code 0 "$status" "repeating the base refresh should be idempotent"
@@ -227,11 +231,136 @@ test_unresolved_remote_default_refuses_pool() {
   pass "an unresolved remote default branch refuses the pooled worktree"
 }
 
+# Replace this case's `treehouse` stub with one that models what the real binary
+# does to a returned slot: v2.3.0's `return` terminates the processes running in
+# it, and `--force` cleans and resets it without prompting. A stub that just
+# exits 0 makes every "the claimed copy survived" assertion vacuously true, which
+# is exactly how the round-2 panel found this test proving the opposite of the
+# production behaviour. Args: fakebin case_dir base_sha
+install_destructive_treehouse_fake() {
+  local fakebin=$1 case_dir=$2 base=$3
+  cat > "$fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+set -u
+[ "\${1:-}" = return ] || exit 0
+slot=""
+for a in "\$@"; do
+  case "\$a" in /*) slot=\$a ;; esac
+done
+printf '%s\n' "return \$*" >> '$case_dir/treehouse-return.log'
+[ -n "\$slot" ] || exit 0
+# Terminate the processes running in the slot, then clean and reset it.
+while read -r pid; do
+  [ -n "\$pid" ] || continue
+  kill -KILL "\$pid" 2>/dev/null || true
+done < <(cat '$case_dir/slot-pids' 2>/dev/null || true)
+git -C "\$slot" reset --hard '$base' >/dev/null 2>&1 || true
+git -C "\$slot" clean -fdx >/dev/null 2>&1 || true
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
+}
+
+# Upstream #3075, allocation half. A pool slot whose earlier task was never
+# returned can be handed back out while that task's record still names it. The
+# base refresh below reaches `git reset --hard`, which discards that task's
+# unpushed commits before this task's own record exists for any teardown-side
+# check to see. The refusal must therefore touch NOTHING: returning the slot -
+# with or without --force - resets it and kills its processes, which is the same
+# destruction, moved onto the refusal path.
+test_pool_slot_another_task_records_refuses_without_touching_it() {
+  local rec id out status stale_head sleeper_pid
+  id='pool-claimed-slot-r6'
+  rec=$(make_case claimed-slot "$id")
+  read_case_record "$rec"
+  install_destructive_treehouse_fake "$FAKEBIN_DIR" "$CASE_DIR" "$INITIAL_SHA"
+
+  # An earlier task still records this slot and is genuinely working in it:
+  # a committed-but-unpushed change, an uncommitted change, and a live process.
+  printf 'unpushed work that must survive\n' > "$POOL_DIR/stale-task-work.txt"
+  git -C "$POOL_DIR" add stale-task-work.txt
+  git -C "$POOL_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm 'stale task work'
+  stale_head=$(git -C "$POOL_DIR" rev-parse HEAD)
+  printf 'uncommitted work that must survive\n' > "$POOL_DIR/stale-task-dirty.txt"
+  ( cd "$POOL_DIR" && exec sleep 300 ) &
+  sleeper_pid=$!
+  disown
+  printf '%s\n' "$sleeper_pid" > "$CASE_DIR/slot-pids"
+  sleep 0.3
+  kill -0 "$sleeper_pid" 2>/dev/null || fail "claimed-slot: setup sleeper did not start"
+  printf '%s\n' 'window=firstmate:fm-stale-task' 'endpoint_task_id=stale-task' \
+    "worktree=$POOL_DIR" "project=$PROJECT_DIR" 'kind=ship' 'mode=local-only' \
+    > "$HOME_DIR/state/stale-task.meta"
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  if kill -0 "$sleeper_pid" 2>/dev/null; then
+    kill -KILL "$sleeper_pid" 2>/dev/null || true
+  else
+    fail "the refusal killed the claiming task's process"
+  fi
+  [ "$status" -ne 0 ] || fail "spawn took a pool slot another task's record still claims"
+  assert_contains "$out" "already record that worktree" \
+    "spawn did not clearly refuse an already-claimed pool slot"
+  assert_contains "$out" "stale-task" "the refusal did not name the claiming task"
+  assert_contains "$out" "Nothing was changed" \
+    "the refusal did not state that the claimed slot was left alone"
+  [ ! -e "$CASE_DIR/treehouse-return.log" ] \
+    || fail "the refusal returned the claimed slot: $(cat "$CASE_DIR/treehouse-return.log")"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$stale_head" ] \
+    || fail "spawn moved the claimed slot's HEAD despite refusing"
+  [ -f "$POOL_DIR/stale-task-work.txt" ] \
+    || fail "spawn discarded the claiming task's committed-but-unpushed work"
+  [ -f "$POOL_DIR/stale-task-dirty.txt" ] \
+    || fail "spawn discarded the claiming task's uncommitted work"
+  [ ! -f "$HOME_DIR/state/$id.meta" ] \
+    || fail "spawn published a record for a task it refused to start"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# observed claimed-slot refusal: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
+  fi
+  pass "a pool slot another task's record claims is refused without returning, resetting, or reaping it"
+}
+
+# The guard above is only meaningful if the fixture's treehouse fake would in
+# fact destroy the slot when invoked. Prove that directly, so a future stub that
+# silently stops modelling the real binary cannot make the case vacuous again.
+test_destructive_treehouse_fake_actually_destroys() {
+  local rec id sleeper_pid
+  id='pool-fake-fidelity-r7'
+  rec=$(make_case fake-fidelity "$id")
+  read_case_record "$rec"
+  install_destructive_treehouse_fake "$FAKEBIN_DIR" "$CASE_DIR" "$INITIAL_SHA"
+
+  printf 'work\n' > "$POOL_DIR/doomed.txt"
+  git -C "$POOL_DIR" add doomed.txt
+  git -C "$POOL_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm 'doomed work'
+  printf 'dirty\n' > "$POOL_DIR/doomed-dirty.txt"
+  ( cd "$POOL_DIR" && exec sleep 300 ) &
+  sleeper_pid=$!
+  disown
+  printf '%s\n' "$sleeper_pid" > "$CASE_DIR/slot-pids"
+  sleep 0.3
+
+  PATH="$FAKEBIN_DIR:$PATH" treehouse return --force "$POOL_DIR" >/dev/null 2>&1 || true
+  sleep 0.3
+  [ -e "$CASE_DIR/treehouse-return.log" ] || fail "fake-fidelity: the fake did not record the return"
+  kill -0 "$sleeper_pid" 2>/dev/null && { kill -KILL "$sleeper_pid" 2>/dev/null || true; fail "fake-fidelity: the fake left the slot process alive"; }
+  [ ! -f "$POOL_DIR/doomed.txt" ] || fail "fake-fidelity: the fake left the committed work in the slot"
+  [ ! -f "$POOL_DIR/doomed-dirty.txt" ] || fail "fake-fidelity: the fake left the uncommitted work in the slot"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$INITIAL_SHA" ] \
+    || fail "fake-fidelity: the fake did not reset the slot to its base"
+  pass "the fixture's treehouse return fake really does reset the slot and kill its processes"
+}
+
 test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
 test_unresolved_remote_default_refuses_pool
 test_unreachable_origin_refuses_stale_pool_base
+test_pool_slot_another_task_records_refuses_without_touching_it
+test_destructive_treehouse_fake_actually_destroys
 
 echo "# all fm-spawn-pool-base-freshen tests passed"

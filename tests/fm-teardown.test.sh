@@ -2758,6 +2758,208 @@ EOF
   pass "post-reap worktree mutations are revalidated before destructive return"
 }
 
+# Write a second task's meta claiming <worktree>. Args: case_dir id worktree
+write_other_task_meta() {
+  local case_dir=$1 id=$2 worktree=$3
+  fm_write_meta "$case_dir/state/$id.meta" \
+    "window=firstmate:fm-$id" \
+    "endpoint_task_id=$id" \
+    "worktree=$worktree" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only"
+}
+
+# A pool slot left unreturned can be handed to a later spawn while this task's
+# record still names it (upstream #3075). The refusal must land before the
+# process reap, because the reap already kills the occupant's agent.
+test_worktree_claimed_by_another_task_refuses_before_reap() {
+  local case_dir rc pid
+  case_dir=$(make_case foreign-worktree-claim)
+  write_meta "$case_dir" local-only ship
+  land_shippable_commit "$case_dir"
+  write_other_task_meta "$case_dir" task-x2 "$case_dir/wt"
+
+  ( cd "$case_dir/wt" && exec sleep 300 ) &
+  pid=$!
+  disown
+  sleep 0.3
+  kill -0 "$pid" 2>/dev/null || fail "foreign-worktree-claim: setup sleeper did not start"
+
+  cat > "$case_dir/fakebin/treehouse" <<EOF
+#!/usr/bin/env bash
+echo "return-ran" >> "$case_dir/treehouse.log"
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/treehouse"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "foreign-worktree-claim: teardown should refuse a worktree another record claims"
+  assert_grep "REFUSED" "$case_dir/stderr" "foreign-worktree-claim: no REFUSED line"
+  assert_grep "task-x2" "$case_dir/stderr" "foreign-worktree-claim: the conflicting task was not named"
+  kill -0 "$pid" 2>/dev/null || fail "foreign-worktree-claim: the occupant's process was reaped despite the refusal"
+  assert_absent "$case_dir/treehouse.log" "foreign-worktree-claim: the destructive worktree return still ran"
+  assert_present "$case_dir/state/task-x1.meta" "foreign-worktree-claim: the refusal did not preserve task records"
+
+  # --force authorizes discarding THIS task's work, never another task's.
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout-force" 2> "$case_dir/stderr-force" || rc=$?
+  expect_code 1 "$rc" "foreign-worktree-claim: --force must not bypass another record's claim"
+  assert_grep "REFUSED" "$case_dir/stderr-force" "foreign-worktree-claim: --force printed no REFUSED line"
+  kill -0 "$pid" 2>/dev/null && { kill -KILL "$pid" 2>/dev/null || true; }
+  assert_absent "$case_dir/treehouse.log" "foreign-worktree-claim: --force still ran the destructive worktree return"
+  pass "a worktree another task's record claims is never reset, reaped, or forced away"
+}
+
+# The guard is not a one-time snapshot: it is re-asserted immediately before the
+# destructive worktree return, so a record published after the first check - the
+# spawn/teardown race two panel seats reproduced - is still caught. The fake
+# no-mistakes binary publishes the foreign claim from inside
+# conclude_task_no_mistakes_run, which runs after the first assertion and before
+# the return, making the window deterministic instead of timing-dependent.
+test_claim_published_after_the_first_check_still_refuses_the_return() {
+  local case_dir rc
+  case_dir=$(make_case foreign-claim-late-publish)
+  write_meta "$case_dir" local-only ship
+  land_shippable_commit "$case_dir"
+
+  cat > "$case_dir/fakebin/no-mistakes" <<EOF
+#!/usr/bin/env bash
+# Publish a competing claim at the exact moment teardown has passed its first
+# assertion and is entering the destructive sequence.
+printf '%s\n' 'window=firstmate:fm-task-x2' 'endpoint_task_id=task-x2' \
+  'worktree=$case_dir/wt' 'project=$case_dir/project' 'kind=ship' 'mode=local-only' \
+  > '$case_dir/state/task-x2.meta'
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/no-mistakes"
+  cat > "$case_dir/fakebin/treehouse" <<EOF
+#!/usr/bin/env bash
+echo "return-ran" >> "$case_dir/treehouse.log"
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/treehouse"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "foreign-claim-late-publish: a claim published mid-teardown should still refuse"
+  assert_grep "before worktree return" "$case_dir/stderr" \
+    "foreign-claim-late-publish: the refusal did not come from the pre-return assertion"
+  assert_absent "$case_dir/treehouse.log" \
+    "foreign-claim-late-publish: the destructive worktree return ran despite the late claim"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "foreign-claim-late-publish: the refusal did not preserve task records"
+  pass "a competing claim published after the first check still stops the destructive return"
+}
+
+# The claim check is only race-free while this home's task-set lock is held, so a
+# teardown that cannot take that lock must refuse rather than proceed on a
+# snapshot a concurrent spawn is about to invalidate.
+test_teardown_refuses_while_the_task_set_lock_is_held() {
+  local case_dir rc holder_pid lock_path
+  case_dir=$(make_case task-set-lock-contended)
+  write_meta "$case_dir" local-only ship
+  land_shippable_commit "$case_dir"
+  cat > "$case_dir/fakebin/treehouse" <<EOF
+#!/usr/bin/env bash
+echo "return-ran" >> "$case_dir/treehouse.log"
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/treehouse"
+
+  # Hold the lock exactly the way a fresh spawn does, through its owner API.
+  FM_STATE_OVERRIDE="$case_dir/state" bash -c '
+    set -u
+    . "$1/bin/fm-wake-lib.sh"
+    lock=$(fm_task_set_lock_path "$STATE") || exit 1
+    fm_lock_try_acquire "$lock" || exit 1
+    printf "%s\n" "$lock" > "$2"
+    sleep 30
+  ' _ "$ROOT" "$case_dir/lock-path" &
+  holder_pid=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -s "$case_dir/lock-path" ] && break
+    sleep 0.2
+  done
+  lock_path=$(cat "$case_dir/lock-path" 2>/dev/null || true)
+  [ -n "$lock_path" ] || { kill "$holder_pid" 2>/dev/null || true; fail "task-set-lock-contended: the holder never took the lock"; }
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+  expect_code 1 "$rc" "task-set-lock-contended: teardown should refuse while the task set is locked"
+  assert_grep "task set is locked" "$case_dir/stderr" \
+    "task-set-lock-contended: the refusal did not name the task-set lock"
+  assert_absent "$case_dir/treehouse.log" \
+    "task-set-lock-contended: the destructive worktree return ran while the task set was locked"
+  pass "a teardown that cannot take the task-set lock refuses instead of racing a spawn"
+}
+
+# The refusal is symmetric, so the remedy it prints must be one that works: clear
+# the stale record's worktree= and the live task tears down normally. Without a
+# working remedy the duplicate-claim state would be unrecoverable by teardown.
+test_clearing_the_stale_claim_unblocks_teardown() {
+  local case_dir rc
+  case_dir=$(make_case stale-claim-reconciled)
+  write_meta "$case_dir" local-only ship
+  land_shippable_commit "$case_dir"
+  write_other_task_meta "$case_dir" task-x2 "$case_dir/wt"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/before" 2> "$case_dir/before.err" || rc=$?
+  expect_code 1 "$rc" "stale-claim-reconciled: the duplicate claim should refuse first"
+  assert_grep "bin/fm-crew-state.sh" "$case_dir/before.err" \
+    "stale-claim-reconciled: the remedy did not name how to identify the live task"
+  assert_grep "worktree=" "$case_dir/before.err" \
+    "stale-claim-reconciled: the remedy did not name the record correction that works"
+
+  # Apply exactly the printed remedy to the stale record.
+  grep -v '^worktree=' "$case_dir/state/task-x2.meta" > "$case_dir/state/task-x2.meta.new"
+  mv "$case_dir/state/task-x2.meta.new" "$case_dir/state/task-x2.meta"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/after" 2> "$case_dir/after.err" || rc=$?
+  expect_code 0 "$rc" "stale-claim-reconciled: teardown should proceed once the stale claim is cleared"
+  ! grep -q REFUSED "$case_dir/after.err" || fail "stale-claim-reconciled: teardown still refused after the remedy"
+  pass "the printed remedy actually clears a duplicate claim and lets teardown finish"
+}
+
+# The claim is compared by physical path, so a record naming the same directory
+# through a symlink is the same conflict.
+test_symlinked_claim_of_same_worktree_refuses() {
+  local case_dir rc
+  case_dir=$(make_case foreign-worktree-claim-symlink)
+  write_meta "$case_dir" local-only ship
+  land_shippable_commit "$case_dir"
+  ln -s "$case_dir/wt" "$case_dir/wt-link"
+  write_other_task_meta "$case_dir" task-x2 "$case_dir/wt-link"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "foreign-worktree-claim-symlink: a symlinked claim of the same directory should refuse"
+  assert_grep "task-x2" "$case_dir/stderr" "foreign-worktree-claim-symlink: the conflicting task was not named"
+  pass "a foreign claim recorded through a symlink resolves to the same worktree and refuses"
+}
+
+# The guard must not fire on the ordinary fleet, where every other task records
+# its own distinct worktree.
+test_unrelated_worktree_records_do_not_block_teardown() {
+  local case_dir rc
+  case_dir=$(make_case unrelated-worktree-records)
+  write_meta "$case_dir" local-only ship
+  land_shippable_commit "$case_dir"
+  git -C "$case_dir/project" worktree add -q -b fm/task-x2 "$case_dir/wt2" main
+  write_other_task_meta "$case_dir" task-x2 "$case_dir/wt2"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "unrelated-worktree-records: teardown should proceed when no other record claims this worktree"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "unrelated-worktree-records: teardown printed a REFUSED line"
+  pass "another task's own distinct worktree never blocks this teardown"
+}
+
 test_playbot_archive_mutation_refuses_before_workspace_deletion() {
   local case_dir rc
   case_dir=$(make_case playbot-archive-mutation-refusal)
@@ -3182,3 +3384,9 @@ test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
 test_process_reap_mutation_refuses_before_worktree_return
 test_playbot_archive_mutation_refuses_before_workspace_deletion
+test_worktree_claimed_by_another_task_refuses_before_reap
+test_claim_published_after_the_first_check_still_refuses_the_return
+test_teardown_refuses_while_the_task_set_lock_is_held
+test_clearing_the_stale_claim_unblocks_teardown
+test_symlinked_claim_of_same_worktree_refuses
+test_unrelated_worktree_records_do_not_block_teardown

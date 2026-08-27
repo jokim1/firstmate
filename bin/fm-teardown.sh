@@ -27,6 +27,15 @@
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
+# Before ANY step that reads or mutates the recorded worktree, teardown takes
+# this home's task-set lock and refuses while another task's meta records the
+# same physical worktree path (upstream #3075): a pool slot left unreturned can
+# be reallocated to a live task, and --force never authorizes discarding that
+# task's work. The lock is what makes the check race-free - a fresh spawn holds
+# the same lock from allocation through meta publication - and it is held
+# through the destructive worktree return, where the claim is asserted a second
+# time. The refusal is symmetric, so tearing the OTHER task down cannot resolve
+# a duplicate claim; the printed remedy names the reconciliation that works.
 # Before destructive cleanup, teardown validates task check artifacts and any
 # matching quarantine entries as ordinary single-link files on the state
 # device. It refuses and preserves task state when that proof fails; otherwise
@@ -214,6 +223,8 @@ CONTROL_LOCK="$STATE/.control-$ID.lock"
 CONTROL_LOCK_HELD=0
 META_LOCK=
 META_LOCK_HELD=0
+TASK_SET_LOCK=
+TASK_SET_LOCK_HELD=0
 DESCENDANT_LOCK_PATHS=()
 DESCENDANT_TASK_STATES=()
 DESCENDANT_TASK_IDS=()
@@ -243,6 +254,10 @@ teardown_release_locks() {
   if [ "$META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$META_LOCK" || true
     META_LOCK_HELD=0
+  fi
+  if [ "$TASK_SET_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$TASK_SET_LOCK" || true
+    TASK_SET_LOCK_HELD=0
   fi
   if [ "$CONTROL_LOCK_HELD" = 1 ]; then
     fm_lock_release "$CONTROL_LOCK" || true
@@ -3200,6 +3215,46 @@ if [ -n "$X_REQUEST" ]; then
   echo "warning: task $ID still carries an unreconciled Relay request link ($X_REQUEST) on its task record." >&2
 fi
 
+# Upstream #3075 claim guard. Placed above every block that reads or mutates the
+# recorded worktree - the orca/playbot inspection, the land gates (whose stale
+# index.lock recovery writes inside that directory), the process reap, the branch
+# delete, and the worktree return - so "nothing here touches a copy another task
+# owns" holds literally. Two parts, both required:
+#
+#   1. The task-set lock. Without it this is a one-time snapshot: a fresh spawn
+#      that has already leased this slot but not yet published its meta is
+#      invisible, and the reap then kills it. The spawn holds the same lock from
+#      allocation through publication, so taking it here serializes the two.
+#      Refusing rather than waiting matches the spawn side and keeps a wedged
+#      spawn from hanging a teardown; teardown is retryable.
+#   2. The claim scan, re-asserted immediately before the worktree return.
+#
+# --force authorizes discarding THIS task's work, never another task's, so it
+# bypasses neither part.
+teardown_assert_worktree_unclaimed() {  # <stage>
+  local stage=$1 claimed
+  [ "$KIND" != secondmate ] && [ -n "$WT" ] && [ -d "$WT" ] || return 0
+  claimed=$(fm_backend_metas_claiming_worktree "$STATE" "$ID" "$WT")
+  [ -n "$claimed" ] || return 0
+  echo "REFUSED: worktree $WT is also recorded by task(s): $claimed ($stage)" >&2
+  echo "Two task records name one directory, so resetting it here would destroy the copy the other task is using." >&2
+  echo "Tearing that task down instead cannot work: it hits this same refusal in the other direction." >&2
+  echo "Reconcile it: read 'bin/fm-crew-state.sh <id>' for this task and each id above to find which one is really working in that directory, then clear the stale record's worktree= line (or remove that record) and rerun this teardown." >&2
+  return 1
+}
+if [ "$KIND" != secondmate ] && [ -n "$WT" ] && [ -d "$WT" ]; then
+  TASK_SET_LOCK=$(fm_task_set_lock_path "$STATE") || {
+    echo "error: could not resolve the task-set lock for $STATE" >&2
+    exit 1
+  }
+  if ! fm_lock_try_acquire "$TASK_SET_LOCK"; then
+    echo "error: this home's task set is locked by another operation (a spawn is claiming a worktree, or another teardown is removing one); refusing to tear down task $ID rather than racing it" >&2
+    exit 1
+  fi
+  TASK_SET_LOCK_HELD=1
+  teardown_assert_worktree_unclaimed "before worktree inspection" || exit 1
+fi
+
 if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ]; then
   if ! inspectable_git_worktree "$WT"; then
     echo "REFUSED: Orca ship task $ID has no inspectable git worktree at ${WT:-<missing>}." >&2
@@ -3327,6 +3382,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   if teardown_require_land_gates && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     pre_return_check=validate_worktree_teardown_safety_with_lock_recovery
   fi
+  teardown_assert_worktree_unclaimed "before worktree return" || exit 1
   teardown_treehouse_return "$WT" "$PROJ" "worktree" "$pre_return_check" || {
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
     exit 1
