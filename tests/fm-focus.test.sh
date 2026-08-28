@@ -272,6 +272,36 @@ test_hook_skips_operational_input() {
   pass "prompt hook skips operational Firstmate inputs and stays fail-open"
 }
 
+test_hook_bounds_focus_lock_wait_and_updates_uncontended() {
+  local root state started elapsed hook_timeout internal_wait_deadline=3
+  root="$TMP_ROOT/hook-lock-bound-root"
+  state="$root/state"
+  mkdir -p "$root/bin" "$state/.focus.json.lock"
+  : > "$root/AGENTS.md"
+  git -C "$root" init -q || fail "failed to create plain primary-root fixture"
+
+  hook_timeout=$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].timeout' "$ROOT/.claude/settings.json")
+  [ "$internal_wait_deadline" -lt "$hook_timeout" ] \
+    || fail "focus-lock deadline must remain below the harness timeout"
+  started=$SECONDS
+  FM_ROOT_OVERRIDE="$root" FM_HOME="$root" FM_STATE_OVERRIDE="$state" \
+    FM_FOCUS_LOCK_TRIES=200 "$HOOK" --claude --prompt "contended prompt" \
+    >/dev/null 2>&1 || fail "contended hook must fail open"
+  elapsed=$((SECONDS - started))
+  [ "$elapsed" -le "$internal_wait_deadline" ] \
+    || fail "hook exceeded its ${internal_wait_deadline}s focus-lock deadline (${elapsed}s)"
+  [ ! -e "$state/.focus.json" ] \
+    || fail "contended hook must not publish a focus update without the lock"
+
+  rmdir "$state/.focus.json.lock" || fail "failed to release fixture focus lock"
+  FM_ROOT_OVERRIDE="$root" FM_HOME="$root" FM_STATE_OVERRIDE="$state" \
+    "$HOOK" --claude --prompt "uncontended prompt" >/dev/null 2>&1 \
+    || fail "uncontended hook failed"
+  [ "$(jq -r '.active.summary // empty' "$state/.focus.json")" = "uncontended prompt" ] \
+    || fail "uncontended hook did not apply the focus update"
+  pass "prompt hook honors its internal lock deadline when contended and updates when uncontended"
+}
+
 test_playbot_owner_kind_recorded() {
   local state
   state=$(new_state playbot)
@@ -369,6 +399,7 @@ test_busy_wake_queue_does_not_block_owner
 test_fail_open_unwritable_state_via_owner
 test_hook_fail_open_unwritable
 test_hook_skips_operational_input
+test_hook_bounds_focus_lock_wait_and_updates_uncontended
 test_playbot_owner_kind_recorded
 test_tracked_claude_userprompt_wires_focus_hook
 test_tracked_codex_userprompt_wires_focus_hook

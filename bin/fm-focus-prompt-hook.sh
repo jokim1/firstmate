@@ -26,6 +26,7 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" ||
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd -P)}" || exit 0
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+PROMPT_FOCUS_LOCK_TRIES=40
 
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh" 2>/dev/null || exit 0
@@ -155,5 +156,9 @@ if [ -z "$RESUME_KIND" ] && [ -n "$HARNESS" ]; then
 fi
 
 # NEVER let a focus failure affect the harness exit path.
-"$SCRIPT_DIR/fm-focus.sh" "${args[@]}" >/dev/null 2>&1 || true
+# Cap this adapter at the owner's 40-attempt default regardless of ambient
+# overrides. bin/fm-focus.sh owns the retry cadence; this is currently 39 sleeps
+# (about 1.95s), below every tracked harness timeout.
+FM_FOCUS_LOCK_TRIES=$PROMPT_FOCUS_LOCK_TRIES \
+  "$SCRIPT_DIR/fm-focus.sh" "${args[@]}" >/dev/null 2>&1 || true
 exit 0
