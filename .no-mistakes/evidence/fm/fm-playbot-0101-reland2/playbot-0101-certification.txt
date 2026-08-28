@@ -1,0 +1,19 @@
+== Playbot 0.101.0 native-lane certification (public interface) ==
+
+release 0.101.0 present in COMPATIBILITY_MANIFEST : true
+threadOpenContract('0.101.0')      : {"wireChannel":"threads:launch","idSource":"app","resultUndefined":false}
+threadOpenContract('0.94.0')       : {"wireChannel":"threads:launch","idSource":"app","resultUndefined":false}
+threadOpenContract('9.9.9') legacy : {"wireChannel":"threads:openThread","idSource":"client","resultUndefined":true}
+workspaceCreateContract('0.101.0')  : {"wireChannel":"threads:launch","fused":true}
+IPC surface asserts threads:launch : true
+IPC surface omits removed channels : true (workspace:create, threads:openThread, db:workspaceThreads:open)
+
+committed overlay present          : true
+integrity verified scopes          : 28
+integrity refusals                 : 0
+writeDenied[0.92.0  ]           : true
+writeDenied[0.93.1  ]           : true
+writeDenied[0.94.0  ]           : true
+writeDenied[0.101.0 ]           : true
+
+nativeDispatchState('0.101.0').allowed (pre-evidence-flip) : true
