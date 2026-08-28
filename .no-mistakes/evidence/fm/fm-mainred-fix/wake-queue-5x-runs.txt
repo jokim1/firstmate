@@ -1,0 +1,11 @@
+# Wake-queue stability: 5 consecutive passing runs (Behavior portable serial 2 lane)
+# Test: tests/fm-wake-queue.test.sh  (byte-identical to e07a956)
+
+run 1: FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=80262
+run 2: FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=213392
+run 3: FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=214567
+run 4: FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=215715
+run 5: FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=218350
+
+# The regression-target assertion (widened negative first-observation legs):
+ok - a secondmate whose wake loop keeps advancing is never alarmed, while an unmoved head row still is
