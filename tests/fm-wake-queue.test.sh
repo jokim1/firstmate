@@ -412,16 +412,21 @@ test_advancing_secondmate_queue_is_not_a_stall() {
 
   # Round 1: a deeply aged head row. Old enough for the age gate, but this is the
   # first time the parent has seen it at the head, so nothing is published yet.
+  # The stall window (60s) is kept well above the observation length so the head
+  # marker cannot age into a publication within this one checkpoint - what is
+  # under test is that the ROW's own age never triggers a stall, not the exact
+  # boundary tick. Pinning window==run would race a same-run poll across it.
   printf '%s\t7\tcheck\trouted\tcheck: routed row\n' "$base" > "$sub/state/.wake-queue"
-  run_stall_checkpoint "$dir" "$state" "$fakebin" one 2
+  run_stall_checkpoint "$dir" "$state" "$fakebin" one 2 60
   ! grep -F 'secondmate wake-loop stalled' "$dir/watch-one.out" >/dev/null \
     || fail "a first observation of an aged head row published a stall"
 
   # Round 2: the mate acknowledged row 7. The next head row is just as aged, but
   # the loop demonstrably advanced, so the window restarts instead of alarming.
+  # Same wide window as Round 1: the advance (not a boundary tick) is the subject.
   sleep 3
   printf '%s\t8\tcheck\trouted\tcheck: routed row\n' "$base" > "$sub/state/.wake-queue"
-  run_stall_checkpoint "$dir" "$state" "$fakebin" two 2
+  run_stall_checkpoint "$dir" "$state" "$fakebin" two 2 60
   ! grep -F 'secondmate wake-loop stalled' "$dir/watch-two.out" >/dev/null \
     || fail "an advancing wake loop published a stall on backlog age alone"
   [ ! -s "$state/.wake-queue" ] \
