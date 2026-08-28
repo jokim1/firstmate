@@ -226,6 +226,29 @@ export const COMPATIBILITY_MANIFEST_SEED = {
         wireChannel: 'threads:launch',
         fused: true
       }
+    }),
+    // 0.101.0 keeps the 0.94.0 native-lane contract. Direct app.asar
+    // inspection confirmed the same fused launch channels and shapes; its new
+    // multi-agent orchestration surfaces do not replace a lane dependency.
+    '0.101.0': releaseCompatibilityShape({
+      ipcChannelStrings: [
+        'threads:launch',
+        'threads:setActiveThread',
+        'threads:send',
+        'threads:stop',
+        'threads:archiveThread',
+        'workspace:archive',
+        'workspace:delete'
+      ],
+      threadOpen: {
+        wireChannel: 'threads:launch',
+        idSource: 'app',
+        resultUndefined: false
+      },
+      workspaceCreate: {
+        wireChannel: 'threads:launch',
+        fused: true
+      }
     })
   }
 };
