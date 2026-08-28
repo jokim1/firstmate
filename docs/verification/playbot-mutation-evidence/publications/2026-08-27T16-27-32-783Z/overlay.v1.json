@@ -1,0 +1,162 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence-overlay.v1",
+  "manifestVersion": 2,
+  "releases": {
+    "0.92.0": {
+      "mutationEvidence": {
+        "workspace:create": {
+          "recordedAt": "2026-08-15T08:19:53.073Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/workspace:create.json",
+          "contentSha256": "959b9e10238a670410a57658e891c07fad1a8e29454df3d7332dcd0c2a3ec9e7"
+        },
+        "threads:openThread": {
+          "recordedAt": "2026-08-15T08:19:53.098Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/threads:openThread.json",
+          "contentSha256": "665e0c4568789aa5c72fb9173dc7f888f9f1b0b56cbaf0c2637792e86a88be84"
+        },
+        "threads:send": {
+          "recordedAt": "2026-08-15T08:19:53.233Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/threads:send.json",
+          "contentSha256": "0f15debc2b82ea77245e9f42e6adde5fbbc64768cbc71d21e59c76009d10facc"
+        },
+        "threads:stop": {
+          "recordedAt": "2026-08-15T08:20:05.951Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/threads:stop.json",
+          "contentSha256": "9d90cbcf1678430afb60ae1945b4581119322796034470b106b8756b49d3f404"
+        },
+        "threads:archiveThread": {
+          "recordedAt": "2026-08-15T08:20:08.969Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/threads:archiveThread.json",
+          "contentSha256": "b8a5f0a13885c742b686444c0c48cd96dcf23035e5e5f0dfa5558a9b50704f0d"
+        },
+        "workspace:delete": {
+          "recordedAt": "2026-08-15T08:20:09.195Z",
+          "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/workspace:delete.json",
+          "contentSha256": "17fe7a26bb0f195528a993486c8c15cfbda971f98ef51a050c59a20abc38b422"
+        }
+      },
+      "confinement": {
+        "recordedAt": "2026-08-15T08:20:08.953Z",
+        "recordRelPath": "records/0.92.0/2026-08-15T08-19-52-693Z/confinement.json",
+        "contentSha256": "d449b75e71cb75075bab345baaa4bf8ab5f37ba3d0e9254f681f0bef4786d387"
+      }
+    },
+    "0.93.1": {
+      "mutationEvidence": {
+        "workspace:create": {
+          "recordedAt": "2026-08-19T04:09:55.258Z",
+          "recordRelPath": "records/0.93.1/2026-08-19T04-09-54-769Z/workspace:create.json",
+          "contentSha256": "c70a9e918df82997bb7ee8573b868bcdeb79bb445e72ce96bbeb72df04c126f9"
+        },
+        "threads:openThread": {
+          "recordedAt": "2026-08-19T04:09:55.276Z",
+          "recordRelPath": "records/0.93.1/2026-08-19T04-09-54-769Z/threads:openThread.json",
+          "contentSha256": "31b9f8df1e5d19201a843c8973936894b393f6b57211431813d875f19a32cd45"
+        },
+        "threads:send": {
+          "recordedAt": "2026-08-19T04:09:55.414Z",
+          "recordRelPath": "records/0.93.1/2026-08-19T04-09-54-769Z/threads:send.json",
+          "contentSha256": "3229679f8bf41458bdc7b7e8f3fad103048db763efc01512d95c72daa5eded65"
+        },
+        "threads:stop": {
+          "recordedAt": "2026-08-19T04:10:07.329Z",
+          "recordRelPath": "records/0.93.1/2026-08-19T04-09-54-769Z/threads:stop.json",
+          "contentSha256": "4bf4790ccfe8d94042e6d167d7ead0db527df8efb5a6d3a303b957823f68a473"
+        },
+        "threads:archiveThread": {
+          "recordedAt": "2026-08-19T04:10:10.356Z",
+          "recordRelPath": "records/0.93.1/2026-08-19T04-09-54-769Z/threads:archiveThread.json",
+          "contentSha256": "4da43e7852940f9d5b3cc027a4309b42d07bec410221944f55f54bc28df05cfd"
+        },
+        "workspace:delete": {
+          "recordedAt": "2026-08-19T04:10:10.592Z",
+          "recordRelPath": "records/0.93.1/2026-08-19T04-09-54-769Z/workspace:delete.json",
+          "contentSha256": "5ecc0dc0ee08e440024a8a36e9f6b25873a7c6f8384aaf6dd06d5dac2580b2e7"
+        }
+      },
+      "confinement": {
+        "recordedAt": "2026-08-19T04:10:10.331Z",
+        "recordRelPath": "records/0.93.1/2026-08-19T04-09-54-769Z/confinement.json",
+        "contentSha256": "3bf8acd616758590ab9e820cc75566ec27517e87f2fdc2c3b88607bb5dafdbc7"
+      }
+    },
+    "0.94.0": {
+      "mutationEvidence": {
+        "workspace:create": {
+          "recordedAt": "2026-08-20T16:17:05.223Z",
+          "recordRelPath": "records/0.94.0/2026-08-20T16-17-04-891Z/workspace:create.json",
+          "contentSha256": "6818448aa721f71f256c96dc9b9f67aa9af0d672a2170e10b6831586acba4bcd"
+        },
+        "threads:openThread": {
+          "recordedAt": "2026-08-20T16:17:05.228Z",
+          "recordRelPath": "records/0.94.0/2026-08-20T16-17-04-891Z/threads:openThread.json",
+          "contentSha256": "d006609a10c056ee3ebac2bf3db7675b333641c824eb6a5b057e48ba44f0c3a8"
+        },
+        "threads:send": {
+          "recordedAt": "2026-08-20T16:17:07.001Z",
+          "recordRelPath": "records/0.94.0/2026-08-20T16-17-04-891Z/threads:send.json",
+          "contentSha256": "a80ab97c0e75ed6ab4ace1d4cb8b181d7b9a21c95f7b981dddefa447ab2df4c2"
+        },
+        "threads:stop": {
+          "recordedAt": "2026-08-20T16:17:18.433Z",
+          "recordRelPath": "records/0.94.0/2026-08-20T16-17-04-891Z/threads:stop.json",
+          "contentSha256": "4633322e9245c9f689d1efef8ba30c48920c0ece6e80aa40caa2e96f58a63dda"
+        },
+        "threads:archiveThread": {
+          "recordedAt": "2026-08-20T16:17:21.475Z",
+          "recordRelPath": "records/0.94.0/2026-08-20T16-17-04-891Z/threads:archiveThread.json",
+          "contentSha256": "b07f8293e3ec4eed9a957c0e09a40178a2d3f6fc2ed9dfc2b6f12d133c1046fd"
+        },
+        "workspace:delete": {
+          "recordedAt": "2026-08-20T16:17:21.785Z",
+          "recordRelPath": "records/0.94.0/2026-08-20T16-17-04-891Z/workspace:delete.json",
+          "contentSha256": "bb9e9a1d96d57e445d781732ad564d0fa71f070d01882aab72d64578cc73ef1d"
+        }
+      },
+      "confinement": {
+        "recordedAt": "2026-08-20T16:17:21.436Z",
+        "recordRelPath": "records/0.94.0/2026-08-20T16-17-04-891Z/confinement.json",
+        "contentSha256": "2870267539eb9612c08d51b158bbc0f8be16e2c831c26743224cfb56eb6dbf73"
+      }
+    },
+    "0.101.0": {
+      "mutationEvidence": {
+        "workspace:create": {
+          "recordedAt": "2026-08-27T16:27:33.885Z",
+          "recordRelPath": "records/0.101.0/2026-08-27T16-27-32-783Z/workspace:create.json",
+          "contentSha256": "12ad9aec3a82b8f5a8d078e0f6ca1917b08e06a39d8ab68f228134924268fd4c"
+        },
+        "threads:openThread": {
+          "recordedAt": "2026-08-27T16:27:33.888Z",
+          "recordRelPath": "records/0.101.0/2026-08-27T16-27-32-783Z/threads:openThread.json",
+          "contentSha256": "fbac5640d99bb75ce4e38fa050b23c008c8a2596cbe9f34014491cfbe8fb9aa9"
+        },
+        "threads:send": {
+          "recordedAt": "2026-08-27T16:27:35.215Z",
+          "recordRelPath": "records/0.101.0/2026-08-27T16-27-32-783Z/threads:send.json",
+          "contentSha256": "9d3defab4fc2c565f4f220b093b2c63733873e3401a06d79d36a631f1996701d"
+        },
+        "threads:stop": {
+          "recordedAt": "2026-08-27T16:27:47.905Z",
+          "recordRelPath": "records/0.101.0/2026-08-27T16-27-32-783Z/threads:stop.json",
+          "contentSha256": "a8c61703af53ad86d5024b96851bee0dedec13e9d7d4d3d79cbea661196e7dca"
+        },
+        "threads:archiveThread": {
+          "recordedAt": "2026-08-27T16:28:00.245Z",
+          "recordRelPath": "records/0.101.0/2026-08-27T16-27-32-783Z/threads:archiveThread.json",
+          "contentSha256": "45cffcbb11549392e80aa8f210543f85a3f278e4de377980aadbca3cdd1b0080"
+        },
+        "workspace:delete": {
+          "recordedAt": "2026-08-27T16:28:00.486Z",
+          "recordRelPath": "records/0.101.0/2026-08-27T16-27-32-783Z/workspace:delete.json",
+          "contentSha256": "2b52e3fe80f13a623c5572728d24758f70cd063790516a525d0521130eab6b64"
+        }
+      },
+      "confinement": {
+        "recordedAt": "2026-08-27T16:27:50.906Z",
+        "recordRelPath": "records/0.101.0/2026-08-27T16-27-32-783Z/confinement.json",
+        "contentSha256": "0e5dad2e27de0122b740dee3dee09d9c8f6ac86b50d301941a54ec74a9486a3c"
+      }
+    }
+  }
+}
