@@ -83,12 +83,13 @@
 #                          the oldest valid row in an endpoint-recorded local
 #                          secondmate home's durable wake queue stayed unmoved at
 #                          the head of that queue for FM_SECONDMATE_WAKE_STALL_SECS
-#                          measured from when it reached the head, so the mate's
-#                          wake loop made no progress at all rather than merely
-#                          carrying a backlog whose tail row is old; the reported
-#                          age is the row's own age, which is at least that
-#                          window. Observation is read-only and one parent receipt
-#                          suppresses repeats for that row
+#                          measured from when it reached the head, with no exact
+#                          live-busy verdict inside BUSY_TURN_MAX_SECS of that first
+#                          sighting, so a healthy long handling turn is exempt but
+#                          a non-busy or over-age busy loop still alarms; the
+#                          reported age is the row's own age, which is at least
+#                          the stall window. Observation is read-only and one
+#                          parent receipt suppresses repeats for that row
 #   refill: ...            advisory fleet refill after a capacity-freeing lifecycle
 #                          transition (status done/failed/blocked/paused/
 #                          needs-decision/resolved, merged PR poll, or teardown);
@@ -239,10 +240,11 @@ BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-3600}
 # A local secondmate's foreign queue is checked on every poll, but only after its
 # oldest row has stayed unmoved at the head of that queue for this long - measured
 # from when it reached the head, not from when it was queued - can it produce a
-# parent notification. Set above a normal per-wake handling turn: a mate that
-# drains one row per turn is healthy, and only a loop that moves nothing for this
-# long is stalled. Zero or invalid values fall back to this same default rather
-# than to a shorter window that would reintroduce the false alarms.
+# parent notification unless the busy contract proves the mate's endpoint is
+# alive and still handling that row. Set above a normal per-wake handling turn:
+# a mate that drains one row per turn is healthy, and only a loop that moves
+# nothing for this long is stalled. Zero or invalid values fall back to this same
+# default rather than to a shorter window that would reintroduce false alarms.
 SECONDMATE_WAKE_STALL_SECS=${FM_SECONDMATE_WAKE_STALL_SECS:-300}
 # A crew that declared a pause is idling on a known external wait, so its stale
 # pane is absorbed rather than wedge-escalated.
@@ -648,12 +650,13 @@ secondmate_oldest_queue_row() {  # <queue-path>
 }
 
 # Surface one durable parent check for one unchanged foreign row after its
-# bounded age. The primary marker and queued-key check make repeated watcher
-# cycles converge without a notification storm, while an empty queue removes
-# only this home's marker so a later row can be observed.
+# bounded age unless the semantic busy contract proves a bounded handling turn.
+# The primary marker and queued-key check make repeated watcher cycles converge
+# without a notification storm, while an empty queue removes only this home's
+# marker so a later row can be observed.
 secondmate_wake_stall_tick() {
   local now=$(( $(date +%s) )) threshold=$SECONDMATE_WAKE_STALL_SECS
-  local meta task kind remote_host home queue row epoch seq row_key marker receipt receipt_dir notify_key queued age reason
+  local meta task kind remote_host home queue row epoch seq row_key marker marker_age receipt receipt_dir notify_key queued age reason target backend harness verdict
   case "$threshold" in ''|*[!0-9]*|0) threshold=300 ;; esac
   # Endpoint metadata admits this queue-loop check; secondmate-liveness owns registered mates whose endpoint is missing or dead.
   for meta in "$STATE"/*.meta; do
@@ -699,17 +702,31 @@ EOF
     # progress instead of the queue's depth. The marker records the row currently
     # at the head and when it got there; a mate that drains anything replaces it
     # and restarts the window, while a genuinely stalled loop leaves it untouched
-    # and still alarms. It is recorded on FIRST SIGHT, before any age test, so
-    # the window always starts when the row reached the head: gating the record
-    # on the row's age too would make a stall that begins with an empty queue
-    # take two full windows to surface instead of one. The receipt (written
-    # before any publication, and by the drain's acknowledgement commit) remains
-    # the durable one-shot record.
+    # and still alarms after any bounded busy exemption. It is recorded on FIRST
+    # SIGHT, before any age test, so the window always starts when the row reached
+    # the head: gating the record on the row's age too would make a stall that
+    # begins with an empty queue take two full windows to surface instead of one.
+    # The receipt (written before any publication, and by the drain's
+    # acknowledgement commit) remains the durable one-shot record.
     if [ "$(cat "$marker" 2>/dev/null || true)" != "$row_key" ]; then
       fm_wake_secondmate_stall_marker_write "$task" "$row_key" || return 1
       continue
     fi
-    [ "$(age_of "$marker")" -ge "$threshold" ] || continue
+    marker_age=$(age_of "$marker")
+    [ "$marker_age" -ge "$threshold" ] || continue
+    # An exact live semantic busy verdict proves the unchanged row is owned by
+    # the turn still handling it, so head persistence alone is not a stall. Keep
+    # the marker anchored to first sight rather than resetting it while busy:
+    # once that same observation reaches BUSY_TURN_MAX_SECS, the exemption ends
+    # and a genuinely wedged busy turn takes the normal alarm path. Idle,
+    # unknown, and dead verdicts are never promoted to liveness by this gate.
+    target=$(fm_backend_target_of_meta "$meta")
+    backend=$(fm_backend_of_meta "$meta")
+    harness=$(fm_meta_get "$meta" harness)
+    verdict=$(fm_busy_classify_live "$backend" "$target" "$harness" "$task" "$STATE" "fm-$task")
+    if [ "$marker_age" -lt "$BUSY_TURN_MAX_SECS" ] && [ "${verdict%% *}" = busy ]; then
+      continue
+    fi
     [ "$(cat "$receipt" 2>/dev/null || true)" = "$row_key" ] && continue
     notify_key="secondmate-wake-loop-$task-$row_key"
     reason="check: secondmate wake-loop stalled: mate=$task row=$seq age=${age}s"
