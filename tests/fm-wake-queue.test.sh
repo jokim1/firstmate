@@ -476,11 +476,164 @@ test_fresh_head_row_alarms_after_one_window() {
   pass "a stall that begins with an empty queue surfaces after one window, not two"
 }
 
+# Give the busy-stall fixtures an endpoint whose existence can be toggled
+# independently from their semantic writer record.
+configure_secondmate_busy_tmux() {  # <fakebin>
+  cat > "$1/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list-windows)
+    [ "${FM_FAKE_TMUX_TARGET_EXISTS:-1}" = 1 ] \
+      && printf '%s\n' "${FM_FAKE_TMUX_WINDOW#*:}"
+    ;;
+  capture-pane)
+    [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ] && cat "$FM_FAKE_TMUX_CAPTURE"
+    ;;
+  display-message)
+    case "$*" in
+      *pane_current_command*) printf 'pi\n' ;;
+      *pane_id*) [ "${FM_FAKE_TMUX_TARGET_EXISTS:-1}" = 1 ] && printf '$0\n' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$1/tmux"
+}
+
+# A head row can stay unchanged because its secondmate is still handling that
+# exact wake in one long turn. The semantic busy contract is positive ownership
+# evidence for that interval: crossing the shorter queue-stall window must stay
+# quiet, while the same unchanged row must alarm as soon as the pane is no longer
+# provably busy.
+test_busy_secondmate_long_turn_is_not_a_wake_loop_stall() {
+  local dir state sub fakebin epoch marker gen
+  dir=$(make_case secondmate-busy-long-turn)
+  state="$dir/state"
+  sub="$dir/secondmate"
+  mkdir -p "$sub/state" "$sub/data"
+  printf 'mate\n' > "$sub/.fm-secondmate-home"
+  printf 'window=firstmate:fm-mate\nkind=secondmate\nharness=pi\nbackend=tmux\nhome=%s\n' \
+    "$sub" > "$state/mate.meta"
+  epoch=$(( $(date +%s) - 600 ))
+  printf '%s\t7\tcheck\trouted\tcheck: routed row\n' "$epoch" > "$sub/state/.wake-queue"
+  marker="$state/.secondmate-wake-stall-mate"
+  printf '%s' "$epoch-7" > "$marker"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" mate) \
+    || fail "could not arm the busy secondmate fixture"
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" mate busy --gen "$gen" \
+    --source pi-ext --event agent-start \
+    || fail "could not record the busy secondmate turn"
+  fakebin="$dir/fakebin"
+  configure_secondmate_busy_tmux "$fakebin"
+
+  FM_BUSY_TURN_MAX_SECS=60 run_stall_checkpoint "$dir" "$state" "$fakebin" busy 3 1
+  ! grep -F 'secondmate wake-loop stalled' "$dir/watch-busy.out" >/dev/null \
+    || fail "a provably busy long secondmate turn was alarmed as a stalled wake loop"
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "a provably busy long secondmate turn queued a durable stall notification"
+
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" mate idle --gen "$gen" \
+    --source pi-ext --event agent-settled \
+    || fail "could not settle the busy secondmate fixture"
+  FM_BUSY_TURN_MAX_SECS=60 run_stall_checkpoint "$dir" "$state" "$fakebin" idle 2 1
+  grep -F 'check: secondmate wake-loop stalled: mate=mate row=7' "$dir/watch-idle.out" >/dev/null \
+    || fail "the unchanged row stopped alarming when its secondmate was no longer busy"
+  pass "a long busy secondmate turn is exempt, while the same non-busy stalled row still alarms"
+}
+
+# Busy is positive liveness evidence, not an unlimited exemption. Several busy
+# polls must leave the marker anchored at first sight, then the same unchanged
+# row must alarm when that original observation reaches BUSY_TURN_MAX_SECS.
+test_busy_polls_do_not_refresh_first_sight_marker() {
+  local dir state sub fakebin epoch marker marker_mtime marker_mtime_after gen
+  dir=$(make_case secondmate-busy-first-sight-bound)
+  state="$dir/state"
+  sub="$dir/secondmate"
+  mkdir -p "$sub/state" "$sub/data"
+  printf 'mate\n' > "$sub/.fm-secondmate-home"
+  printf 'window=firstmate:fm-mate\nkind=secondmate\nharness=pi\nbackend=tmux\nhome=%s\n' \
+    "$sub" > "$state/mate.meta"
+  epoch=$(( $(date +%s) - 600 ))
+  printf '%s\t7\tcheck\trouted\tcheck: routed row\n' "$epoch" > "$sub/state/.wake-queue"
+  marker="$state/.secondmate-wake-stall-mate"
+  printf '%s' "$epoch-7" > "$marker"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" mate) \
+    || fail "could not arm the first-sight busy secondmate fixture"
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" mate busy --gen "$gen" \
+    --source pi-ext --event agent-start \
+    || fail "could not record the first-sight busy secondmate turn"
+  fakebin="$dir/fakebin"
+  configure_secondmate_busy_tmux "$fakebin"
+  if [ "$(uname)" = Darwin ]; then
+    marker_mtime=$(stat -f '%m' "$marker")
+  else
+    marker_mtime=$(stat -c '%Y' "$marker")
+  fi
+
+  FM_FAKE_TMUX_TARGET_EXISTS=1 FM_BUSY_TURN_MAX_SECS=3 \
+    run_stall_checkpoint "$dir" "$state" "$fakebin" first-sight-bound 5 1
+  if [ "$(uname)" = Darwin ]; then
+    marker_mtime_after=$(stat -f '%m' "$marker")
+  else
+    marker_mtime_after=$(stat -c '%Y' "$marker")
+  fi
+  [ "$marker_mtime_after" = "$marker_mtime" ] \
+    || fail "busy polls refreshed the unchanged row's first-sight marker"
+  grep -F 'check: secondmate wake-loop stalled: mate=mate row=7' \
+    "$dir/watch-first-sight-bound.out" >/dev/null \
+    || fail "repeated busy polls hid the unchanged row past its first-sight bound"
+  pass "busy polls preserve the first-sight marker and cannot extend its bounded exemption"
+}
+
+# A writer record has no time-to-live by design, so endpoint death must be read
+# through the busy contract's live classifier before that record can exempt a
+# stalled row. A current-generation busy record on a gone pane therefore alarms
+# at the ordinary queue-stall boundary, not at the longer busy-turn bound.
+test_dead_secondmate_busy_record_does_not_exempt_stall() {
+  local dir state sub fakebin epoch marker marker_mtime marker_age gen
+  dir=$(make_case secondmate-dead-with-busy-record)
+  state="$dir/state"
+  sub="$dir/secondmate"
+  mkdir -p "$sub/state" "$sub/data"
+  printf 'mate\n' > "$sub/.fm-secondmate-home"
+  printf 'window=firstmate:fm-mate\nkind=secondmate\nharness=pi\nbackend=tmux\nhome=%s\n' \
+    "$sub" > "$state/mate.meta"
+  epoch=$(( $(date +%s) - 600 ))
+  printf '%s\t7\tcheck\trouted\tcheck: routed row\n' "$epoch" > "$sub/state/.wake-queue"
+  marker="$state/.secondmate-wake-stall-mate"
+  printf '%s' "$epoch-7" > "$marker"
+  touch -t 200001010000 "$marker"
+  if [ "$(uname)" = Darwin ]; then
+    marker_mtime=$(stat -f '%m' "$marker")
+  else
+    marker_mtime=$(stat -c '%Y' "$marker")
+  fi
+  marker_age=$(( $(date +%s) - marker_mtime ))
+  [ "$marker_age" -ge 1 ] && [ "$marker_age" -lt 4000000000 ] \
+    || fail "the dead secondmate fixture did not isolate the live verdict inside the busy bound"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" mate) \
+    || fail "could not arm the dead secondmate fixture"
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" mate busy --gen "$gen" \
+    --source pi-ext --event agent-start \
+    || fail "could not record the dead secondmate's last busy turn"
+  fakebin="$dir/fakebin"
+  configure_secondmate_busy_tmux "$fakebin"
+
+  FM_FAKE_TMUX_TARGET_EXISTS=0 FM_BUSY_TURN_MAX_SECS=4000000000 \
+    run_stall_checkpoint "$dir" "$state" "$fakebin" dead 2 1
+  grep -F 'check: secondmate wake-loop stalled: mate=mate row=7' "$dir/watch-dead.out" >/dev/null \
+    || fail "a dead secondmate's last busy record delayed the ordinary stall alarm"
+  pass "endpoint death outranks a last busy writer record at the ordinary stall boundary"
+}
+
 # One parent checkpoint over the foreign queue. Args: dir state fakebin label seconds [threshold]
 run_stall_checkpoint() {
   local dir=$1 state=$2 fakebin=$3 label=$4 seconds=$5 threshold=${6:-2}
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_WINDOW='firstmate:fm-mate' \
+    FM_FAKE_TMUX_TARGET_EXISTS="${FM_FAKE_TMUX_TARGET_EXISTS:-1}" \
     FM_FAKE_TMUX_LOG="$dir/tmux.log" FM_FAKE_TMUX_CAPTURE="$dir/fake-tmux/pane.txt" \
     FM_SECONDMATE_WAKE_STALL_SECS="$threshold" FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -1373,6 +1526,9 @@ test_self_held_lock_reclaims_instead_of_deadlocking
 test_secondmate_foreign_queue_stall_is_one_shot_and_read_only
 test_advancing_secondmate_queue_is_not_a_stall
 test_fresh_head_row_alarms_after_one_window
+test_busy_secondmate_long_turn_is_not_a_wake_loop_stall
+test_busy_polls_do_not_refresh_first_sight_marker
+test_dead_secondmate_busy_record_does_not_exempt_stall
 test_secondmate_stall_marker_rejects_symlink
 test_acknowledged_stall_publication_survives_pre_marker_crash
 test_empty_prefix_mate_preserves_other_mate_receipt
