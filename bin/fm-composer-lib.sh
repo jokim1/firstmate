@@ -291,10 +291,11 @@ fm_composer_strip_ghost() {
 # asking what a worker is doing, and the two must not be conflated.
 # Delivery-only rendered busy footers per harness. claude/codex: "esc to
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel".
-# Claude's current spinner has a rotating glyph and word, but every active-turn
-# line has an ellipsis followed by a parenthesized elapsed duration. Keep this
-# signature separate from the shared default because that shape is not generic
-# enough to classify arbitrary harness output safely.
+# Claude's current spinner has a rotating glyph and word followed by an
+# ellipsis; the elapsed duration appears only after the turn has run briefly.
+# The glyph-anchored early-turn form and the later duration form stay separate
+# from the shared default because neither shape is generic enough to classify
+# arbitrary harness output safely.
 # Kimi's anchored moon-phase spinner is separate because bare moon glyphs in
 # ordinary output must not classify another harness as busy. Leading whitespace is
 # OPTIONAL; whitespace on both sides of the separator is REQUIRED because every
@@ -312,7 +313,7 @@ fm_composer_strip_ghost() {
 # submit could never be acknowledged, because cursor parks its terminal cursor
 # outside its composer and the composer verdict is therefore always `unknown`.
 FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop'
-FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
+FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|Press up to edit queued messages|^[[:space:]]*[·✢✳✶✻✽][[:space:]]+.*…|…[[:space:]]+\([0-9]+[smh]'
 FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'

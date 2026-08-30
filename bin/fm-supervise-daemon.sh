@@ -658,16 +658,31 @@ fm_daemon_primary_harness() {
   printf '%s' "$FM_DAEMON_PRIMARY_HARNESS"
 }
 
+fm_daemon_live_footer() {
+  # Anchor rendered classification to a bounded physical footer first, then
+  # ignore blank padding inside that footer before applying the existing
+  # non-blank row cap. This keeps a real multi-row composer frame detectable
+  # without letting older chrome above the footer pin the pane busy.
+  tail -16 | sed '/^[[:space:]]*$/d' | tail -12
+}
+
 pane_is_busy() {  # <target> [backend]
-  local target=$1 backend=${2:-tmux} native tail40 harness
+  local target=$1 backend=${2:-tmux} native footer harness
+  FM_DAEMON_BUSY_NATIVE=unknown
+  FM_DAEMON_BUSY_RENDERED=miss
   harness=$(fm_daemon_primary_harness)
   native=$(fm_backend_busy_state "$backend" "$target" 2>/dev/null)
   case "$native" in
-    busy) return 0 ;;
+    busy) FM_DAEMON_BUSY_NATIVE=busy; FM_DAEMON_BUSY_RENDERED=skipped; return 0 ;;
+    idle) FM_DAEMON_BUSY_NATIVE=idle ;;
+    *) FM_DAEMON_BUSY_NATIVE=unknown ;;
   esac
-  tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
-  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 \
-    | fm_busy_lines_match "$harness"
+  footer=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
+  if printf '%s' "$footer" | fm_daemon_live_footer | fm_busy_lines_match "$harness"; then
+    FM_DAEMON_BUSY_RENDERED=match
+    return 0
+  fi
+  return 1
 }
 
 # pane_input_pending dispatches through fm_backend_composer_state and treats
@@ -1255,8 +1270,10 @@ inject_msg() {  # <message> [state]
   backend="${FM_SUPERVISOR_BACKEND:-tmux}"
   fm_backend_target_exists "$backend" "$target" || return 1
   # (3) Busy-guard: never inject into an in-use supervisor pane.
+  FM_DAEMON_BUSY_NATIVE=unknown
+  FM_DAEMON_BUSY_RENDERED=miss
   if pane_is_busy "$target" "$backend"; then
-    log "inject deferred: supervisor pane busy (agent mid-turn)"
+    log "inject deferred: supervisor pane busy (agent mid-turn; native=$FM_DAEMON_BUSY_NATIVE rendered=$FM_DAEMON_BUSY_RENDERED)"
     return 1
   fi
   #   b) Composer-guard: inject ONLY into a confirmed-empty GENUINE agent
