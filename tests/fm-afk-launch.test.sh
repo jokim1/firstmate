@@ -483,43 +483,57 @@ unit_tmux_absence_distinguishes_probe_failure() {
   rm -rf "$st"
 }
 
-unit_native_lifecycle() {
+unit_native_lifecycle_is_retired() {
   local st
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-native.XXXXXX")
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
-  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native >/dev/null 2>&1 \
-    && [ "$(cut -f1 "$st/state/.afk-daemon-terminal")" = none ] \
-    && [ -e "$st/state/.afk" ] \
-    && [ ! -e "$st/state/.subsuper-escalations" ]; then
-    pass "native lifecycle: launcher owns state with no terminal"
+  if ! FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native >/dev/null 2>&1 \
+    && [ ! -e "$st/state/.afk-daemon-terminal" ] \
+    && [ ! -e "$st/state/.afk" ] \
+    && [ -e "$st/state/.subsuper-escalations" ]; then
+    pass "native lifecycle: retired start-native command cannot prepare in-pane hosting"
   else
-    fail "native lifecycle: state preparation or no-terminal record failed"
-  fi
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop >/dev/null 2>&1
-  if [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ]; then
-    pass "native lifecycle: uniform stop clears state without closing a terminal"
-  else
-    fail "native lifecycle: uniform stop retained state"
+    fail "native lifecycle: retired start-native command mutated lifecycle state"
   fi
   rm -rf "$st"
 }
 
-unit_native_entry_preserves_prepared_state() {
+unit_native_entry_is_retired() {
   local st
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-native-entry.XXXXXX")
   mkdir -p "$st/state"
   : > "$st/state/.afk"
   : > "$st/state/.subsuper-escalations"
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_AFK_STATE_PREPARED=1 bash -c '
+  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
+    FM_AFK_LAUNCH_PROVENANCE=separate-terminal FM_AFK_STATE_PREPARED=1 bash -c '
     . "$1"
     FM_AFK_DAEMON=/bin/true
-    fm_afk_start_main
-  ' _ "$START" >/dev/null 2>&1
-  if [ -e "$st/state/.afk" ] && [ -e "$st/state/.subsuper-escalations" ]; then
-    pass "native entry: launcher-prepared lifecycle state is not rewritten"
+    ! fm_afk_start_main
+  ' _ "$START" >/dev/null 2>&1 \
+    && [ -e "$st/state/.afk" ] && [ -e "$st/state/.subsuper-escalations" ]; then
+    pass "native entry: retired prepared-state path refuses without mutation"
   else
-    fail "native entry: launcher-prepared lifecycle state was mutated"
+    fail "native entry: retired prepared-state path ran or mutated lifecycle state"
+  fi
+  rm -rf "$st"
+}
+
+unit_direct_entry_without_launcher_provenance_is_retired() {
+  local st out status
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-direct-entry.XXXXXX")
+  mkdir -p "$st/state"
+  : > "$st/state/.subsuper-escalations"
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
+    FM_SUPERVISOR_BACKEND=unsupported "$START" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] \
+    && printf '%s\n' "$out" | grep -F 'direct or native in-pane startup is retired' >/dev/null \
+    && [ ! -e "$st/state/.afk" ] \
+    && [ -e "$st/state/.subsuper-escalations" ]; then
+    pass "direct entry: missing launcher provenance refuses before lifecycle mutation"
+  else
+    fail "direct entry: missing launcher provenance started or mutated away mode ($out)"
   fi
   rm -rf "$st"
 }
@@ -743,7 +757,7 @@ unit_refresh_validates_record() {
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET=unused \
     FM_SUPERVISOR_BACKEND=tmux bash -c '
       . "$1"
-      ! fm_afk_launch_start && ! fm_afk_launch_start_native
+      ! fm_afk_launch_start
     ' _ "$LAUNCH" && [ ! -e "$st/state/.afk" ]; then
     pass "refresh record: malformed terminal identity fails closed"
   else
@@ -759,15 +773,16 @@ unit_clear_failure_aborts_entry() {
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-clear-fail.XXXXXX")
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
-  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
+  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET=unused \
+    FM_SUPERVISOR_BACKEND=tmux bash -c '
     . "$1"
     fm_afk_launch_reconcile() { return 0; }
     fm_afk_clear_stale_artifacts() { return 1; }
-    ! fm_afk_launch_start_native
+    ! fm_afk_launch_start
   ' _ "$LAUNCH" && [ ! -e "$st/state/.afk" ] && [ -e "$st/state/.subsuper-escalations" ]; then
-    pass "clear failure: native entry aborts and restores prior state"
+    pass "clear failure: terminal entry aborts and restores prior state"
   else
-    fail "clear failure: native entry proceeded or lost prior state"
+    fail "clear failure: terminal entry proceeded or lost prior state"
   fi
   rm -rf "$st"
 }
@@ -812,10 +827,11 @@ unit_flag_write_failure_aborts() {
   local st
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-flag-fail.XXXXXX")
   mkdir -p "$st/state"
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET=unused \
+    FM_SUPERVISOR_BACKEND=tmux bash -c '
     . "$1"
     fm_afk_launch_flag_write() { return 1; }
-    ! fm_afk_launch_start_native
+    ! fm_afk_launch_start
   ' _ "$LAUNCH"
   if [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ]; then
     pass "flag failure: lifecycle aborts without active state"
@@ -939,8 +955,9 @@ unit_record_failure_closes_terminal
 unit_readiness_failure_rolls_back_terminal
 unit_readiness_failure_preserves_unconfirmed_record
 unit_tmux_absence_distinguishes_probe_failure
-unit_native_lifecycle
-unit_native_entry_preserves_prepared_state
+unit_native_lifecycle_is_retired
+unit_native_entry_is_retired
+unit_direct_entry_without_launcher_provenance_is_retired
 unit_close_failure_preserves_record
 unit_record_publication_atomic
 unit_malformed_record_fails_closed

@@ -274,6 +274,10 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   printf '✽ Proofing… (5s · thinking with high effort)\n' > "$composer"
   pane_busy live claude || fail "Claude capture 2 should be busy"
 
+  # Live Claude 2.1.251 capture: the early spinner has no elapsed duration yet.
+  printf '✶ Mustering…\n' > "$composer"
+  pane_busy live claude || fail "Claude early-turn spinner should be busy before its duration appears"
+
   # Real idle Claude capture shape from the verified pane sample.
   printf '✻ Worked for 31s\n' > "$composer"
   pane_busy idle claude && fail "Claude Worked-for capture must be idle"

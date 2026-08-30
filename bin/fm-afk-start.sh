@@ -3,30 +3,26 @@
 # foreground process when one is not already alive.
 #
 # Usage: fm-afk-start.sh
-#   Sets state/.afk unless FM_AFK_STATE_PREPARED=1, checks
+#   Internal entry; requires FM_AFK_LAUNCH_PROVENANCE=separate-terminal.
+#   Sets state/.afk, checks
 #   state/.supervise-daemon.lock, and:
 #     - prints "afk: daemon already running pid=<pid>" then exits 0 when that
 #       lock is held by a live daemon (a REFRESH: no stale-artifact clear);
 #     - otherwise clears any prior away session's stale escalation artifacts
-#       (fm_afk_clear_stale_artifacts) for a direct, non-prepared start, then
-#       execs bin/fm-supervise-daemon.sh in the foreground. A prepared start was
-#       already cleared transactionally by bin/fm-afk-launch.sh.
+#       (fm_afk_clear_stale_artifacts) for a fresh start, then
+#       execs bin/fm-supervise-daemon.sh in the foreground.
 #
 # This file is sourceable: its BASH_SOURCE guard keeps main from running, while
 # exposing the daemon-lock helpers and fm_afk_clear_stale_artifacts. Sourcing it
 # enables nounset and errexit; callers that need different shell options must
 # restore them explicitly.
 #
-# This is the COMMON daemon entry for every backend. HOW it becomes a tracked
-# background process differs by harness/backend and is owned elsewhere:
-#   - Harnesses with a native in-pane tracked-background tool (e.g. claude, grok)
-#     run this directly via that tool, so the daemon inherits the captain pane's
-#     env and auto-discovers it.
-#   - Harnesses with NO native background mechanism (e.g. pi) run this THROUGH
-#     bin/fm-afk-launch.sh, which creates a non-visible tracked terminal per
-#     backend (herdr tab/workspace, tmux detached session) and passes the
-#     captain pane in as FM_SUPERVISOR_TARGET so injection targets it, not the
-#     daemon's own new pane.
+# This is the COMMON daemon entry for every backend. bin/fm-afk-launch.sh runs
+# it in a non-visible tracked terminal per backend (Herdr workspace or detached
+# tmux session) and passes the captain pane in as FM_SUPERVISOR_TARGET so
+# injection targets it, not the daemon's own pane.
+# It also sets FM_AFK_LAUNCH_PROVENANCE=separate-terminal; this entry refuses
+# before mutating state when that launcher-only provenance is absent.
 # Do not wrap this in `nohup ... &`: Codex/herdr can reap fire-and-forget shell
 # children after the tool call returns, while a tracked background terminal stays
 # attached and has a real lifecycle.
@@ -137,12 +133,14 @@ fm_afk_start_main() {
     * ) echo "usage: $(basename "${BASH_SOURCE[1]:-fm-afk-start.sh}")" >&2; return 2 ;;
   esac
 
-  mkdir -p "$FM_AFK_STATE"
-  if [ "${FM_AFK_STATE_PREPARED:-0}" = 1 ]; then
-    [ -f "$FM_AFK_STATE/.afk" ] || { echo "afk: launcher-prepared state is missing" >&2; return 1; }
-  else
-    fm_afk_flag_write "$FM_AFK_STATE" || { echo "afk: failed to write away-mode flag" >&2; return 1; }
+  if [ "${FM_AFK_LAUNCH_PROVENANCE:-}" != separate-terminal ] \
+    || [ "${FM_AFK_STATE_PREPARED:-0}" = 1 ]; then
+    echo "afk: direct or native in-pane startup is retired; use bin/fm-afk-launch.sh start" >&2
+    return 1
   fi
+
+  mkdir -p "$FM_AFK_STATE"
+  fm_afk_flag_write "$FM_AFK_STATE" || { echo "afk: failed to write away-mode flag" >&2; return 1; }
 
   local pid
   pid=$(daemon_lock_pid 2>/dev/null || true)
@@ -157,11 +155,9 @@ fm_afk_start_main() {
 
   # Fresh start: clear the previous away session's stale delivery artifacts
   # before the new daemon can surface them (fix for the leaked-artifact defect).
-  if [ "${FM_AFK_STATE_PREPARED:-0}" != 1 ]; then
-    fm_afk_clear_stale_artifacts "$FM_AFK_STATE"
-  fi
+  fm_afk_clear_stale_artifacts "$FM_AFK_STATE"
 
-  echo "afk: starting supervise daemon in foreground; keep this command as a tracked background session"
+  echo "afk: starting supervise daemon in launcher-owned foreground terminal"
   exec "$FM_AFK_DAEMON"
 }
 

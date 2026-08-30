@@ -31,7 +31,8 @@ test_afk_start_refuses_when_flag_cannot_be_written() {
   state="$dir/state"
   mkdir -p "$state/.afk"
 
-  out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=unsupported "$AFK_START" 2>&1)
+  out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=unsupported \
+    FM_AFK_LAUNCH_PROVENANCE=separate-terminal "$AFK_START" 2>&1)
   status=$?
 
   [ "$status" -ne 0 ] || fail "fm-afk-start.sh should fail when state/.afk cannot be written"
@@ -46,7 +47,8 @@ test_afk_start_ignores_stale_pidfile_without_lock() {
   state="$dir/state"
   printf '%s\n' "$$" > "$state/.supervise-daemon.pid"
 
-  out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=unsupported "$AFK_START" 2>&1)
+  out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=unsupported \
+    FM_AFK_LAUNCH_PROVENANCE=separate-terminal "$AFK_START" 2>&1)
   status=$?
 
   [ "$status" -ne 0 ] || fail "fm-afk-start.sh should attempt daemon startup instead of trusting a pidfile-only live pid"
@@ -66,7 +68,8 @@ test_afk_start_reclaims_stale_daemon_lock_reused_pid() {
   printf '%s\n' "$$" > "$lock/pid"
   printf '%s\n' "stale daemon identity" > "$lock/pid-identity"
 
-  out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=unsupported "$AFK_START" 2>&1)
+  out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=unsupported \
+    FM_AFK_LAUNCH_PROVENANCE=separate-terminal "$AFK_START" 2>&1)
   status=$?
 
   [ "$status" -ne 0 ] || fail "fm-afk-start.sh should attempt daemon startup after rejecting a reused-pid lock"
@@ -1828,6 +1831,120 @@ test_pane_is_busy_herdr_native_busy_state() {
   pass "pane_is_busy: herdr native busy_state='busy' short-circuits without a capture fallback"
 }
 
+test_pane_is_busy_keeps_native_and_live_footer_independent() {
+  (
+    local dir socket session fakebin fixture real_tmux target native_pid capture state log shape i
+    dir=$(make_supercase pane-busy-independent-signals)
+    socket="fm-daemon-busy-$$-$RANDOM"
+    session=busyfooter
+    fakebin="$dir/fakebin"
+    fixture="$dir/footer-fixture.sh"
+    state="$dir/state"
+    log="$dir/inject.log"
+    real_tmux=$(command -v tmux) || fail "tmux is required for the portable busy-footer regression"
+    mkdir -p "$fakebin"
+    cat > "$fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+exec "$real_tmux" -L "$socket" "\$@"
+EOF
+    chmod +x "$fakebin/tmux"
+    cat > "$fixture" <<'EOF'
+#!/usr/bin/env bash
+mode=${1:-beyond}
+shape=${2:-Pollinating}
+case "$mode" in
+  edge) row=15 ;;
+  beyond) row=14 ;;
+  *) exit 2 ;;
+esac
+printf '\033[2J\033[H'
+printf '\033[%s;1H%s' "$row" "$shape"
+printf '\033[17;1H╭────────────╮'
+printf '\033[18;1H│ >          │'
+printf '\033[19;1H╰────────────╯'
+printf '\033[20;1H? for shortcuts'
+printf '\033[30;1Hstatus footer'
+exec sleep 120
+EOF
+    chmod +x "$fixture"
+    # shellcheck disable=SC2030 # The private tmux PATH exists only inside this deliberate subshell.
+    PATH="$fakebin:$PATH"
+    export PATH
+    trap 'kill "${native_pid:-}" 2>/dev/null || true; wait "${native_pid:-}" 2>/dev/null || true; tmux kill-server 2>/dev/null || true' EXIT
+    tmux new-session -d -s "$session" -x 100 -y 30 \
+      "$fixture beyond 'Pollinating… (99s · ↓ 1.1k tokens)'"
+    target="$session:0.0"
+    sleep 120 &
+    native_pid=$!
+    fm_backend_busy_state() {
+      if kill -0 "$native_pid" 2>/dev/null; then printf 'busy'; else printf 'idle'; fi
+    }
+    log() { printf '%s\n' "$*" >> "$log"; }
+
+    capture=
+    for i in $(seq 1 50); do
+      capture=$(fm_backend_capture tmux "$target" 40)
+      printf '%s' "$capture" | grep -F 'status footer' >/dev/null \
+        && printf '%s' "$capture" | grep -F 'Pollinating… (99s · ↓ 1.1k tokens)' >/dev/null \
+        && break
+      sleep 0.05
+    done
+    printf '%s' "$capture" | grep -F 'Pollinating… (99s · ↓ 1.1k tokens)' >/dev/null \
+      || fail "real tmux pane did not render the just-beyond-footer Claude spinner fixture"
+    printf '%s' "$capture" | grep -v '^[[:space:]]*$' | tail -12 | fm_busy_lines_match claude \
+      || fail "the just-beyond-footer Claude spinner did not exercise the old unbounded non-blank fold"
+    if printf '%s' "$capture" | fm_daemon_live_footer | fm_busy_lines_match claude; then
+      fail "the just-beyond-footer Claude spinner leaked into the bounded live footer"
+    fi
+    pane_is_busy "$target" tmux || fail "native busy must carry the verdict when the rendered live footer misses"
+    [ "$FM_DAEMON_BUSY_NATIVE" = busy ] && [ "$FM_DAEMON_BUSY_RENDERED" = skipped ] \
+      || fail "native-only branch was not diagnosed: native=$FM_DAEMON_BUSY_NATIVE rendered=$FM_DAEMON_BUSY_RENDERED"
+    afk_enter "$state"
+    if FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="$target" inject_msg native-only "$state"; then
+      fail "native-only busy pane accepted an injection"
+    fi
+    grep -F 'native=busy rendered=skipped' "$log" >/dev/null \
+      || fail "native-only defer log omitted its branch verdict"
+
+    kill "$native_pid"
+    wait "$native_pid" 2>/dev/null || true
+    kill -0 "$native_pid" 2>/dev/null && fail "native process signal did not actually clear"
+    if pane_is_busy "$target" tmux; then
+      fail "a spinner one physical row beyond the footer pinned the pane busy after the native signal cleared"
+    fi
+
+    for shape in \
+      'Pollinating… (16s · ↓ 1.1k tokens)' \
+      'Proofing… (5s · ↓ 234 tokens)' \
+      'Sock-hopping… (11s · ↓ 234 tokens)' \
+      '✶ Mustering…' \
+      'Press up to edit queued messages'; do
+      tmux respawn-pane -k -t "$target" "$fixture edge '$shape'"
+      capture=
+      for i in $(seq 1 50); do
+        capture=$(fm_backend_capture tmux "$target" 40)
+        printf '%s' "$capture" | grep -F "$shape" >/dev/null \
+          && printf '%s' "$capture" | grep -F 'status footer' >/dev/null \
+          && break
+        sleep 0.05
+      done
+      printf '%s' "$capture" | grep -F "$shape" >/dev/null \
+        || fail "real tmux pane did not render the edge-positioned live Claude footer: $shape"
+      pane_is_busy "$target" tmux \
+        || fail "live Claude footer at the bottom-sixteen boundary stopped carrying rendered busy: $shape"
+      [ "$FM_DAEMON_BUSY_NATIVE" = idle ] && [ "$FM_DAEMON_BUSY_RENDERED" = match ] \
+        || fail "rendered-only branch was not diagnosed: native=$FM_DAEMON_BUSY_NATIVE rendered=$FM_DAEMON_BUSY_RENDERED"
+    done
+    : > "$log"
+    if FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="$target" inject_msg rendered-only "$state"; then
+      fail "rendered-only busy pane accepted an injection"
+    fi
+    grep -F 'native=idle rendered=match' "$log" >/dev/null \
+      || fail "rendered-only defer log omitted its branch verdict"
+    pass "pane_is_busy: real process and blank-tolerant bottom-sixteen footer independently preserve busy at the pinned boundary"
+  ) || fail "portable independent busy-signal regression failed"
+}
+
 test_primary_busy_guard_is_harness_scoped() {
   (
     fm_backend_busy_state() { printf 'unknown'; }
@@ -1846,6 +1963,7 @@ test_pane_is_busy_defaults_to_tmux_when_backend_omitted() {
   dir=$(make_supercase busy-default-backend)
   fakebin="$dir/fakebin"; capture="$dir/pane.txt"
   printf 'Ctrl+c:cancel\n' > "$capture"
+  # shellcheck disable=SC2031 # The prior PATH assignment was confined to an already-completed test subshell.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=grok pane_is_busy "fakepane" \
     || fail "pane_is_busy with no backend arg should still default to tmux"
   pass "pane_is_busy: omitted backend defaults to tmux for Grok's isolated fallback"
@@ -2075,6 +2193,7 @@ test_fm_send_exits_nonzero_on_unproven_submit
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_target_herdr
 test_pane_is_busy_herdr_native_busy_state
+test_pane_is_busy_keeps_native_and_live_footer_independent
 test_primary_busy_guard_is_harness_scoped
 test_pane_is_busy_defaults_to_tmux_when_backend_omitted
 test_pane_input_pending_herdr_dispatch
