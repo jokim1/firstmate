@@ -314,11 +314,12 @@ It refuses Zellij, Orca, and cmux as supervisor backends rather than applying th
 For Herdr, target existence, native state, capture, composer state, and verified submit all route through the shared backend dispatcher and the explicit named-session CLI owner.
 The pane-independent max-defer alert is configured in [`wedge-alarm.md`](wedge-alarm.md).
 
-Harnesses with native tracked background execution can run the daemon in their terminal.
+`bin/fm-afk-launch.sh` creates a dedicated unfocused Herdr workspace for every harness that runs the away daemon, runs the daemon there with an explicit supervisor target and backend, records the exact daemon pane, and closes only that pane on stop.
 Pi and pi-signed no longer launch the away daemon; their ordinary supervision session continues under the posture record.
-For another harness without native tracked background execution, `bin/fm-afk-launch.sh` creates a dedicated unfocused Herdr workspace, runs the daemon there with an explicit supervisor target and backend, records the exact daemon pane, and closes only that pane on stop.
+Keeping the daemon outside the captain pane prevents its own long-lived process from making the injection target classify as busy.
 It never splits the captain's active tab and never uses shell `&`.
 Recovery reconciles only the recorded exact id.
+The rendered busy fallback bounds classification to the bottom physical footer, tolerates blank padding inside it, and ignores older rows above that boundary.
 
 On stop, the daemon receives termination while `state/.afk` still exists so its final flush can run, the recorded terminal is closed, and the AFK flag is removed last.
 A fresh entry clears stale transient escalation caches, while durable queue and task records remain authoritative.

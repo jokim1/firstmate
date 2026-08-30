@@ -1091,6 +1091,25 @@ The Herdr refusal when a shell accepts the command but does not move is not exer
 
 ### Away-mode transport
 
+The Claude/Herdr away-mode transport was verified on 2026-08-30 with Claude Code 2.1.251 and Herdr 0.8.0:
+
+```sh
+FM_AFK_CLAUDE_HERDR_LIVE=1 HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
+  tests/fm-afk-claude-herdr-live-e2e.test.sh
+```
+
+The guard produced:
+
+```text
+ok - Claude Code (2.1.251 (Claude Code)) on Herdr (0.8.0): separate-pane away transport delivers while the captain is idle
+ok - Claude Code (2.1.251 (Claude Code)) on Herdr (0.8.0): separate-pane away transport defers during a real turn through the rendered branch
+ok - live Claude/Herdr away-mode transport guard verified 2 path(s)
+```
+
+The separate daemon workspace delivered one marked escalation to an idle real Claude captain, refused a second escalation during a real turn with native classification forced to `unknown`, and logged `native=unknown rendered=match` to prove the rendered footer carried that deferral.
+The real-turn leg began while Claude rendered a glyph-anchored spinner without an elapsed duration, so it also verifies the early-turn signature.
+Run this guard after every Claude Code or Herdr upgrade rather than trusting the versioned observation above.
+
 The away daemon is no longer launched on Pi; the away posture there is the record `bin/fm-afk-contract.sh` owns.
 The Pi/Herdr away posture and return path was verified on 2026-09-08 against a real Pi primary in an isolated Herdr lab session, Herdr 0.9.0 and Pi 0.82.0:
 
