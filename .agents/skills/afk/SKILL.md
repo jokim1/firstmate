@@ -38,13 +38,11 @@ Hold-for-return is the default and the only reach profile this release records: 
 4. **Per harness, after the record exists:**
    - **Pi and pi-signed**: stop here.
      The away daemon is no longer launched on Pi; the ordinary supervision session (`docs/pi-supervision-branch.md`) keeps running with the record present, and `bin/fm-afk-launch.sh start` refuses on these harnesses.
-   - **Harness WITH a native in-pane tracked-background tool** (claude's background bash, grok's background tool): run `bin/fm-afk-launch.sh start-native`, then run `FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh` through that native tool.
-     This is a deliberate no-separate-terminal exception because the harness-hosted job creates no terminal or layout mutation, and a shell launcher cannot invoke a harness-native background tool.
-     If the native launch fails, run `bin/fm-afk-launch.sh stop` to roll back the prepared lifecycle.
-     Do not wrap it in `nohup ... &` (Codex/herdr can reap fire-and-forget shell children after a tool call returns).
-   - **Every other harness** (codex, opencode, omp, kimi, cursor): run `bin/fm-afk-launch.sh start`.
-     It is the single owner of the daemon terminal: it creates a NON-VISIBLE tracked terminal for the current backend and passes the captain pane in as `FM_SUPERVISOR_TARGET` so the daemon injects into the captain, not its own new pane (docs/herdr-backend.md "Away-mode supervisor support").
-   Both daemon paths require the already-confirmed record and share `bin/fm-afk-start.sh` as the daemon entry.
+   - **Every other harness** (claude, codex, opencode, omp, grok, kimi, cursor): run `bin/fm-afk-launch.sh start`.
+     It is the single owner of the daemon terminal: it creates a NON-VISIBLE tracked terminal for the current backend (a Herdr dedicated `--no-focus` workspace or a detached tmux session), records its exact id, and passes the captain pane in as `FM_SUPERVISOR_TARGET` so the daemon injects into the captain, not its own new pane (docs/herdr-backend.md "Away-mode supervisor support").
+     Never host the daemon through a harness-native in-pane background tool because the daemon's own process can make the captain pane classify as busy forever; `start-native` is retired and `bin/fm-afk-start.sh` refuses without the launcher's separate-terminal provenance.
+     **Never manufacture a terminal by splitting the captain's active pane** (`herdr pane split`): a split co-tenants the tab and visibly shrinks the captain's pane.
+   The daemon path requires the already-confirmed record and uses `bin/fm-afk-start.sh` as the daemon entry inside that tracked terminal.
    The daemon is **presence-gated**: it injects escalations only while `state/.afk` exists, and stays quiet otherwise.
 5. **Do not separately arm `fm-watch.sh` where the daemon runs.** The daemon manages the watcher as its child; the singleton lock no-ops a stray arm harmlessly.
    On Pi nothing changes about arming: the supervision session's own cycle continues.
@@ -102,6 +100,8 @@ injection, dispatched through `bin/fm-backend.sh` for the supervisor's own
 backend (tmux or herdr; see "Auto-discovered supervisor pane" below):
 
 - **Primary-pane busy guard** - `pane_is_busy` trusts Herdr native `busy` when available, otherwise matches rendered output against only the detected primary harness's signature.
+  Its rendered fallback first bounds the capture to the bottom physical footer, then ignores blank padding within that footer and examines only its latest non-blank rows.
+  Rows above that bounded footer are never considered, so older turn chrome cannot pin an idle pane busy.
   This narrow delivery guard never classifies a recorded worker task and never uses a global union of vendor patterns.
 - **Composer-state guard** - `inject_msg` reads the full `empty`/`pending`/`pending-unproven`/`unknown` verdict from `fm_backend_composer_state` and injects only when it is affirmatively `empty`.
   Every other or future verdict defers, including an unreadable pane, ambiguous geometry, a blank unidentified row, and a bare shell prompt left after the agent exits.
