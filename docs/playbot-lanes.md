@@ -78,7 +78,7 @@ bin/fm-playbot-lanes.mjs delete --workspace-id <id>
 ```
 
 Exact CLI flags and error exits are owned by `bin/fm-playbot-lanes.mjs --help`.
-On `0.94.0` and `0.101.0` the app mints thread ids, so `create` also reports the fused first thread id and `open-thread` returns the app-minted id rather than honoring a caller-chosen `--thread-id` (which applies to legacy releases only).
+On the fused `threads:launch` releases (`0.94.0` and later certified), the app mints thread ids, so `create` also reports the fused first thread id and `open-thread` returns the app-minted id. A caller-chosen `--thread-id` on `open-thread` is rejected on those releases (legacy client-minted releases still accept it).
 Live Playbot paths default to the standard macOS install locations and every one has an `FM_PLAYBOT_*` environment override used by the hermetic test fixtures.
 
 ## Verification
