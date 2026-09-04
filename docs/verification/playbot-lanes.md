@@ -33,6 +33,7 @@ Covered guarantees:
 - the MCP server exposes `health` only until per-thread caller identity is proven, denies task-data tools with the phase marker, and exposes no mutation tools.
 - concurrent registered checks collapse onto one outbox event set through the per-task lock in the generated wrapper.
 - release-aware wire contracts resolve thread-open and workspace-create to `threads:launch` (app-minted `chat-*` id, fused create) on `0.94.0`, `0.101.0`, and `0.104.0`, keep the legacy channels for `0.93.1` and unknown releases, and assert a static IPC surface for those fused releases that omits the removed `workspace:create` / `threads:openThread` / `db:workspaceThreads:open` channels.
+- on the fused releases, `open-thread` refuses a caller-chosen thread id before any IPC call, and the fused create keeps polling until the provisioned workspace row carries a non-empty worktree path (an empty path times out instead of being adopted).
 - `validateThreadLaunchResult` rejects a missing or non-`chat-` thread id, a wrong-workspace binding, an existing-workspace launch that created a workspace, and a new-workspace launch that did not report `createdWorkspace`.
 - the doctor's static IPC scan matches channel needles as exact bounded tokens (an event string such as `workspace:created` cannot satisfy the `workspace:create` needle), while the generic preload-bridge scan keeps substring matching.
 

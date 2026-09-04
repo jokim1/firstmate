@@ -25,8 +25,8 @@ The MCP exposes four read-only tools at most (`health`, `identify_controller`, `
 
 ## Mutation evidence and the Phase 1 smoke
 
-The compatibility seed in `bin/fm-playbot-lanes.mjs` is the authoritative per-release record of read-only schema, IPC string, and wire-contract facts for proven releases (currently `0.90.0`, `0.92.0`, `0.93.1`, `0.94.0`, and `0.101.0`).
-Playbot `0.94.0` removed the standalone `workspace:create` and `threads:openThread` channels, and `0.101.0` retains that contract, so each seed entry also fixes the release's thread-open and workspace-create wire contracts: the abstract operation names and evidence keys stay stable, while on those releases both operations go over `threads:launch` (workspace creation is fused with opening the workspace's first thread, and thread ids are minted by the app) and each evidence record annotates the real wire channel.
+The compatibility seed in `bin/fm-playbot-lanes.mjs` is the authoritative per-release record of read-only schema, IPC string, and wire-contract facts for proven releases (currently `0.90.0`, `0.92.0`, `0.93.1`, `0.94.0`, `0.101.0`, and `0.104.0`).
+Playbot `0.94.0` removed the standalone `workspace:create` and `threads:openThread` channels, and `0.101.0` and `0.104.0` retain that contract, so each seed entry also fixes the release's thread-open and workspace-create wire contracts: the abstract operation names and evidence keys stay stable, while on those releases both operations go over `threads:launch` (workspace creation is fused with opening the workspace's first thread, and thread ids are minted by the app) and each evidence record annotates the real wire channel.
 Per-operation `mutationEvidence` starts at `PHASE1-EVIDENCE-REQUIRED`.
 Only the `smoke` command may extend the overlay under `docs/verification/playbot-mutation-evidence/`:
 
@@ -45,7 +45,7 @@ bin/fm-playbot-lanes.mjs smoke --json
 ```
 
 The smoke creates a disposable non-MAIN workspace and thread on that project only, exercises create / openThread / send / stop / archiveThread / delete, runs the confinement probe, archives the thread, deletes the workspace, verifies both are absent (fail-closed on ambiguity), and writes the overlay.
-On a release with the fused contract (`0.94.0` and `0.101.0`), the create step already opens the workspace's first thread, so the smoke adopts that thread instead of opening a second one and still records both the `workspace:create` and `threads:openThread` evidence keys from the single launch.
+On a release with the fused contract (`0.94.0`, `0.101.0`, and `0.104.0`), the create step already opens the workspace's first thread, so the smoke adopts that thread instead of opening a second one and still records both the `workspace:create` and `threads:openThread` evidence keys from the single launch.
 It never targets MAIN `ws_00159507e225` or any pre-existing non-smoke workspace.
 
 ## Confinement gate-8 re-scope
@@ -78,7 +78,8 @@ bin/fm-playbot-lanes.mjs delete --workspace-id <id>
 ```
 
 Exact CLI flags and error exits are owned by `bin/fm-playbot-lanes.mjs --help`.
-On the fused `threads:launch` releases (`0.94.0` and later certified), the app mints thread ids, so `create` also reports the fused first thread id and `open-thread` returns the app-minted id. A caller-chosen `--thread-id` on `open-thread` is rejected on those releases (legacy client-minted releases still accept it).
+On the fused `threads:launch` releases (`0.94.0` and later certified), the app mints thread ids, so `create` also reports the fused first thread id and `open-thread` returns the app-minted id.
+A caller-chosen `--thread-id` on `open-thread` is rejected on those releases (legacy client-minted releases still accept it).
 Live Playbot paths default to the standard macOS install locations and every one has an `FM_PLAYBOT_*` environment override used by the hermetic test fixtures.
 
 ## Verification
