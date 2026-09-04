@@ -1,0 +1,110 @@
+$ FM_PLAYBOT_APP_VERSION=0.104.0 bin/fm-playbot-lanes.mjs ready --json --capability native   (repo-committed signed evidence, hermetic fixture DB/bundle)
+{
+  "capability": "native",
+  "ready": true,
+  "operatingState": "native-enabled",
+  "mutationsEnabled": true,
+  "reason": null
+}
+exit=0
+
+$ FM_PLAYBOT_APP_VERSION=0.104.0 bin/fm-playbot-lanes.mjs doctor --json  (excerpt: release, evidence integrity, IPC surface, operating state)
+{
+  "command": "doctor",
+  "appVersion": "0.104.0",
+  "operatingState": "native-enabled",
+  "ready": true,
+  "mutationsEnabled": true,
+  "release_compatibility": {
+    "name": "release_compatibility",
+    "status": "pass",
+    "appVersion": "0.104.0",
+    "manifestVersion": 2,
+    "reason": null
+  },
+  "mutation_evidence_integrity": {
+    "status": "pass",
+    "verifiedCount": 35,
+    "verified_0_104_0": [
+      "0.104.0/workspace:create",
+      "0.104.0/threads:openThread",
+      "0.104.0/threads:send",
+      "0.104.0/threads:stop",
+      "0.104.0/threads:archiveThread",
+      "0.104.0/workspace:delete",
+      "0.104.0/confinement"
+    ],
+    "refused": []
+  },
+  "ipc_channel_strings_static": {
+    "name": "ipc_channel_strings_static",
+    "status": "pass",
+    "ok": true,
+    "checks": [
+      {
+        "needle": "threads:launch",
+        "ok": true
+      },
+      {
+        "needle": "threads:setActiveThread",
+        "ok": true
+      },
+      {
+        "needle": "threads:send",
+        "ok": true
+      },
+      {
+        "needle": "threads:stop",
+        "ok": true
+      },
+      {
+        "needle": "threads:archiveThread",
+        "ok": true
+      },
+      {
+        "needle": "workspace:archive",
+        "ok": true
+      },
+      {
+        "needle": "workspace:delete",
+        "ok": true
+      }
+    ]
+  },
+  "operating_state": {
+    "name": "operating_state",
+    "status": "pass",
+    "state": "native-enabled",
+    "mutationsEnabled": true,
+    "reason": null,
+    "confinement": {
+      "ok": true,
+      "writeDenied": true,
+      "readAllowed": true,
+      "evidence": {
+        "recordedAt": "2026-09-04T09:53:17.934Z",
+        "recordRelPath": "records/0.104.0/2026-09-04T09-52-57-857Z/confinement.json",
+        "contentSha256": "148d450fa8fa7019080bb4e51834e5b8350d0410f2f44e4c78544da98ba048d9",
+        "verified": true,
+        "readAllowed": true,
+        "writeDenied": true,
+        "rationalePointer": "docs/playbot-lanes.md#confinement-gate-8-re-scope"
+      }
+    }
+  }
+}
+exit=0
+
+$ FM_PLAYBOT_APP_VERSION=0.102.0 bin/fm-playbot-lanes.mjs ready --json --capability native   (skipped release, must refuse)
+{
+  "capability": "native",
+  "ready": false,
+  "operatingState": "phase1-evidence-required",
+  "mutationsEnabled": false,
+  "reason": "read-only compatibility or Playbot reachability is incomplete"
+}
+exit=1
+
+$ FM_PLAYBOT_APP_VERSION=0.104.0 bin/fm-playbot-lanes.mjs open-thread --workspace-id workspace-task --thread-id thread-caller-chosen
+fm-playbot-lanes: threads:openThread (threads:launch) cannot honor a caller-chosen thread id; the app mints the id
+exit=64

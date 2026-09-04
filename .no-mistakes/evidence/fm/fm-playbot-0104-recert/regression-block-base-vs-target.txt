@@ -1,0 +1,9 @@
+== BASE 5ad9a50: /tmp/fm-lanes-ev.gCYBSm/base/bin/fm-playbot-lanes.mjs (appVersion 0.101.0, hermetic fixture DB + fake threads:launch CDP)
+FAIL open-thread --thread-id on fused release is rejected: accepted and returned threadId=chat-launched (caller id silently ignored)
+FAIL fused create refuses a workspace whose worktree path is empty: adopted ws=ws-fused thread=chat-fused with path=""
+exit=1
+
+== TARGET 93d56ec: /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M1NXZBPS1QQ3YG0A28HYYP0G/bin/fm-playbot-lanes.mjs (appVersion 0.101.0, hermetic fixture DB + fake threads:launch CDP)
+PASS open-thread --thread-id on fused release is rejected: threads:openThread (threads:launch) cannot honor a caller-chosen thread id; the app mints the id
+PASS fused create refuses a workspace whose worktree path is empty: workspace:create (threads:launch) timed out waiting for workspace ws-fused provisioning; last={"id":"ws-fused","project_id":"project-alpha","name":null,"kind":"worktree","archive_state":"active","project_root_id":"root-alpha","path":"","branch":"fixture-fused"}
+exit=0

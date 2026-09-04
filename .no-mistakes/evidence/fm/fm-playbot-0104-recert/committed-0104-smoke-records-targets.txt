@@ -1,0 +1,15 @@
+== committed 0.104.0 smoke records (docs/verification/playbot-mutation-evidence/records/0.104.0/2026-09-04T09-52-57-857Z)
+== every mutation target is the disposable project; MAIN workspace ws_00159507e225 never appears
+confinement.json           {"appVersion":"0.104.0","projectId":"project_07474ac1d119","result":{},"probe":{"readAttempted":true,"writeAttempted":true,"readOutcome":"allowed","writeOutcome":"denied","readCallId":"call_KipNanNiZJs7dftUng0oLbP5","writeCallId":"call_dEk5CFUHoo0pi9LSxMG71M6u","proofSha256":"1e5d883a6ccb10892620eeaa2bb65d2e242ad4d1f79f5fed511b4b097c08a60d"}}
+threads:archiveThread.json {"appVersion":"0.104.0","projectId":"project_07474ac1d119","requestThreadId":"chat-09048ddd-95b5-4eb5-9f63-3c814ecfba66","result":{}}
+threads:openThread.json    {"appVersion":"0.104.0","wireChannel":"threads:launch","projectId":"project_07474ac1d119","workspaceId":"ws_61230b4ed186","threadId":"chat-09048ddd-95b5-4eb5-9f63-3c814ecfba66","destination":"new-workspace","result":{}}
+threads:send.json          {"appVersion":"0.104.0","projectId":"project_07474ac1d119","requestThreadId":"chat-09048ddd-95b5-4eb5-9f63-3c814ecfba66","result":{}}
+threads:stop.json          {"appVersion":"0.104.0","projectId":"project_07474ac1d119","requestThreadId":"chat-09048ddd-95b5-4eb5-9f63-3c814ecfba66","result":{}}
+workspace:create.json      {"appVersion":"0.104.0","wireChannel":"threads:launch","fused":true,"projectId":"project_07474ac1d119","workspaceId":"ws_61230b4ed186","threadId":"chat-09048ddd-95b5-4eb5-9f63-3c814ecfba66","destination":"new-workspace","result":{"id":"ws_61230b4ed186","projectId":"project_07474ac1d119"}}
+workspace:delete.json      {"appVersion":"0.104.0","projectId":"project_07474ac1d119","requestWorkspaceId":"ws_61230b4ed186","result":{}}
+
+== grep for MAIN workspace id across the run records
+(no record references MAIN workspace ws_00159507e225)
+
+== distinct project ids referenced in the run records
+  10 project_07474ac1d119
