@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, lila-main]
+    branches: [main, lila-main, rebase-gate-2026-09-05]
   pull_request:
-    branches: [main, lila-main]
+    branches: [main, lila-main, rebase-gate-2026-09-05]
 
 permissions:
   contents: read
