@@ -781,4 +781,124 @@ if (!wrongMode.integrity.refused.some((item) => item.scope === 'overlay' && item
 NODE
 pass "mutation evidence records, hash integrity, shape parsers, and write-denial confinement gate hold offline"
 
+# --- fused threads:launch releases: 0.104.0 onboard, caller thread id, provisioned path ---
+
+LAUNCH_FIX="$TMP_ROOT/fixtures-launch"
+node "$ROOT/tests/playbot-fixtures/generate.mjs" "$LAUNCH_FIX" >/dev/null || fail "launch fixture generation failed"
+FAKE_CDP_LAUNCH_RESULTS='{"existing-workspace":{"createdWorkspace":false,"workspace":{"id":"workspace-task"},"thread":{"id":"chat-launched"}},"new-workspace":{"createdWorkspace":true,"workspace":{"id":"ws-fused"},"thread":{"id":"chat-fused"}}}' \
+  node "$ROOT/tests/playbot-fixtures/fake-cdp.mjs" ws-launch > "$TMP_ROOT/launch-cdp-port" &
+LAUNCH_CDP_PID=$!
+trap 'kill "$CDP_PID" "$LAUNCH_CDP_PID" 2>/dev/null; fm_test_cleanup' EXIT
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$TMP_ROOT/launch-cdp-port" ] && break
+  sleep 0.2
+done
+LAUNCH_CDP_PORT=$(cat "$TMP_ROOT/launch-cdp-port")
+[ -n "$LAUNCH_CDP_PORT" ] || fail "fake launch CDP server did not bind"
+node --input-type=module - "$ROOT/bin/fm-playbot-lanes.mjs" "$LAUNCH_FIX" "$LAUNCH_CDP_PORT" <<'NODE' || fail "fused threads:launch release checks failed"
+import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+
+const {
+  COMPATIBILITY_MANIFEST,
+  threadOpenContract,
+  workspaceCreateContract,
+  scanFileForNeedles,
+  nativeDispatchState,
+  playbotPaths,
+  mutationOpenThread,
+  mutationWorkspaceCreate
+} = await import(pathToFileURL(process.argv[2]).href);
+const fixtureDir = process.argv[3];
+const port = Number(process.argv[4]);
+const paths = playbotPaths({}, {
+  applicationDb: resolve(fixtureDir, 'playbot.db'),
+  codexDb: resolve(fixtureDir, 'harness/state_5.sqlite'),
+  appRunState: resolve(fixtureDir, 'playbot-app-run-state.json'),
+  devToolsPortFile: resolve(fixtureDir, 'DevToolsActivePort'),
+  appBundle: resolve(fixtureDir, 'fixture-app.asar'),
+  infoPlist: resolve(fixtureDir, 'missing-Info.plist')
+});
+const FUSED_RELEASES = ['0.94.0', '0.101.0', '0.104.0'];
+
+// 0.104.0 is a clean onboard: same fused contract and identical IPC surface as 0.94.0/0.101.0.
+for (const release of FUSED_RELEASES) {
+  const open = threadOpenContract(release);
+  if (open.wireChannel !== 'threads:launch' || open.idSource !== 'app' || open.resultUndefined !== false) {
+    throw new Error(`${release} must resolve the app-minted threads:launch thread-open contract`);
+  }
+  const create = workspaceCreateContract(release);
+  if (create.wireChannel !== 'threads:launch' || create.fused !== true) {
+    throw new Error(`${release} must fuse workspace creation into threads:launch`);
+  }
+}
+const ipc = (release) => [...COMPATIBILITY_MANIFEST.releases[release].ipcChannelStrings].sort();
+if (JSON.stringify(ipc('0.104.0')) !== JSON.stringify(ipc('0.94.0')) || JSON.stringify(ipc('0.104.0')) !== JSON.stringify(ipc('0.101.0'))) {
+  throw new Error('0.104.0 must assert exactly the 0.94.0/0.101.0 IPC surface');
+}
+if (ipc('0.104.0').length !== 7) throw new Error('0.104.0 must assert the seven fused-lane channels');
+for (const removed of ['workspace:create', 'threads:openThread', 'db:workspaceThreads:open']) {
+  if (ipc('0.104.0').includes(removed)) throw new Error(`0.104.0 IPC surface must not assert removed channel ${removed}`);
+}
+if (!scanFileForNeedles(paths.appBundle, ipc('0.104.0'), { exactToken: true }).ok) {
+  throw new Error('0.104.0 exact-token IPC scan must pass against the fused fixture bundle');
+}
+for (const uncertified of ['0.102.0', '0.103.0']) {
+  if (threadOpenContract(uncertified).wireChannel !== 'threads:openThread' || workspaceCreateContract(uncertified).fused !== false) {
+    throw new Error(`${uncertified} was skipped by the pin jump and must fall back to the legacy contract`);
+  }
+}
+if (nativeDispatchState(COMPATIBILITY_MANIFEST, '0.104.0').allowed) {
+  throw new Error('the 0.104.0 seed alone must not enable native mutations; signed smoke evidence is required');
+}
+
+async function rejects(promise, pattern, label) {
+  try {
+    await promise;
+  } catch (error) {
+    if (pattern.test(error.message)) return;
+    throw new Error(`${label}: unexpected error: ${error.message}`);
+  }
+  throw new Error(`${label}: expected rejection ${pattern}`);
+}
+
+// A caller-chosen thread id is rejected on every fused release before any IPC
+// (port 1 has no listener, so an attempted invoke would fail differently).
+for (const release of FUSED_RELEASES) {
+  await rejects(
+    mutationOpenThread({ id: 'thread-caller-chosen', workspaceId: 'workspace-task' }, { paths, appVersion: release, forSmoke: true, port: 1 }),
+    /cannot honor a caller-chosen thread id/,
+    `${release} open-thread with --thread-id`
+  );
+}
+
+// Without a caller id the fused open returns the app-minted id from the launch result.
+const db = new DatabaseSync(resolve(fixtureDir, 'playbot.db'));
+db.prepare('INSERT INTO workspace_threads VALUES (?, ?, ?, ?, ?, ?)').run('chat-launched', 'workspace-task', null, null, 'idle', 0);
+const opened = await mutationOpenThread({ workspaceId: 'workspace-task' }, { paths, appVersion: '0.104.0', forSmoke: true, port });
+if (opened.threadId !== 'chat-launched' || opened.wireChannel !== 'threads:launch') {
+  throw new Error(`fused open must return the app-minted thread id via threads:launch, got ${JSON.stringify({ threadId: opened.threadId, wireChannel: opened.wireChannel })}`);
+}
+
+// Fused create must wait for a provisioned worktree path: an empty path row is
+// still "half-written" and must time out rather than be adopted.
+const createRequest = { projectId: 'project-alpha', projectRootId: 'root-alpha', baseRef: 'main', branch: 'fixture-fused', expectedCommit: 'deadbeef' };
+db.prepare('INSERT INTO workspaces VALUES (?, ?, ?, ?, ?)').run('ws-fused', 'project-alpha', null, 'worktree', 'active');
+db.prepare('INSERT INTO workspace_roots VALUES (?, ?, ?, ?)').run('ws-fused', 'root-alpha', '', 'fixture-fused');
+db.prepare('INSERT INTO workspace_threads VALUES (?, ?, ?, ?, ?, ?)').run('chat-fused', 'ws-fused', null, null, 'idle', 0);
+await rejects(
+  mutationWorkspaceCreate(createRequest, { paths, appVersion: '0.104.0', forSmoke: true, port, provisionTimeoutMs: 800, provisionPollMs: 50 }),
+  /timed out waiting for workspace ws-fused provisioning/,
+  'fused create with an empty worktree path'
+);
+db.prepare('UPDATE workspace_roots SET path = ? WHERE workspace_id = ?').run(resolve(fixtureDir, 'worktrees/fused'), 'ws-fused');
+const created = await mutationWorkspaceCreate(createRequest, { paths, appVersion: '0.104.0', forSmoke: true, port, provisionTimeoutMs: 800 });
+if (created.fused !== true || created.wireChannel !== 'threads:launch' || created.result.id !== 'ws-fused' || created.threadId !== 'chat-fused') {
+  throw new Error(`fused create must adopt the provisioned workspace and its first thread, got ${JSON.stringify({ fused: created.fused, wireChannel: created.wireChannel, id: created.result?.id, threadId: created.threadId })}`);
+}
+db.close();
+NODE
+pass "fused threads:launch releases certify 0.104.0 as a clean onboard, reject caller thread ids, and require a provisioned worktree path"
+
 printf 'fm-playbot-lanes: all tests passed\n'
