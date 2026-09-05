@@ -10,6 +10,10 @@
 //   ws-close-after-open     WS accepts then closes without answering
 //   ws-stall                WS accepts and never answers
 //   ws-ok                   WS answers Runtime.evaluate with a JSON value
+//   ws-launch               WS answers a threads:launch invoke with the result
+//                           selected by destination kind from the JSON map in
+//                           FAKE_CDP_LAUNCH_RESULTS ({ "new-workspace": ...,
+//                           "existing-workspace": ... })
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { createServer as createTcpServer } from 'node:net';
@@ -48,6 +52,7 @@ function attachWebSocket(server, onMessage, { closeAfterOpen = false, stall = fa
     socket.on('data', (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       while (buffer.length >= 2) {
+        const opcode = buffer[0] & 0x0f;
         const length = buffer[1] & 0x7f;
         const headerSize = 2 + (length === 126 ? 2 : 0) + 4; // client frames are masked
         const frameSize = headerSize + (length === 126 ? buffer.readUInt16BE(2) : length);
@@ -59,6 +64,11 @@ function attachWebSocket(server, onMessage, { closeAfterOpen = false, stall = fa
           payload[index] = buffer[headerSize + index] ^ mask[index % 4];
         }
         buffer = buffer.subarray(frameSize);
+        if (opcode === 0x8) { // answer the client's close frame so its socket can finish
+          socket.end(Buffer.from([0x88, 0x00]));
+          return;
+        }
+        if (opcode !== 0x1) continue; // ignore ping/pong control frames
         const reply = onMessage(payload.toString('utf8'));
         if (reply === null) continue;
         const body = Buffer.from(reply);
@@ -109,6 +119,19 @@ if (scenario === 'ws-ok') {
   attachWebSocket(server, (text) => {
     const message = JSON.parse(text);
     return JSON.stringify({ id: message.id, result: { result: { type: 'string', value: '{"ok":true}' } } });
+  });
+}
+
+if (scenario === 'ws-launch') {
+  const results = JSON.parse(process.env.FAKE_CDP_LAUNCH_RESULTS ?? '{}');
+  attachWebSocket(server, (text) => {
+    const message = JSON.parse(text);
+    const expression = String(message.params?.expression ?? '');
+    const kind = /"kind":"(new-workspace|existing-workspace)"/.exec(expression)?.[1] ?? null;
+    const envelope = kind && results[kind]
+      ? { ok: true, channel: 'threads:launch', request: null, resultWasUndefined: false, resultType: 'object', result: results[kind], rendererAppRunId: null }
+      : { ok: false, channel: 'threads:launch', request: null, error: `fake launch has no result for destination ${kind}` };
+    return JSON.stringify({ id: message.id, result: { result: { type: 'object', value: envelope } } });
   });
 }
 
