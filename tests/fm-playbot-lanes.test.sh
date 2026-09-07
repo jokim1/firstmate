@@ -74,6 +74,13 @@ grep -q 'release absent from compatibility manifest' "$TMP_ROOT/d91.out" || fail
 grep -q '"mutationsEnabled": false' "$TMP_ROOT/d91.out" || fail "unknown-release doctor must keep mutations disabled"
 pass "unknown Playbot release fails closed"
 
+if FM_PLAYBOT_APP_VERSION=0.105.0 node "$LANES" doctor --json > "$TMP_ROOT/d105.out" 2>/dev/null; then
+  fail "doctor must fail closed on skipped release 0.105.0"
+fi
+grep -q 'release absent from compatibility manifest' "$TMP_ROOT/d105.out" || fail "skipped-release doctor must name the manifest refusal"
+grep -q '"mutationsEnabled": false' "$TMP_ROOT/d105.out" || fail "skipped-release doctor must keep mutations disabled"
+pass "skipped Playbot release 0.105.0 remains uncertified"
+
 # --- doctor: malformed schema fails closed -----------------------------------
 
 BAD="$TMP_ROOT/bad-schema.db"
@@ -820,7 +827,7 @@ const paths = playbotPaths({}, {
   appBundle: resolve(fixtureDir, 'fixture-app.asar'),
   infoPlist: resolve(fixtureDir, 'missing-Info.plist')
 });
-const FUSED_RELEASES = ['0.94.0', '0.101.0', '0.104.0'];
+const FUSED_RELEASES = ['0.94.0', '0.101.0', '0.104.0', '0.106.0'];
 
 // 0.104.0 is a clean onboard: same fused contract and identical IPC surface as 0.94.0/0.101.0.
 for (const release of FUSED_RELEASES) {
@@ -837,20 +844,34 @@ const ipc = (release) => [...COMPATIBILITY_MANIFEST.releases[release].ipcChannel
 if (JSON.stringify(ipc('0.104.0')) !== JSON.stringify(ipc('0.94.0')) || JSON.stringify(ipc('0.104.0')) !== JSON.stringify(ipc('0.101.0'))) {
   throw new Error('0.104.0 must assert exactly the 0.94.0/0.101.0 IPC surface');
 }
+if (JSON.stringify(ipc('0.106.0')) !== JSON.stringify(ipc('0.104.0'))) {
+  throw new Error('0.106.0 must assert exactly the 0.104.0 IPC surface');
+}
 if (ipc('0.104.0').length !== 7) throw new Error('0.104.0 must assert the seven fused-lane channels');
+if (ipc('0.106.0').length !== 7) throw new Error('0.106.0 must assert the seven fused-lane channels');
 for (const removed of ['workspace:create', 'threads:openThread', 'db:workspaceThreads:open']) {
   if (ipc('0.104.0').includes(removed)) throw new Error(`0.104.0 IPC surface must not assert removed channel ${removed}`);
+  if (ipc('0.106.0').includes(removed)) throw new Error(`0.106.0 IPC surface must not assert removed channel ${removed}`);
 }
 if (!scanFileForNeedles(paths.appBundle, ipc('0.104.0'), { exactToken: true }).ok) {
   throw new Error('0.104.0 exact-token IPC scan must pass against the fused fixture bundle');
 }
-for (const uncertified of ['0.102.0', '0.103.0']) {
+if (!scanFileForNeedles(paths.appBundle, ipc('0.106.0'), { exactToken: true }).ok) {
+  throw new Error('0.106.0 exact-token IPC scan must pass against the fused fixture bundle');
+}
+if ('0.105.0' in COMPATIBILITY_MANIFEST.releases) {
+  throw new Error('0.105.0 must remain absent from the compatibility manifest');
+}
+for (const uncertified of ['0.102.0', '0.103.0', '0.105.0']) {
   if (threadOpenContract(uncertified).wireChannel !== 'threads:openThread' || workspaceCreateContract(uncertified).fused !== false) {
     throw new Error(`${uncertified} was skipped by the pin jump and must fall back to the legacy contract`);
   }
 }
 if (nativeDispatchState(COMPATIBILITY_MANIFEST, '0.104.0').allowed) {
   throw new Error('the 0.104.0 seed alone must not enable native mutations; signed smoke evidence is required');
+}
+if (nativeDispatchState(COMPATIBILITY_MANIFEST, '0.106.0').allowed) {
+  throw new Error('the 0.106.0 seed alone must not enable native mutations; signed smoke evidence is required');
 }
 
 async function rejects(promise, pattern, label) {
@@ -880,6 +901,10 @@ const opened = await mutationOpenThread({ workspaceId: 'workspace-task' }, { pat
 if (opened.threadId !== 'chat-launched' || opened.wireChannel !== 'threads:launch') {
   throw new Error(`fused open must return the app-minted thread id via threads:launch, got ${JSON.stringify({ threadId: opened.threadId, wireChannel: opened.wireChannel })}`);
 }
+const opened106 = await mutationOpenThread({ workspaceId: 'workspace-task' }, { paths, appVersion: '0.106.0', forSmoke: true, port });
+if (opened106.threadId !== 'chat-launched' || opened106.wireChannel !== 'threads:launch') {
+  throw new Error(`0.106.0 fused open must return the app-minted thread id via threads:launch, got ${JSON.stringify({ threadId: opened106.threadId, wireChannel: opened106.wireChannel })}`);
+}
 
 // Fused create must wait for a provisioned worktree path: an empty path row is
 // still "half-written" and must time out rather than be adopted.
@@ -897,8 +922,12 @@ const created = await mutationWorkspaceCreate(createRequest, { paths, appVersion
 if (created.fused !== true || created.wireChannel !== 'threads:launch' || created.result.id !== 'ws-fused' || created.threadId !== 'chat-fused') {
   throw new Error(`fused create must adopt the provisioned workspace and its first thread, got ${JSON.stringify({ fused: created.fused, wireChannel: created.wireChannel, id: created.result?.id, threadId: created.threadId })}`);
 }
+const created106 = await mutationWorkspaceCreate(createRequest, { paths, appVersion: '0.106.0', forSmoke: true, port, provisionTimeoutMs: 800 });
+if (created106.fused !== true || created106.wireChannel !== 'threads:launch' || created106.result.id !== 'ws-fused' || created106.threadId !== 'chat-fused') {
+  throw new Error(`0.106.0 fused create must adopt the provisioned workspace and its first thread, got ${JSON.stringify({ fused: created106.fused, wireChannel: created106.wireChannel, id: created106.result?.id, threadId: created106.threadId })}`);
+}
 db.close();
 NODE
-pass "fused threads:launch releases certify 0.104.0 as a clean onboard, reject caller thread ids, and require a provisioned worktree path"
+pass "fused threads:launch releases certify 0.104.0 and 0.106.0, reject caller thread ids, and require a provisioned worktree path"
 
 printf 'fm-playbot-lanes: all tests passed\n'
