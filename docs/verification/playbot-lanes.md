@@ -3,7 +3,7 @@
 Active guarantees for the additive Playbot lane components (`bin/fm-playbot-lanes.mjs`, `bin/backends/playbot.sh`, `bin/fm-playbot-reconcile.mjs`).
 Design contract: plan v3 (`data/lanemcp-impl-plan/report.md`, captain-private).
 
-## Hermetic suite (current)
+## Hermetic suite (last recorded full run)
 
 Date: 2026-08-27
 Host: macOS, Node v26.5.0, no live Playbot interaction of any kind.
@@ -19,7 +19,7 @@ bash tests/fm-playbot-reconcile.test.sh
 
 Result: all three suites pass (last lines `fm-playbot-lanes: all tests passed`, `fm-playbot-backend: all tests passed`, `fm-playbot-reconcile: all tests passed`).
 
-Covered guarantees:
+Current suite coverage:
 
 - doctor fails closed on an unknown release and on a malformed schema, and reports `mutationsEnabled: false` until verified smoke evidence exists.
 - every mutation CLI and adapter function refuses with `PHASE1-EVIDENCE-REQUIRED` before any IPC call when evidence is absent or hash-mismatched.
