@@ -32,7 +32,7 @@ Covered guarantees:
 - the CDP transport rejects every pending request on close, error, and timeout, skips dead targets, and serializes channel/payload only as JSON inside the fixed invoke bridge.
 - the MCP server exposes `health` only until per-thread caller identity is proven, denies task-data tools with the phase marker, and exposes no mutation tools.
 - concurrent registered checks collapse onto one outbox event set through the per-task lock in the generated wrapper.
-- release-aware wire contracts resolve thread-open and workspace-create to `threads:launch` (app-minted `chat-*` id, fused create) on `0.94.0`, `0.101.0`, and `0.104.0`, keep the legacy channels for `0.93.1` and unknown releases, and assert a static IPC surface for those fused releases that omits the removed `workspace:create` / `threads:openThread` / `db:workspaceThreads:open` channels.
+- release-aware wire contracts resolve thread-open and workspace-create to `threads:launch` (app-minted `chat-*` id, fused create) on `0.94.0`, `0.101.0`, `0.104.0`, and `0.106.0`, keep the legacy channels for `0.93.1` and unknown releases, and assert a static IPC surface for those fused releases that omits the removed `workspace:create` / `threads:openThread` / `db:workspaceThreads:open` channels.
 - on the fused releases, `open-thread` refuses a caller-chosen thread id before any IPC call, and the fused create keeps polling until the provisioned workspace row carries a non-empty worktree path (an empty path times out instead of being adopted).
 - `validateThreadLaunchResult` rejects a missing or non-`chat-` thread id, a wrong-workspace binding, an existing-workspace launch that created a workspace, and a new-workspace launch that did not report `createdWorkspace`.
 - the doctor's static IPC scan matches channel needles as exact bounded tokens (an event string such as `workspace:created` cannot satisfy the `workspace:create` needle), while the generic preload-bridge scan keeps substring matching.
@@ -45,7 +45,7 @@ The compatibility manifest embedded in `bin/fm-playbot-lanes.mjs` carries that p
 ## Phase 1 mutation evidence
 
 The landed smoke command (`bin/fm-playbot-lanes.mjs smoke`) records per-operation evidence under `docs/verification/playbot-mutation-evidence/`.
-Legacy (`<=0.93.1`) IPC request/result shapes are frozen by the private phase1 smoke report, and the release-aware `0.94.0` / `0.101.0` / `0.104.0` `threads:launch` contract is owned by the compatibility seed in `bin/fm-playbot-lanes.mjs`; restart/V2SIM-7 delivery proof remains in that private lab evidence and is not re-required for overlay flips of the mutation ops that enable spawn/steer/observe.
+Legacy (`<=0.93.1`) IPC request/result shapes are frozen by the private phase1 smoke report, and the release-aware `0.94.0` / `0.101.0` / `0.104.0` / `0.106.0` `threads:launch` contract is owned by the compatibility seed in `bin/fm-playbot-lanes.mjs`; restart/V2SIM-7 delivery proof remains in that private lab evidence and is not re-required for overlay flips of the mutation ops that enable spawn/steer/observe.
 Confinement follows the gate-8 re-scope in `docs/playbot-lanes.md#confinement-gate-8-re-scope`.
 Per-thread MCP process identity remains unproved and continues to gate Phase 3 task-data tools only.
 
@@ -117,3 +117,19 @@ The fused `threads:launch` created workspace `ws_61230b4ed186` and app-minted th
 Post-smoke database and filesystem checks found that workspace, thread, and worktree absent while MAIN `ws_00159507e225` remained active and local.
 Post-smoke `doctor --json` and `ready --json --capability native` both report `ready=true`, `operatingState=native-enabled`, and `mutationsEnabled=true`.
 The signed publication preserves earlier releases and verifies 35 scopes with zero refusals.
+
+## Phase 1 live smoke (2026-09-07, Playbot 0.106.0)
+
+Host: macOS, Playbot 0.106.0, disposable project `project_07474ac1d119` only.
+Installed `app.asar` SHA-256: `28498b583945bd6c87830b7309bb3336655704035205c0a54afc0cde1cfef580`.
+Read-only bundle inspection found every fused-lane channel as an exact token and found none of the removed `workspace:create`, `threads:openThread`, or `db:workspaceThreads:open` channels (every `workspace:create` substring match is the `workspace:created` event).
+The `threads:launch` request still selects a `new-workspace` or `existing-workspace` destination and returns the app-minted `{ workspace, thread, selectedWorkspaceId, activate, createdWorkspace }` result shape.
+Additive multi-agent surfaces (`multi_agent` / `multi_agent_v2`, `threads:fetchSubAgentThread`, `subAgent` fields) remain present and do not replace a native-lane mutation dependency.
+Command: `bin/fm-playbot-lanes.mjs smoke --json`
+Smoke run id: `2026-09-07T15-35-26-038Z` (receipt bound to the lanes script at `d3451f29`).
+Result: `operatingState: native-enabled`; confinement `readAllowed=true` / `writeDenied=true` via the fixed worktree probe with structured tool proof.
+The fused `threads:launch` created workspace `ws_03a8bbbacd05` and app-minted thread `chat-7fa9ff9b-c0dc-4d2e-a6ff-3586373cfadb` only under the disposable project.
+Post-smoke database and filesystem checks found that workspace, thread, and worktree absent while MAIN `ws_00159507e225` remained active and local.
+Post-smoke `doctor --json` and `ready --json --capability native` both report `ready=true`, `operatingState=native-enabled`, and `mutationsEnabled=true`.
+The signed publication preserves earlier releases and verifies 42 scopes with zero refusals.
+Release 0.105.0 was skipped by the deliberate pin jump and is not certified here.

@@ -276,6 +276,37 @@ export const COMPATIBILITY_MANIFEST_SEED = {
         wireChannel: 'threads:launch',
         fused: true
       }
+    }),
+    // 0.106.0 keeps the 0.94.0/0.101.0/0.104.0 native-lane contract. Direct
+    // app.asar inspection (SHA-256 28498b58...) confirmed the same seven
+    // exact-token fused channels and shapes; the fused threads:launch payload
+    // { destination, thread, message?, activate? } and result { workspace,
+    // thread, selectedWorkspaceId, activate, createdWorkspace } are byte-for-byte
+    // the 0.104.0 shape. Legacy workspace:create / threads:openThread /
+    // db:workspaceThreads:open remain absent (every workspace:create match is
+    // the workspace:created event). Additive multi-agent / sub-agent surfaces
+    // (threads:fetchSubAgentThread, multi_agent flags, subAgent fields) do not
+    // replace a lane dependency. Release 0.105.0 was skipped by the deliberate
+    // pin jump and is not certified here.
+    '0.106.0': releaseCompatibilityShape({
+      ipcChannelStrings: [
+        'threads:launch',
+        'threads:setActiveThread',
+        'threads:send',
+        'threads:stop',
+        'threads:archiveThread',
+        'workspace:archive',
+        'workspace:delete'
+      ],
+      threadOpen: {
+        wireChannel: 'threads:launch',
+        idSource: 'app',
+        resultUndefined: false
+      },
+      workspaceCreate: {
+        wireChannel: 'threads:launch',
+        fused: true
+      }
     })
   }
 };

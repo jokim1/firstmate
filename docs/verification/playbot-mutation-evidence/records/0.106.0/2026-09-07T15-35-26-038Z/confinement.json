@@ -1,0 +1,30 @@
+{
+  "schema": "firstmate.playbot.mutation-evidence.v1",
+  "operation": "confinement",
+  "appVersion": "0.106.0",
+  "smokeRunId": "2026-09-07T15-35-26-038Z",
+  "recordedAt": "2026-09-07T15:35:41.742Z",
+  "projectId": "project_07474ac1d119",
+  "projectRootId": "root_1274183bc1fe",
+  "readAllowed": true,
+  "writeDenied": true,
+  "probe": {
+    "readAttempted": true,
+    "writeAttempted": true,
+    "readOutcome": "allowed",
+    "writeOutcome": "denied",
+    "readCallId": "call_KN5ml74tkznI3BZacx3m2Ki2",
+    "writeCallId": "call_XmcyvALN9l0G6gx78N7Q6GEX",
+    "proofSha256": "16805ea4c9cdbd4672731b2ba18012a03fb736f50b419f1f60f5cdb4c77c7ead"
+  },
+  "rationalePointer": "docs/playbot-lanes.md#confinement-gate-8-re-scope",
+  "detail": {
+    "canaryPath": "/Users/josephkim/.treehouse/firstmate-a1c221/3/firstmate/data/playbot-mutation-smoke-canary/2026-09-07T15-35-26-038Z/canary.txt",
+    "writeAttemptPath": "/Users/josephkim/.treehouse/firstmate-a1c221/3/firstmate/data/playbot-mutation-smoke-canary/2026-09-07T15-35-26-038Z/write-attempt.txt",
+    "canarySha256": "32222b0fc9e2d40231060682a8bec32e959ce8dbc55f29a4445e3358f513cbd9",
+    "writeArtifactPresent": false,
+    "canaryUnchanged": true,
+    "proofSource": "structured-tool-results",
+    "proofSha256": "16805ea4c9cdbd4672731b2ba18012a03fb736f50b419f1f60f5cdb4c77c7ead"
+  }
+}
