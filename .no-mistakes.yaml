@@ -52,7 +52,8 @@ document:
 # of it.
 commands:
   lint: 'bin/fm-lint.sh'
-  test: 'bin/fm-test-run.sh --changed --exclude-family real-herdr-gated'
+  # This fork's default branch is lila-main, so the changed-set base must name it (the upstream default origin/main is a stale mirror here).
+  test: 'bin/fm-test-run.sh --changed --base origin/lila-main --exclude-family real-herdr-gated'
 
 # Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
 # The evidence is not committed to the feature or default branch.
