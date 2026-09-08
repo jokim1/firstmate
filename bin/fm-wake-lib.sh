@@ -1645,8 +1645,8 @@ fm_wake_append_try() {
 # transition. Multiple transitions before drain collapse into ONE queued record
 # (dedupe by kind, like heartbeat). The payload tells firstmate to re-evaluate
 # ready work against free capacity using the structured fleet view; this helper
-# never selects, recommends, or spawns tasks. Provider-reset and Playbot-settled
-# triggers are deliberate follow-ups, not owned here.
+# never selects, recommends, or spawns tasks. Provider-reset triggers are
+# deliberate follow-ups, not owned here.
 # Payload text is stable so drains and tests can match it exactly.
 FM_WAKE_REFILL_PAYLOAD='refill: re-evaluate ready work against free capacity'
 fm_wake_enqueue_refill() {

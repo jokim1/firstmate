@@ -93,8 +93,6 @@ fm_gc_record_families() {
 |.muse-session-current
 |.cursor-session
 |.pi-ext.ts
-|.playbot-outbox.json
-|.playbot-route.json
 |.control-relaunch
 |.control-relaunch.note
 |.control-relaunch.meta-prior
@@ -116,17 +114,13 @@ fm_gc_record_families() {
 .hb-surfaced-|
 .seen-|_status
 .seen-|_turn-ended
-.playbot-dispatch/|.txn
 .secondmate-wake-stall-receipts/|
 EOF
 }
 
 # The directory components of any nested family above, so the scan visits them
 # too. A per-task record that lives one level down is exactly as disqualifying as
-# a top-level one: `.playbot-dispatch/<id>.txn` carries the workspace and thread
-# identities of a Playbot dispatch, is written BEFORE both the temp root and the
-# meta, and is deliberately RETAINED when abort cleanup cannot prove the endpoint
-# is gone (bin/fm-spawn.sh's playbot_txn_path and its abort path).
+# a top-level one.
 fm_gc_record_family_dirs() {
   while IFS= read -r family; do
     case "$family" in */*) ;; *) continue ;; esac
@@ -194,9 +188,7 @@ fm_gc_is_home_wide() {  # <record-name>
 # refuses instead of being retired around.
 fm_gc_references_task() {  # <record-name> <id>
   local name=$1 id=$2
-  # `/` is a delimiter as much as `.`, `-`, and `_`: a nested name like
-  # `.playbot-dispatch/<id>.workspace` carries the id immediately after a slash,
-  # and leaving `/` out let exactly that shape fail OPEN.
+  # `/` is a delimiter as much as `.`, `-`, and `_` for nested names.
   case "$name" in
     "$id"|"$id"[._/-]*|*[._/-]"$id"|*[._/-]"$id"[._/-]*) return 0 ;;
   esac

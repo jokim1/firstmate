@@ -9,9 +9,7 @@
 # becomes active.
 #
 # This script deliberately is NOT a scheduler or second backlog. Backlog
-# identity, task selection, spawn, and Playbot adapter work stay with their
-# existing owners. Focus entries may carry a Playbot-carried focus as an entry
-# (owner_kind=playbot) but never invent occupancy or capacity accounting.
+# identity, task selection, and spawn stay with their existing owners.
 #
 # Snapshot path (single atomic file, never partial):
 #   state/.focus.json
@@ -31,10 +29,10 @@
 #   "focus_id": string,                 # stable id for this focus commitment
 #   "task_id": string,                  # optional backlog id; empty until known
 #   "project": string,                  # optional project name
-#   "owner_kind": "primary-direct" | "playbot" | "crew" | "secondmate",
+#   "owner_kind": "primary-direct" | "crew" | "secondmate",
 #   "state": "active" | "suspended" | "paused_explicit" | "blocked"
 #            | "completed" | "failed",
-#   "resume_kind": string,              # e.g. session, task, playbot-thread
+#   "resume_kind": string,              # e.g. session, task
 #   "resume_pointer": string,           # opaque pointer for the resume path
 #   "checkpoint": string,               # short free-form checkpoint note
 #   "summary": string,                  # short caption, not a full task body
@@ -87,7 +85,7 @@ Usage:
   fm-focus.sh show [--state-dir DIR] [--json]
   fm-focus.sh switch [--state-dir DIR] [--expected-revision N]
                      [--focus-id ID] [--task-id T] [--project P]
-                     [--owner-kind primary-direct|playbot|crew|secondmate]
+                     [--owner-kind primary-direct|crew|secondmate]
                      [--resume-kind K] [--resume-pointer P] [--checkpoint C]
                      [--summary S] [--fingerprint F]
   fm-focus.sh suspend [--state-dir DIR] [--expected-revision N]
@@ -113,7 +111,7 @@ FocusEntry:
     "focus_id": string,
     "task_id": string,
     "project": string,
-    "owner_kind": "primary-direct" | "playbot" | "crew" | "secondmate",
+    "owner_kind": "primary-direct" | "crew" | "secondmate",
     "state": "active" | "suspended" | "paused_explicit" | "blocked"
              | "completed" | "failed",
     "resume_kind": string,
@@ -173,7 +171,7 @@ mint_focus_id() {
 
 owner_kind_ok() {
   case "$1" in
-    primary-direct|playbot|crew|secondmate) return 0 ;;
+    primary-direct|crew|secondmate) return 0 ;;
     *) return 1 ;;
   esac
 }

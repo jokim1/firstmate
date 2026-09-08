@@ -100,49 +100,6 @@ test_id_suffixed_records_refuse() {
   pass "an id-suffixed per-task record such as a supervision lease refuses retirement"
 }
 
-# A Playbot dispatch records its workspace and thread in a NESTED transaction
-# before either the per-task temp root or the meta exists, and spawn deliberately
-# retains it when abort cleanup cannot prove the endpoint is gone. A scan that
-# only visits top-level state entries retires the status log around a live
-# workspace and thread; the panel demonstrated exactly that.
-test_nested_playbot_transaction_refuses() {
-  local dir state rc
-  dir=$(make_case nested-playbot-txn)
-  state="$dir/state"
-  printf 'done: terminal orphan\n' > "$state/orphan.status"
-  mkdir -p "$state/.playbot-dispatch"
-  printf 'task_id=orphan\nstate=thread-created\nworkspace_id=live-workspace\nthread_id=live-thread\n' \
-    > "$state/.playbot-dispatch/orphan.txn"
-
-  rc=0
-  run_gc "$state" orphan > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
-  [ "$rc" -eq 1 ] || fail "a retained Playbot dispatch transaction was not refused (rc=$rc)"
-  grep -F '.playbot-dispatch/orphan.txn' "$dir/gc.err" >/dev/null \
-    || fail "the retained transaction was not named: $(cat "$dir/gc.err")"
-  [ -f "$state/orphan.status" ] || fail "the refusal still removed the status log"
-  [ -f "$state/.playbot-dispatch/orphan.txn" ] \
-    || fail "the refusal removed the transaction it refused on"
-  pass "a retained nested Playbot dispatch transaction refuses retirement"
-}
-
-# The nested scan must stay per-task: another task's transaction in the same
-# directory is not this task's record.
-test_another_tasks_nested_record_does_not_block() {
-  local dir state
-  dir=$(make_case nested-other-task)
-  state="$dir/state"
-  printf 'done: landed\n' > "$state/orphan.status"
-  mkdir -p "$state/.playbot-dispatch"
-  printf 'task_id=other-task\nstate=thread-created\n' > "$state/.playbot-dispatch/other-task.txn"
-
-  run_gc "$state" orphan > "$dir/gc.out" 2> "$dir/gc.err" \
-    || fail "another task's nested transaction blocked retirement: $(cat "$dir/gc.err")"
-  [ ! -e "$state/orphan.status" ] || fail "the orphan's status log survived retirement"
-  [ -f "$state/.playbot-dispatch/other-task.txn" ] \
-    || fail "retirement removed another task's nested transaction"
-  pass "another task's nested record neither blocks retirement nor is removed by it"
-}
-
 # Task ids may legally be words that also appear in home-wide state names, and
 # this janitor holds the task-set lock while it scans. Without an exemption the
 # unrecognized-record catch-all reports the janitor's own lock as a surviving
@@ -212,50 +169,6 @@ test_task_keyed_nested_records_refuse() {
   [ -f "$state/remote-replies/orphan.caught-up" ] || fail "the refusal removed the watermark"
   [ -f "$state/handoff/orphan.outbox.md" ] || fail "the refusal removed the handoff payload"
   pass "task-keyed records in unnamed subdirectories refuse retirement"
-}
-
-# The unrecognized-record test has to treat `/` as a delimiter like `.`, `-`, and
-# `_`. Without it a nested name carrying the task id straight after a slash fell
-# through both the family table and the catch-all - failing OPEN, which is the
-# direction this janitor exists to prevent.
-test_unrecognized_nested_name_refuses() {
-  local dir state rc
-  dir=$(make_case unrecognized-nested)
-  state="$dir/state"
-  printf 'done: terminal orphan\n' > "$state/orphan.status"
-  mkdir -p "$state/.playbot-dispatch"
-  printf 'workspace_id=live-workspace\n' > "$state/.playbot-dispatch/orphan.workspace"
-
-  rc=0
-  run_gc "$state" orphan > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
-  [ "$rc" -eq 1 ] || fail "an unrecognized nested name carrying the task id was not refused (rc=$rc)"
-  grep -F '.playbot-dispatch/orphan.workspace' "$dir/gc.err" >/dev/null \
-    || fail "the unrecognized nested record was not named: $(cat "$dir/gc.err")"
-  [ -f "$state/orphan.status" ] || fail "the refusal still removed the status log"
-  pass "an unrecognized nested name is refused rather than retired around"
-}
-
-# A symlinked subdirectory cannot be inspected safely, and skipping it hid the
-# very record the nested scan was added to find while the writers that follow the
-# link kept working.
-test_symlinked_subdirectory_refuses() {
-  local dir state rc outside
-  dir=$(make_case symlinked-subdir)
-  state="$dir/state"
-  outside="$dir/outside"
-  printf 'done: terminal orphan\n' > "$state/orphan.status"
-  mkdir -p "$outside"
-  printf 'state=thread-created\nworkspace_id=live-workspace\n' > "$outside/orphan.txn"
-  ln -s "$outside" "$state/.playbot-dispatch"
-
-  rc=0
-  run_gc "$state" orphan > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
-  [ "$rc" -eq 1 ] || fail "a symlinked state subdirectory was skipped instead of refused (rc=$rc)"
-  grep -F 'symlinked directory' "$dir/gc.err" >/dev/null \
-    || fail "the refusal did not name the symlinked directory: $(cat "$dir/gc.err")"
-  [ -f "$state/orphan.status" ] || fail "the refusal still removed the status log"
-  [ -f "$outside/orphan.txn" ] || fail "the refusal reached through the symlink"
-  pass "a symlinked state subdirectory refuses rather than being skipped"
 }
 
 # Some home-wide records are shaped exactly like a finished task status log.
@@ -495,11 +408,7 @@ test_held_per_task_lock_refuses
 test_other_tasks_per_task_locks_do_not_block
 test_content_bound_nested_record_refuses
 test_task_keyed_nested_records_refuse
-test_unrecognized_nested_name_refuses
-test_symlinked_subdirectory_refuses
 test_home_wide_status_shape_refuses
-test_nested_playbot_transaction_refuses
-test_another_tasks_nested_record_does_not_block
 test_home_wide_locks_do_not_block_word_ids
 test_unrecognized_record_naming_the_task_refuses
 test_sibling_task_with_longer_id_does_not_block

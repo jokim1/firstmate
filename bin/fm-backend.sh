@@ -65,13 +65,9 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # spawn-capable; unlike tmux/herdr/zellij it is also the worktree provider.
 # cmux is EXPERIMENTAL and spawn-capable, session-provider-only like
 # herdr/zellij - verified against the real 0.64.17 binary (docs/cmux-backend.md).
-# playbot is EXPERIMENTAL and worktree-owning (like orca): registered known and
-# listed spawn-capable for adapter dispatch. Its adapter runtime check enforces
-# the native readiness and evidence gates before live dispatch. See plan v3
-# data/lanemcp-impl-plan/report.md §5.2/§6.2 and docs/playbot-lanes.md when present.
 # codex-app remains deliberately absent; see docs/codex-app-backend.md.
-FM_BACKEND_KNOWN="tmux herdr zellij orca cmux playbot"
-FM_BACKEND_SPAWN="tmux herdr zellij orca cmux playbot"
+FM_BACKEND_KNOWN="tmux herdr zellij orca cmux"
+FM_BACKEND_SPAWN="tmux herdr zellij orca cmux"
 
 # fm_backend_list_contains: whitespace-delimited membership without relying on
 # shell word splitting. fm-backend.sh is normally sourced by bash scripts, but
@@ -310,8 +306,8 @@ fm_backend_validate_spawn() {  # <name>
 #     spawn/liveness paths parse the backend's JSON output (see each adapter's
 #     tool check, e.g. fm_backend_herdr_tool_check);
 #   - the treehouse worktree provider for every session-provider-only backend
-#     (tmux, herdr, zellij, cmux); orca and playbot own their own task worktrees
-#     (and endpoint), so they drop treehouse and any other backend's session CLI.
+#     (tmux, herdr, zellij, cmux); orca owns its own task worktree and terminal,
+#     so it drops both treehouse and any other backend's session CLI.
 # Prints a single space-separated line and returns 0 for a known backend; returns
 # 1 and prints nothing for an unknown backend.
 fm_backend_required_tools() {  # <backend>
@@ -321,7 +317,6 @@ fm_backend_required_tools() {  # <backend>
     zellij) printf '%s' 'zellij jq treehouse' ;;
     cmux)   printf '%s' 'cmux jq treehouse' ;;
     orca)   printf '%s' 'orca' ;;
-    playbot) printf '%s' 'node ssh-keygen' ;;
     *) return 1 ;;
   esac
 }
@@ -535,32 +530,6 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
         return 1
       fi
       ;;
-    playbot)
-      # Plan v3 §3.2: window=playbot:<thread-id>, endpoint_task_id, playbot_* ids
-      # in meta; late-bound session identity lives only on the route record.
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: Playbot endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      workspace=$(fm_backend_meta_exact_value "$meta" playbot_project_id) || workspace=
-      surface=$(fm_backend_meta_exact_value "$meta" playbot_project_root_id) || surface=
-      worktree_id=$(fm_backend_meta_exact_value "$meta" playbot_workspace_id) || worktree_id=
-      terminal=$(fm_backend_meta_exact_value "$meta" playbot_thread_id) || terminal=
-      recorded_session=$(fm_backend_meta_exact_value "$meta" playbot_route_gen) || recorded_session=
-      pane=$(fm_backend_meta_exact_value "$meta" playbot_delivery_id) || pane=
-      if [ -z "$workspace" ] || [ -z "$surface" ] || [ -z "$worktree_id" ] \
-        || [ -z "$terminal" ] || [ -z "$recorded_session" ] || [ -z "$pane" ] \
-        || [ "$window" != "playbot:$terminal" ] \
-        || ! fm_backend_endpoint_atom_valid "$workspace" \
-        || ! fm_backend_endpoint_atom_valid "$surface" \
-        || ! fm_backend_endpoint_atom_valid "$worktree_id" \
-        || ! fm_backend_endpoint_atom_valid "$terminal" \
-        || ! fm_backend_endpoint_atom_valid "$recorded_session" \
-        || ! fm_backend_endpoint_atom_valid "$pane"; then
-        echo "REFUSED: Playbot endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      ;;
   esac
   # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
   FM_BACKEND_VALIDATED_BACKEND=$backend
@@ -669,13 +638,6 @@ fm_backend_source() {  # <name>
         _FM_BACKEND_CMUX_SOURCED=1
       fi
       ;;
-    playbot)
-      if [ -z "${_FM_BACKEND_PLAYBOT_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$FM_BACKEND_LIB_DIR/backends/playbot.sh" || return 1
-        _FM_BACKEND_PLAYBOT_SOURCED=1
-      fi
-      ;;
   esac
 }
 
@@ -747,7 +709,6 @@ fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
     zellij) fm_backend_zellij_capture "$@" ;;
     orca) fm_backend_orca_capture "$@" ;;
     cmux) fm_backend_cmux_capture "$@" ;;
-    playbot) fm_backend_playbot_capture "$@" ;;
     *) echo "error: no capture implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -763,7 +724,6 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
     zellij) fm_backend_zellij_send_key "$@" ;;
     orca) fm_backend_orca_send_key "$@" ;;
     cmux) fm_backend_cmux_send_key "$@" ;;
-    playbot) fm_backend_playbot_send_key "$@" ;;
     *) echo "error: no send-key implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -781,7 +741,6 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
     zellij) fm_backend_zellij_send_text_submit "$@" ;;
     orca) fm_backend_orca_send_text_submit "$@" ;;
     cmux) fm_backend_cmux_send_text_submit "$@" ;;
-    playbot) fm_backend_playbot_send_text_submit "$@" ;;
     *) echo "error: no send-text implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -800,7 +759,6 @@ fm_backend_kill() {  # <backend> <target>
     zellij) fm_backend_zellij_kill "$@" ;;
     orca) fm_backend_orca_kill "$@" ;;
     cmux) fm_backend_cmux_kill "$@" ;;
-    playbot) fm_backend_playbot_kill "$@" ;;
     *) echo "error: no kill implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -811,7 +769,6 @@ fm_backend_remove_worktree() {  # <backend> <worktree-id>
   fm_backend_source "$backend" || return 1
   case "$backend" in
     orca) fm_backend_orca_remove_worktree "$@" ;;
-    playbot) fm_backend_playbot_remove_worktree "$@" ;;
     *) echo "error: backend '$backend' does not own task worktrees" >&2; return 1 ;;
   esac
 }
@@ -822,7 +779,6 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
   fm_backend_source "$backend" || return 1
   case "$backend" in
     orca) fm_backend_orca_worktree_path "$@" ;;
-    playbot) fm_backend_playbot_worktree_path "$@" ;;
     *) echo "error: backend '$backend' does not own task worktrees" >&2; return 1 ;;
   esac
 }
@@ -840,7 +796,6 @@ fm_backend_busy_state() {  # <backend> <target>
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
   case "$backend" in
     herdr) fm_backend_herdr_busy_state "$@" ;;
-    playbot) fm_backend_playbot_busy_state "$@" ;;
     *) printf 'unknown' ;;
   esac
 }
@@ -867,7 +822,6 @@ fm_backend_composer_state() {  # <backend> <target> [expected-label] -> empty|pe
     orca) fm_backend_orca_composer_state "$@" ;;
     cmux) fm_backend_cmux_composer_state "$@" ;;
     zellij) fm_backend_zellij_composer_state "$@" ;;
-    playbot) fm_backend_playbot_composer_state "$@" ;;
     *) printf 'unknown' ;;
   esac
 }
@@ -917,10 +871,6 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       fm_backend_source cmux || return 1
       fm_backend_cmux_target_ready "$target" "$expected_label"
       ;;
-    playbot)
-      fm_backend_source playbot || return 1
-      fm_backend_playbot_target_exists "$target"
-      ;;
     *)
       return 1
       ;;
@@ -941,16 +891,13 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # exact window; the Herdr adapter reuses its husk
 # classifier. Zellij remains unverified because its secondmate ghost-tab and
 # agent-process recovery path has not been empirically validated. Orca and cmux
-# do not support secondmate spawns. Playbot implements recovery-grade
-# alive/missing/ambiguous/unreadable and never invents `dead` until a live
-# Playbot proof exists (plan v3 §3.7).
+# do not support secondmate spawns.
 fm_backend_agent_state() {  # <backend> <target>
   local backend=$1 target=$2
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
   case "$backend" in
     tmux) fm_backend_tmux_agent_state "$target" ;;
     herdr) fm_backend_herdr_agent_state "$target" ;;
-    playbot) fm_backend_playbot_agent_state "$target" ;;
     *) printf 'unverified' ;;
   esac
 }

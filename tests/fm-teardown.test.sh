@@ -3366,71 +3366,6 @@ EOF
   pass "post-reap worktree mutations are revalidated before destructive return"
 }
 
-test_playbot_archive_mutation_refuses_before_workspace_deletion() {
-  local case_dir rc
-  case_dir=$(make_case playbot-archive-mutation-refusal)
-  fm_write_meta "$case_dir/state/task-x1.meta" \
-    "window=playbot:thread-task-x1" \
-    "endpoint_task_id=task-x1" \
-    "worktree=$case_dir/wt" \
-    "project=$case_dir/project" \
-    "kind=ship" \
-    "mode=local-only" \
-    "backend=playbot" \
-    "playbot_project_id=project-alpha" \
-    "playbot_project_root_id=root-alpha" \
-    "playbot_workspace_id=workspace-task-x1" \
-    "playbot_thread_id=thread-task-x1" \
-    "playbot_route_gen=1" \
-    "playbot_delivery_id=delivery-task-x1"
-  land_shippable_commit "$case_dir"
-  printf '%s\n' '{"route":"preserve"}' > "$case_dir/state/task-x1.playbot-route.json"
-  printf '%s\n' '{"outbox":"preserve"}' > "$case_dir/state/task-x1.playbot-outbox.json"
-
-  cat > "$case_dir/playbot-lanes.mjs" <<'JS'
-import { appendFileSync, writeFileSync } from "node:fs";
-
-const [command] = process.argv.slice(2);
-const log = process.env.FM_PLAYBOT_TEST_LOG;
-const worktree = process.env.FM_PLAYBOT_TEST_WORKTREE;
-if (command === "validate-endpoint") process.exit(0);
-if (command === "agent-state") {
-  process.stdout.write("alive\n");
-  process.exit(0);
-}
-appendFileSync(log, `${command}\n`);
-if (command === "archive") {
-  writeFileSync(`${worktree}/late-worker-write.txt`, "created while Playbot archived the thread\n");
-}
-process.exit(0);
-JS
-
-  rc=0
-  FM_PLAYBOT_LANES_OVERRIDE="$case_dir/playbot-lanes.mjs" \
-  FM_PLAYBOT_TEST_LOG="$case_dir/playbot.log" \
-  FM_PLAYBOT_TEST_WORKTREE="$case_dir/wt" \
-    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-
-  expect_code 1 "$rc" "playbot-archive-mutation-refusal: teardown should refuse the late worker write"
-  assert_grep "archive" "$case_dir/playbot.log" \
-    "playbot-archive-mutation-refusal: fixture did not archive the Playbot thread"
-  if grep -qxF delete "$case_dir/playbot.log"; then
-    fail "playbot-archive-mutation-refusal: teardown deleted the workspace after the late write"
-  fi
-  assert_present "$case_dir/wt/late-worker-write.txt" \
-    "playbot-archive-mutation-refusal: late worker write was not preserved"
-  assert_grep "has uncommitted changes" "$case_dir/stderr" \
-    "playbot-archive-mutation-refusal: post-archive safety check did not report the late write"
-  assert_present "$case_dir/state/task-x1.meta" \
-    "playbot-archive-mutation-refusal: teardown removed task metadata after refusing"
-  assert_present "$case_dir/state/task-x1.playbot-route.json" \
-    "playbot-archive-mutation-refusal: teardown removed the Playbot route after refusing"
-  assert_present "$case_dir/state/task-x1.playbot-outbox.json" \
-    "playbot-archive-mutation-refusal: teardown removed the Playbot outbox after refusing"
-  pass "Playbot archive-time mutations refuse workspace deletion and preserve task records"
-}
-
-
 # --- v5 default-deny regressions (plan v5 break matrix) ---
 
 test_open_pr_on_clean_pushed_branch_refuses() {
@@ -3804,4 +3739,3 @@ test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
 test_process_reap_mutation_refuses_before_worktree_return
-test_playbot_archive_mutation_refuses_before_workspace_deletion

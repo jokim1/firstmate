@@ -12,13 +12,9 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--backend playbot] [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--backend playbot] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
-#   --backend playbot selects the Playbot worker variant (plan v3 §3.3-3.4): status
-#   and scout report paths are workspace-local (.fm/status.log, .fm/report.md),
-#   finish lines use the courier's fixed verbs, ship mode is local-only only, and
-#   the shared no-mistakes daemon prohibition is always repeated.
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
 #   --secondmate writes a persistent secondmate charter. The project list
@@ -122,7 +118,6 @@ HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
-BRIEF_BACKEND=
 POS=()
 want_value=
 for a in "$@"; do
@@ -132,7 +127,6 @@ for a in "$@"; do
     esac
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
-      backend) BRIEF_BACKEND=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -145,8 +139,6 @@ for a in "$@"; do
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
-    --backend) want_value=backend ;;
-    --backend=*) BRIEF_BACKEND=${a#--backend=} ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -155,11 +147,6 @@ for a in "$@"; do
   esac
 done
 [ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
-
-case "$BRIEF_BACKEND" in
-  ''|playbot) ;;
-  *) echo "error: --backend accepts only playbot when set (got '$BRIEF_BACKEND')" >&2; exit 1 ;;
-esac
 
 # Ship delivery mode is an explicit per-task decision (AGENTS.md section 7). A
 # missing or invalid value stops the scaffold rather than silently defaulting.
@@ -175,16 +162,8 @@ if [ "$KIND" = ship ]; then
       exit 1 ;;
     *) echo "error: --mode must be one of no-mistakes, direct-PR, local-only (got '$MODE')" >&2; exit 1 ;;
   esac
-  if [ "$BRIEF_BACKEND" = playbot ] && [ "$MODE" != local-only ]; then
-    echo "error: --backend playbot ship briefs require --mode local-only (v1 refuses direct-PR and no-mistakes)" >&2
-    exit 1
-  fi
 elif [ "$MODE_SET" -eq 1 ]; then
   echo "error: --mode applies only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
-  exit 1
-fi
-if [ "$KIND" = secondmate ] && [ "$BRIEF_BACKEND" = playbot ]; then
-  echo "error: --backend playbot does not apply to --secondmate charters" >&2
   exit 1
 fi
 ID=${POS[0]}
@@ -214,25 +193,14 @@ shell_quote() {
   printf "'"
 }
 
-if [ "$BRIEF_BACKEND" = playbot ]; then
-  # Workspace-local status; never tell the worker to append to FM_HOME/state.
-  STATUS_FILE=$(shell_quote '.fm/status.log')
-  REPORT_PATH=$(shell_quote '.fm/report.md')
-else
-  STATUS_FILE=$(shell_quote "$STATE/$ID.status")
-  REPORT_PATH=$(shell_quote "$DATA/$ID/report.md")
-fi
+STATUS_FILE=$(shell_quote "$STATE/$ID.status")
 INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
 
 # The receive-and-ack half of the steering-inbox contract, included in every
-# scaffold kind except playbot: a playbot worker's sandbox cannot perform the
-# acknowledgement move inside FM_HOME/state, and its steers ride the lane's own
-# thread mechanism. The record format, doorbell line, and re-ring ladder are
+# scaffold kind. The record format, doorbell line, and re-ring ladder are
 # owned by bin/fm-task-inbox-lib.sh; the doorbell itself is self-describing,
 # so this section is reinforcement for the natural-checkpoint habit, not the
 # only carrier of the instruction.
-INBOX_SECTION=""
-if [ "$BRIEF_BACKEND" != playbot ]; then
 IFS= read -r -d '' INBOX_SECTION <<EOF || true
 # Firstmate instruction inbox
 Firstmate steers you through durable message files in $INBOX_DIR.
@@ -240,7 +208,6 @@ When a terminal message says an instruction is waiting there - and at any natura
 The move IS the acknowledgement: without it firstmate rings again and eventually treats you as stuck. An empty or absent inbox needs no action.
 EOF
 INBOX_SECTION=${INBOX_SECTION%$'\n'}
-fi
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -384,18 +351,6 @@ EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 
 if [ "$KIND" = scout ]; then
-if [ "$BRIEF_BACKEND" = playbot ]; then
-# shellcheck disable=SC2016  # backticks are brief prose (markdown code), not shell expansion
-SCOUT_RULE2='2. Stay inside this worktree. Write status only to workspace-local `.fm/status.log` and the report only to workspace-local `.fm/report.md`. Never write under firstmate home state paths.'
-SCOUT_DOD_REPORT="Write your findings to $REPORT_PATH (workspace-local). The trusted reconciler copies a bounded untrusted snapshot to the ordinary home report path before waking firstmate."
-# shellcheck disable=SC2016
-SCOUT_STATUS_VERB_NOTE='
-   Terminal status lines must begin with a courier-recognized fixed verb: `done:`, `blocked:`, `needs-decision:`, or `failed:`.'
-else
-SCOUT_RULE2='2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.'
-SCOUT_DOD_REPORT="Write your findings to $REPORT_PATH."
-SCOUT_STATUS_VERB_NOTE=
-fi
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
@@ -411,11 +366,11 @@ The report is the only thing that survives, so anything worth keeping must be in
 
 # Rules
 1. Never push to any remote and never open a PR.
-$SCOUT_RULE2
+2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
-   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.$SCOUT_STATUS_VERB_NOTE
+   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
    would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
    FYI progress lines; firstmate reads your pane for that.
@@ -438,7 +393,7 @@ $SCOUT_RULE2
 $INBOX_SECTION
 
 # Definition of done
-$SCOUT_DOD_REPORT
+Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 If your deliverable is a visual artifact the captain will review and iterate on, you may host the Lavish review loop yourself (poll, revise, re-serve, staying alive) instead of handing it back to firstmate.
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
@@ -454,16 +409,6 @@ fi
 # which bin/fm-promote.sh renders too so a promoted scout receives the same contract.
 # The block opens with the fixed "Delivery contract: mode=<mode>" line that
 # bin/fm-spawn.sh checks against its own explicit --mode before launching.
-SHIP_RULE2_EXTRA=
-SHIP_STATUS_VERB_NOTE=
-if [ "$BRIEF_BACKEND" = playbot ]; then
-  # shellcheck disable=SC2016  # backticks are brief prose (markdown code), not shell expansion
-  SHIP_RULE2_EXTRA='
-   Write status only to workspace-local `.fm/status.log`. Never write under firstmate home state paths.'
-  # shellcheck disable=SC2016
-  SHIP_STATUS_VERB_NOTE='
-   Terminal status lines must begin with a courier-recognized fixed verb: `done:`, `blocked:`, `needs-decision:`, or `failed:`.'
-fi
 case "$MODE" in
   direct-PR)
     SETUP2=""
@@ -491,7 +436,7 @@ $HERDR_SECTION
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 
-**Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path, an Orca-managed worktree, or a Playbot-managed workspace, not the primary checkout firstmate operates from.
+**Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
 The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
 
@@ -499,11 +444,11 @@ If the top-level path is the primary checkout or not the worktree you were launc
 
 # Rules
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.$SHIP_RULE2_EXTRA
+2. Stay inside this worktree; modify nothing outside it.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
-   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.$SHIP_STATUS_VERB_NOTE
+   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
    would act on (setup done, bug reproduced, fix implemented, validation passed) and the
    needs-decision/blocked/paused/done/failed states. No step-by-step FYI progress lines;

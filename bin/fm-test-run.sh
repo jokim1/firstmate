@@ -615,9 +615,6 @@ tests/fm-pi-branch-extension.test.sh 52427
 tests/fm-pi-branch-live-e2e.test.sh 56
 tests/fm-pi-primary-live-e2e.test.sh 21
 tests/fm-pi-watch-extension.test.sh 51156
-tests/fm-playbot-backend.test.sh 1893
-tests/fm-playbot-lanes.test.sh 9864
-tests/fm-playbot-reconcile.test.sh 2555
 tests/fm-pr-check-security.test.sh 166026
 tests/fm-procevent-quota.test.sh 1949
 tests/fm-procevent-when.test.sh 17392
@@ -1372,12 +1369,6 @@ families_for_changed_path() {
     tests/lib.sh|tests/*-helpers.sh|tests/fixtures.sh)
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
-      ;;
-    tests/playbot-fixtures/*)
-      # The Playbot lane fixture helpers feed the three playbot shell suites.
-      printf '%s\n' "__script__:fm-playbot-lanes.test.sh"
-      printf '%s\n' "__script__:fm-playbot-backend.test.sh"
-      printf '%s\n' "__script__:fm-playbot-reconcile.test.sh"
       ;;
     tests/fixtures/*/*)
       # A fixture belongs to whichever suite reads its directory, found by the
