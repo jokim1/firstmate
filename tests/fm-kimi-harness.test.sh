@@ -677,8 +677,8 @@ test_kimi_bordered_prompt_needs_no_override() {
   pass "composer classifier: kimi's existing bordered > shape is already safe without an override"
 }
 
-test_kimi_041_status_footer_keeps_bordered_composer_readable() {
-  local caps pending empty non_kimi leftbar out
+test_kimi_status_footers_keep_bordered_composer_readable() {
+  local caps pending empty pending_042 empty_042 non_kimi leftbar leftbar_042 out
   # This is the cursorless Herdr tail from Kimi 0.41.0 after its first Enter
   # was swallowed during first-message session creation.
   caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=20')
@@ -690,13 +690,24 @@ test_kimi_041_status_footer_keeps_bordered_composer_readable() {
   [ "$out" = pending ] || fail "Kimi 0.41.0 pending composer with its status footer read '$out'"
   out=$(fm_composer_classify_screen "$caps" "$empty")
   [ "$out" = empty ] || fail "Kimi 0.41.0 empty composer with its status footer read '$out'"
+  pending_042=${pending/Version:   0.41.0/Version:   0.42.0}
+  pending_042=${pending_042/ thinking / thinking: /}
+  empty_042=${empty/Version:   0.41.0/Version:   0.42.0}
+  empty_042=${empty_042/ thinking / thinking: /}
+  out=$(fm_composer_classify_screen "$caps" "$pending_042")
+  [ "$out" = pending ] || fail "Kimi 0.42.0 pending composer with its status footer read '$out'"
+  out=$(fm_composer_classify_screen "$caps" "$empty_042")
+  [ "$out" = empty ] || fail "Kimi 0.42.0 empty composer with its status footer read '$out'"
   non_kimi=${pending/ thinking / idle /}
   out=$(fm_composer_classify_screen "$caps" "$non_kimi")
   [ "$out" = unknown ] || fail "a non-Kimi footer below a bordered composer read '$out'"
   leftbar=$'Kimi Code 0.41.0\n┃\n┃  > Read the brief at /tmp/launch-brief.md\n┃\n╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\nauto  K2.7 Coding thinking  …/firstmate\ncontext: 0% (0/256k)'
   out=$(fm_composer_classify_screen "$caps" "$leftbar")
   [ "$out" = unknown ] || fail "a left-bar composer with Kimi's status footer read '$out'"
-  pass "composer classifier: Kimi 0.41.0 status footer preserves pending and empty composer verdicts"
+  leftbar_042=${leftbar/ thinking / thinking: /}
+  out=$(fm_composer_classify_screen "$caps" "$leftbar_042")
+  [ "$out" = unknown ] || fail "a left-bar composer with Kimi 0.42.0's status footer read '$out'"
+  pass "composer classifier: Kimi status footers preserve pending and empty composer verdicts"
 }
 
 test_kimi_hook_install_is_surgical_idempotent_and_removable
@@ -716,4 +727,4 @@ test_kimi_session_lock_identity
 test_kimi_busy_signature_is_scoped_to_spinner_lines
 test_watcher_never_classifies_kimi_from_its_spinner
 test_kimi_bordered_prompt_needs_no_override
-test_kimi_041_status_footer_keeps_bordered_composer_readable
+test_kimi_status_footers_keep_bordered_composer_readable

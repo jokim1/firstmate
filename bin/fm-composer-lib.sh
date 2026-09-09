@@ -1077,7 +1077,7 @@ _fm_composer_kimi_footer_after() {  # <screen> <box-bottom-row>
   fm_composer_normalize_trim_var status
   fm_composer_normalize_trim_var context
   fm_composer_normalize_trim_var after
-  case "$status" in *' thinking '*) ;; *) return 1 ;; esac
+  case "$status" in *' thinking '*|*' thinking: '*) ;; *) return 1 ;; esac
   printf '%s\n' "$context" | grep -qE '^context:[[:space:]]*[0-9]+([.][0-9]+)?%[[:space:]]+\([^)]*/[^)]*\)$' \
     && [ -z "$after" ]
 }
