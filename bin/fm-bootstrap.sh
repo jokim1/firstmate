@@ -275,19 +275,24 @@ secondmate_relaunch_spawn() {  # <id> -> stdout: fm-spawn output; rc: fm-spawn r
   if [ -n "${FM_BOOTSTRAP_PARALLEL_DIR:-}" ] && [ -d "$FM_BOOTSTRAP_PARALLEL_DIR" ]; then
     gate="$FM_BOOTSTRAP_PARALLEL_DIR/relaunch-gate"
     until mkdir "$gate" 2>/dev/null; do
-      # An existing gate is held by a sibling: wait. Otherwise the scratch dir
-      # is gone, the gate is uncreatable (EACCES, ENOSPC), or a sibling
-      # released it between the failed mkdir and this check. One immediate
-      # retry absorbs that release race; a second failure with no gate present
-      # falls through ungated, which is exactly today's behavior, and says so.
       if [ -d "$gate" ]; then
         sleep 0.2
-      elif [ -d "$FM_BOOTSTRAP_PARALLEL_DIR" ] && mkdir "$gate" 2>/dev/null; then
-        break
-      elif [ ! -d "$gate" ]; then
+      elif [ ! -d "$FM_BOOTSTRAP_PARALLEL_DIR" ]; then
         echo "SECONDMATE_LIVENESS: relaunch gate unavailable under $FM_BOOTSTRAP_PARALLEL_DIR; relaunching $1 ungated" >&2
         gate=''
         break
+      else
+        # Parent exists, gate does not: ENOSPC/EACCES, or sibling just released.
+        # One immediate retry absorbs the release race; a second failure falls through.
+        if mkdir "$gate" 2>/dev/null; then
+          break
+        elif [ -d "$gate" ]; then
+          sleep 0.2
+        else
+          echo "SECONDMATE_LIVENESS: relaunch gate unavailable under $FM_BOOTSTRAP_PARALLEL_DIR; relaunching $1 ungated" >&2
+          gate=''
+          break
+        fi
       fi
     done
   fi
