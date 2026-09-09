@@ -131,7 +131,12 @@
 #          remote convergence workers run concurrently, because convergence
 #          consumes respawned ids. Worker output is captured separately and
 #          replayed in spawn order; failure to create that private capture
-#          directory selects the sequential fallback.
+#          directory selects the sequential fallback. Within a concurrent
+#          sweep the relaunch itself is serialized through an atomic mkdir
+#          gate under that capture directory, because every relaunch is a
+#          fresh fm-spawn taking the per-home task-set lock; a gate that
+#          cannot be created is reported as SECONDMATE_LIVENESS and that
+#          worker relaunches ungated.
 #          A relaunch that the liveness sweep performs during an `only` run is
 #          always reported, because a digest composed before that run already
 #          printed the superseded endpoint record.
@@ -257,6 +262,39 @@ secondmate_note_respawned() {  # <id>
   SECONDMATE_RESPAWNED_IDS="$SECONDMATE_RESPAWNED_IDS $1"
   [ -n "${FM_BOOTSTRAP_PARALLEL_DIR:-}" ] || return 0
   printf '%s\n' "$1" > "$FM_BOOTSTRAP_PARALLEL_DIR/respawned.$1"
+}
+
+# Serialize secondmate relaunches across the parallel liveness workers so
+# N dead mates take the per-home task-set lock one at a time instead of
+# N-1 refusing. Probes stay parallel; only the fm-spawn call is gated.
+# The gate is an atomic mkdir under the sweep's scratch dir: no pid, no
+# lock library, correct on Bash 3.2 and 5.x alike. When the scratch dir
+# is absent (non-parallel sweep) there is no contention and no gate.
+secondmate_relaunch_spawn() {  # <id> -> stdout: fm-spawn output; rc: fm-spawn rc
+  local gate='' rc
+  if [ -n "${FM_BOOTSTRAP_PARALLEL_DIR:-}" ] && [ -d "$FM_BOOTSTRAP_PARALLEL_DIR" ]; then
+    gate="$FM_BOOTSTRAP_PARALLEL_DIR/relaunch-gate"
+    until mkdir "$gate" 2>/dev/null; do
+      # An existing gate is held by a sibling: wait. Otherwise the scratch dir
+      # is gone, the gate is uncreatable (EACCES, ENOSPC), or a sibling
+      # released it between the failed mkdir and this check. One immediate
+      # retry absorbs that release race; a second failure with no gate present
+      # falls through ungated, which is exactly today's behavior, and says so.
+      if [ -d "$gate" ]; then
+        sleep 0.2
+      elif [ -d "$FM_BOOTSTRAP_PARALLEL_DIR" ] && mkdir "$gate" 2>/dev/null; then
+        break
+      elif [ ! -d "$gate" ]; then
+        echo "SECONDMATE_LIVENESS: relaunch gate unavailable under $FM_BOOTSTRAP_PARALLEL_DIR; relaunching $1 ungated" >&2
+        gate=''
+        break
+      fi
+    done
+  fi
+  FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "$1" --secondmate 2>&1
+  rc=$?
+  [ -z "$gate" ] || rmdir "$gate" 2>/dev/null || true
+  return "$rc"
 }
 
 fleet_sync_origin_backed_project_count() {
@@ -773,7 +811,7 @@ secondmate_liveness_one() {  # <meta> <id>
         ;;
       dead|missing)
         cause="remote endpoint $agent_state on its configured host"
-        if out=$(FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "$id" --secondmate 2>&1); then
+        if out=$(secondmate_relaunch_spawn "$id"); then
           secondmate_note_respawned "$id"
           report_relaunch "$id" "$cause" "host=$remote_host"
         else
@@ -810,7 +848,7 @@ secondmate_liveness_one() {  # <meta> <id>
       else
         cause="recorded endpoint confidently missing"
       fi
-      if out=$(FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "$id" --secondmate 2>&1); then
+      if out=$(secondmate_relaunch_spawn "$id"); then
         secondmate_note_respawned "$id"
         report_relaunch "$id" "$cause" "backend=$backend"
       else
