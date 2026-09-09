@@ -1,0 +1,94 @@
+Kimi live pointer-submit validation
+Kimi: 0.42.0
+Herdr: herdr 0.8.0
+Session: fm-lab-kimi-pointer-liv-21726-11646
+Pane: w1:p1
+
+--- READY PANE ---
+env HOME='/Users/josephkim/.no-mistakes/worktrees/9ff
+e04aa3c01/01M2376NY3SRJKWKDG68R2WAXD/.nm-live-kimi/ho
+me' KIMI_DISABLE_AUTO_UPDATE=1 '/Users/josephkim/.kim
+i-code/bin/kimi' --auto
+josephkim@omega 01M2376NY3SRJKWKDG68R2WAXD % env HOME
+='/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c0
+1/01M2376NY3SRJKWKDG68R2WAXD/.nm-live-kimi/home' KIMI
+_DISABLE_AUTO_UPDATE=1 '/Users/josephkim/.kimi-code/b
+in/kimi' --auto
+   Skipped refreshing managed:kimi-code: OAuth
+ provider "managed:kimi-code" requires login before
+ it can be used.
+
+ ╭─────────────────────────────────────────────────╮
+ │                                                 │
+ │  ▐█▛█▛█▌  Welcome to Kimi Code!                 │
+ │  ▐█████▌  Send /help for help information.      │
+ │                                                 │
+ │  Directory: /Users/josephkim/.no-mistakes/workt…│
+ │  Session:                                       │
+ │  Model:     K2.7 Coding                         │
+ │  Version:   0.42.0                              │
+ │                                                 │
+ ╰─────────────────────────────────────────────────╯
+
+ ✦ Try Kimi Code Web UI - clearer task progress,
+                        visual sessions & settings
+                        management
+   Run /web to continue your session in the browser
+
+   No session yet — one will be created on your
+ first message.
+
+ ╭─────────────────────────────────────────────────╮
+ │ >                                               │
+ ╰─────────────────────────────────────────────────╯
+ Never Ask  K2.7 Coding thinking  …/worktrees/9ffe0…
+                                context: 0% (0/256k)
+
+Submit verdict: empty
+
+--- FINAL PANE AFTER SUBMISSION ---
+   Skipped refreshing managed:kimi-code: OAuth
+ provider "managed:kimi-code" requires login before
+ it can be used.
+
+ ╭─────────────────────────────────────────────────╮
+ │                                                 │
+ │  ▐█▛█▛█▌  Welcome to Kimi Code!                 │
+ │  ▐█████▌  Send /help for help information.      │
+ │                                                 │
+ │  Directory: /Users/josephkim/.no-mistakes/workt…│
+ │  Session:   session_80ddd305-82c8-47de-98c2-a80…│
+ │  Model:     K2.7 Coding                         │
+ │  Version:   0.42.0                              │
+ │                                                 │
+ ╰─────────────────────────────────────────────────╯
+
+ ✦ Try Kimi Code Web UI - clearer task progress,
+                        visual sessions & settings
+                        management
+   Run /web to continue your session in the browser
+
+   No session yet — one will be created on your
+ first message.
+
+ ✨ Read the brief at
+    /Users/josephkim/.no-mistakes/worktrees/9ffe04aa
+    3c01/01M2376NY3SRJKWKDG68R2WAXD/.nm-live-kimi/la
+    unch-brief.md and follow it exactly.
+   Warning: AGENTS.md total 76.6 KB exceeds the
+ recommended 32 KB. Large instruction files increase
+ cost and may impact performance; consider trimming.
+   Error: [internal] Stored token for "kimi-code"
+ was rejected; re-login required.
+   If this persists, run `/export-debug-zip` and
+ share the file with us for diagnosis. Please don't
+ share it publicly.
+
+ ╭─────────────────────────────────────────────────╮
+ │ >                                               │
+ ╰─────────────────────────────────────────────────╯
+ Never Ask  K2.7 Coding thinking  …/worktrees/9ffe0…
+                              context: 1% (240/256k)
+
+PASS: pointer echoed with sparkle marker, composer cleared, and context advanced from 0% to 1%.
+NOTE: the copied isolated credential was rejected only after delivery, so model response generation was unavailable.
