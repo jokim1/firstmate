@@ -276,6 +276,63 @@ export const COMPATIBILITY_MANIFEST_SEED = {
         wireChannel: 'threads:launch',
         fused: true
       }
+    }),
+    // 0.106.0 keeps the 0.94.0/0.101.0/0.104.0 native-lane contract. Direct
+    // app.asar inspection (SHA-256 28498b58...) confirmed the same seven
+    // exact-token fused channels and shapes; legacy workspace:create /
+    // threads:openThread / db:workspaceThreads:open remain absent. Additive
+    // multi-agent surfaces do not replace a lane dependency. Release 0.105.0
+    // was skipped by the deliberate pin jump and is not certified here.
+    '0.106.0': releaseCompatibilityShape({
+      ipcChannelStrings: [
+        'threads:launch',
+        'threads:setActiveThread',
+        'threads:send',
+        'threads:stop',
+        'threads:archiveThread',
+        'workspace:archive',
+        'workspace:delete'
+      ],
+      threadOpen: {
+        wireChannel: 'threads:launch',
+        idSource: 'app',
+        resultUndefined: false
+      },
+      workspaceCreate: {
+        wireChannel: 'threads:launch',
+        fused: true
+      }
+    }),
+    // 0.107.0 keeps the 0.94.0/0.101.0/0.104.0/0.106.0 native-lane contract.
+    // Direct app.asar inspection (SHA-256 73e16bfe...) confirmed the same seven
+    // exact-token fused channels and shapes; legacy workspace:create /
+    // threads:openThread / db:workspaceThreads:open remain absent. 0.107.0 adds
+    // the GPT 6 Astra execution model (gpt-6-astra) as the default and carries
+    // per-thread executionModel / executionReasoningLevel / planningModel /
+    // planningReasoningLevel fields, but these are additive model-selection
+    // surfaces: the threads:launch payload {destination, thread, message?,
+    // activate?} carries no model field, so they do not replace a lane
+    // dependency. The lane still depends only on the fused create/open/send/
+    // stop/archive/delete surface.
+    '0.107.0': releaseCompatibilityShape({
+      ipcChannelStrings: [
+        'threads:launch',
+        'threads:setActiveThread',
+        'threads:send',
+        'threads:stop',
+        'threads:archiveThread',
+        'workspace:archive',
+        'workspace:delete'
+      ],
+      threadOpen: {
+        wireChannel: 'threads:launch',
+        idSource: 'app',
+        resultUndefined: false
+      },
+      workspaceCreate: {
+        wireChannel: 'threads:launch',
+        fused: true
+      }
     })
   }
 };
