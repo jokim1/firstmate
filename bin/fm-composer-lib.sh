@@ -1069,6 +1069,19 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
   [ -z "${blocks//▀/}" ]
 }
 
+_fm_composer_kimi_footer_after() {  # <screen> <box-bottom-row>
+  local screen=$1 bottom=$2 status context after
+  status=$(_fm_composer_screen_row "$((bottom + 1))" "$screen")
+  context=$(_fm_composer_screen_row "$((bottom + 2))" "$screen")
+  after=$(_fm_composer_screen_row "$((bottom + 3))" "$screen")
+  fm_composer_normalize_trim_var status
+  fm_composer_normalize_trim_var context
+  fm_composer_normalize_trim_var after
+  case "$status" in *' thinking '*|*' thinking: '*) ;; *) return 1 ;; esac
+  printf '%s\n' "$context" | grep -qE '^context:[[:space:]]*[0-9]+([.][0-9]+)?%[[:space:]]+\([^)]*/[^)]*\)$' \
+    && [ -z "$after" ]
+}
+
 _fm_composer_select_cursorless() {
   local plain=$1 generic=-1 next boundary raw trimmed
   FM_COMPOSER_SELECTED_KIND=
@@ -1147,8 +1160,11 @@ _fm_composer_select_cursorless() {
     trimmed=$raw
     fm_composer_normalize_trim_var trimmed
     if [ -n "$trimmed" ] && ! fm_composer_row_has_edge "$trimmed"; then
-      FM_COMPOSER_SELECTED_KIND=
-      return 1
+      if [ "$FM_COMPOSER_SELECTED_KIND" != box ] \
+         || ! _fm_composer_kimi_footer_after "$plain" "$boundary"; then
+        FM_COMPOSER_SELECTED_KIND=
+        return 1
+      fi
     fi
   fi
   [ -n "$FM_COMPOSER_SELECTED_KIND" ]
