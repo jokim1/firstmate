@@ -588,15 +588,15 @@ export default function (pi: ExtensionAPI) {
         streamingBehavior?: unknown;
       };
       const source = String(ev.source ?? "");
-      if (source === "extension") return {};
+      if (source === "extension") return { action: "continue" };
       const text = String(ev.text ?? ev.input ?? "");
-      if (!text) return {};
-      if (classifyFirstmateCurrentOperationalText(text)) return {};
+      if (!text) return { action: "continue" };
+      if (classifyFirstmateCurrentOperationalText(text)) return { action: "continue" };
       await runFocusPromptHook(text);
     } catch {
       // Fail-open: never block the captain prompt.
     }
-    return {};
+    return { action: "continue" };
   });
 
   pi.on("tool_call", async (event) => {
