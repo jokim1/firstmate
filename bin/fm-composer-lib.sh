@@ -1159,10 +1159,12 @@ _fm_composer_select_cursorless() {
     raw=$(_fm_composer_screen_row "$next" "$plain")
     trimmed=$raw
     fm_composer_normalize_trim_var trimmed
-    if [ -n "$trimmed" ] && ! fm_composer_row_has_edge "$trimmed" \
-       && ! _fm_composer_kimi_footer_after "$plain" "$boundary"; then
-      FM_COMPOSER_SELECTED_KIND=
-      return 1
+    if [ -n "$trimmed" ] && ! fm_composer_row_has_edge "$trimmed"; then
+      if [ "$FM_COMPOSER_SELECTED_KIND" != box ] \
+         || ! _fm_composer_kimi_footer_after "$plain" "$boundary"; then
+        FM_COMPOSER_SELECTED_KIND=
+        return 1
+      fi
     fi
   fi
   [ -n "$FM_COMPOSER_SELECTED_KIND" ]
