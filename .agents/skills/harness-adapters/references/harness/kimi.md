@@ -1,6 +1,6 @@
 # Kimi Code
 
-Verified on 2026-07-25 with Kimi Code CLI 0.29.1.
+Verified on 2026-07-25 with Kimi Code CLI 0.29.1; the boxed-composer and first-message submit behavior was reverified on 2026-09-09 with Kimi Code 0.41.0 on Herdr.
 
 ## Operating facts
 
@@ -17,7 +17,7 @@ Verified on 2026-07-25 with Kimi Code CLI 0.29.1.
 | Trust dialog | None observed on a clean first launch in a fresh pooled worktree. |
 | Slash submission | One Enter submits, with no popup swallow or settle hazard. |
 | Environment marker | None; detection uses process ancestry command name `kimi`. |
-| Composer | Bordered box with a bare `>` prompt glyph and no observed ghost or placeholder text. |
+| Composer | Bordered box with a bare `>` prompt glyph and no observed ghost or placeholder text; Kimi 0.41.0 renders its `thinking` and `context` status rows immediately below the box. |
 | Effort | No verified reasoning-effort flag; `references/common/model-and-effort.md` owns unsupported-value handling. |
 
 ## Readiness-gated start
@@ -28,9 +28,9 @@ The path must be absolute because the instructions live outside the task worktre
 
 Sending before readiness was reproduced as a silent drop with zero exit status, an empty composer, `context: 0%`, no echoed user message, and a healthy-looking idle pane.
 The startup input-readiness window is the established cause; the banner is not.
-An early Enter can expand the composer to multiple content rows, leaving pointer text on the first row and the cursor on an empty later row.
-The shared tmux reader therefore locates the complete bordered composer and treats real text on any content row as positive evidence that submission remains pending.
-No rendering signal proves Kimi will accept input during this window, so delivery retries Enter through the shared submit core and retains the postcondition verification rather than relaxing readiness.
+On Kimi 0.41.0, the first Enter can instead create the first session while leaving the pointer in the boxed composer above Kimi's `thinking` and `context` footer.
+The shared reader treats that structured footer as furniture only after a bordered box, so real text remains `pending`, an empty box reads `empty`, and a left-bar or nonmatching footer remains `unknown`.
+Delivery retries Enter through the shared submit core and retains the postcondition verification rather than relaxing readiness.
 
 Observed spinner captures had optional leading whitespace, a moon-phase glyph, whitespace around `·`, and rotating tip text, including during tool execution.
 The delivery-only matcher requires the observed whitespace, deliberately excludes the unobserved zero-whitespace form, and does not require trailing tip text.
