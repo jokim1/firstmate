@@ -263,7 +263,9 @@ SH
 
 # make_liveness_tmux <dir>: a controllable tmux stub. FM_TEST_PANE_CMD may be
 # a foreground command, `missing` (readable inventory omits the window), or
-# `unreadable` (both pane and inventory reads fail).
+# `unreadable` (both pane and inventory reads fail). FM_TEST_WINDOWS names the
+# registered windows (default fm-sm1); each carries its own killed mark, so one
+# sweep can probe and relaunch several secondmates.
 make_liveness_tmux() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
@@ -290,14 +292,27 @@ case "${1:-}" in
     case "$mode" in
       missing) printf '%s\n' main; exit 0 ;;
       unreadable) exit 1 ;;
-      *) [ -e "${FM_TMUX_CALL_LOG:?}.killed" ] || printf '%s\n' fm-sm1; exit 0 ;;
+      *)
+        for w in ${FM_TEST_WINDOWS:-fm-sm1}; do
+          [ -e "${FM_TMUX_CALL_LOG:?}.killed.$w" ] || printf '%s\n' "$w"
+        done
+        exit 0
+        ;;
     esac
     ;;
   new-window|kill-window)
     printf '%s\n' "$*" >> "${FM_TMUX_CALL_LOG:?}"
-    [ "${1:-}" = kill-window ] && : > "${FM_TMUX_CALL_LOG}.killed"
+    # kill-window names its window as `-t =<session>:=<window>`, new-window as
+    # `-n <window>` (bin/backends/tmux.sh).
+    case "${1:-}" in kill-window) flag=-t ;; *) flag=-n ;; esac
+    name=''; previous=''
+    for a in "$@"; do
+      [ "$previous" = "$flag" ] && name=${a##*=}
+      previous=$a
+    done
+    [ "${1:-}" = kill-window ] && : > "${FM_TMUX_CALL_LOG}.killed.$name"
     [ "${FM_TEST_FAIL_NEW_WINDOW:-0}" = 1 ] && [ "${1:-}" = new-window ] && exit 1
-    [ "${1:-}" = new-window ] && rm -f "${FM_TMUX_CALL_LOG}.killed"
+    [ "${1:-}" = new-window ] && rm -f "${FM_TMUX_CALL_LOG}.killed.$name"
     exit 0
     ;;
   has-session) exit 0 ;;
@@ -504,6 +519,77 @@ test_sweep_converges_no_retouch_once_alive() {
   pass "sweep: idempotent by construction - a live secondmate is never re-touched on a later run"
 }
 
+# count_lines <haystack> <extended-regex>: how many lines match.
+count_lines() {
+  printf '%s\n' "$1" | grep -c -E -- "$2" || true
+}
+
+# Three dead secondmates in one home relaunch through three parallel sweep
+# workers, each a fresh fm-spawn that takes the per-home task-set lock. The
+# collision is inherent to the parallel start: without serialization one
+# spawn wins and the rest refuse with "task set is locked".
+test_sweep_relaunches_every_dead_secondmate_in_one_sweep() {
+  local w fb tmuxfb log out
+  w=$(new_world sweep-three-dead)
+  add_sm_home "$w" sm1 firstmate:fm-sm1
+  add_sm_home "$w" sm2 firstmate:fm-sm2
+  add_sm_home "$w" sm3 firstmate:fm-sm3
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log" \
+    FM_TEST_WINDOWS='fm-sm1 fm-sm2 fm-sm3' FM_BOOTSTRAP_VERBOSE_FACTS=1)
+
+  [ "$(count_lines "$out" '^BOOTSTRAP_INFO: secondmate sm[123] relaunched after ')" -eq 3 ] \
+    || fail "every dead secondmate should relaunch in one sweep:"$'\n'"$out"
+  assert_not_contains "$out" "respawn failed" \
+    "parallel relaunches must not refuse each other on the task-set lock"
+  [ "$(grep -c '^new-window ' "$log")" -eq 3 ] \
+    || fail "three relaunches should open three windows: $(cat "$log")"
+  pass "sweep: three dead secondmates all relaunch in one sweep without task-set lock contention"
+}
+
+# make_poison_mktemp <dir>: a mktemp that defers to the real one, then plants a
+# plain file where the sweep's relaunch gate would be created, so the gate can
+# never be taken - the black-box seam for the gate-unavailable path.
+make_poison_mktemp() {
+  local dir=$1 fakebin real
+  fakebin=$(fm_fakebin "$dir")
+  real=$(PATH="$BASE_PATH" command -v mktemp)
+  cat > "$fakebin/mktemp" <<SH
+#!/usr/bin/env bash
+set -u
+out=\$('$real' "\$@") || exit \$?
+printf '%s\n' "\$out"
+case "\$*" in *fm-bootstrap-par.*) [ ! -d "\$out" ] || : > "\$out/relaunch-gate" ;; esac
+exit 0
+SH
+  chmod +x "$fakebin/mktemp"
+  printf '%s\n' "$fakebin"
+}
+
+test_sweep_degrades_ungated_when_the_relaunch_gate_is_unavailable() {
+  local w fb tmuxfb log out relaunched failed
+  w=$(new_world sweep-gate-unavailable)
+  add_sm_home "$w" sm1 firstmate:fm-sm1
+  add_sm_home "$w" sm2 firstmate:fm-sm2
+  add_sm_home "$w" sm3 firstmate:fm-sm3
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w"); make_poison_mktemp "$w" >/dev/null
+  log="$w/calls.log"; : > "$log"
+
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log" \
+    FM_TEST_WINDOWS='fm-sm1 fm-sm2 fm-sm3' FM_BOOTSTRAP_VERBOSE_FACTS=1)
+
+  [ "$(count_lines "$out" '^SECONDMATE_LIVENESS: relaunch gate unavailable under .*; relaunching sm[123] ungated$')" -eq 3 ] \
+    || fail "each worker should report once that it relaunched ungated:"$'\n'"$out"
+  relaunched=$(count_lines "$out" '^BOOTSTRAP_INFO: secondmate sm[123] relaunched after ')
+  failed=$(count_lines "$out" '^SECONDMATE_LIVENESS: secondmate sm[123]: respawn failed after ')
+  [ "$relaunched" -ge 1 ] || fail "an unavailable gate must still let a relaunch through:"$'\n'"$out"
+  [ $((relaunched + failed)) -eq 3 ] \
+    || fail "an unavailable gate must not hang or drop a worker (relaunched=$relaunched failed=$failed):"$'\n'"$out"
+  pass "sweep: an uncreatable relaunch gate degrades to ungated relaunches instead of spinning"
+}
+
 test_sweep_skipped_under_detect_only() {
   local w fb tmuxfb log out
   w=$(new_world sweep-detect-only)
@@ -553,6 +639,8 @@ test_sweep_never_acts_on_transient_unreadability
 test_sweep_reports_missing_endpoint_relaunch_failure
 test_sweep_never_acts_on_unverified_harness_dead_reading
 test_sweep_converges_no_retouch_once_alive
+test_sweep_relaunches_every_dead_secondmate_in_one_sweep
+test_sweep_degrades_ungated_when_the_relaunch_gate_is_unavailable
 test_sweep_skipped_under_detect_only
 test_sweep_noop_with_no_secondmate_meta
 
