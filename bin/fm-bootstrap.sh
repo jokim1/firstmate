@@ -19,6 +19,7 @@
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed after <cause>: <reason>",
+#                 "SECONDMATE_LIVENESS: relaunch gate unavailable under <dir>; relaunching <id> ungated",
 #                 "SECONDMATE_HANDOFF: secondmate <id>: pending delivery: <n> item(s)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          When a RUNNING secondmate home is fast-forwarded, its target is
@@ -41,13 +42,15 @@
 #          syncs or inheritance failures for live secondmate homes, plus
 #          quarantine diagnostics for divergent shared captain-preference
 #          copies; no-op/current and successful updates stay quiet.
-#          SECONDMATE_LIVENESS lines report only actionable failures from the
-#          recovery-grade state owned by bin/fm-backend.sh's
-#          fm_backend_agent_state: skipped distinguishes an existing ambiguous
-#          process, an unreadable target, and an unverified backend; respawn
-#          failed names whether the endpoint was missing or agent-less.
-#          Already-live and successfully relaunched secondmates are silent
-#          unless FM_BOOTSTRAP_VERBOSE_FACTS=1 requests BOOTSTRAP_INFO facts.
+#          SECONDMATE_LIVENESS lines report actionable liveness failures or
+#          degraded relaunch serialization. The recovery-grade state owned by
+#          bin/fm-backend.sh's fm_backend_agent_state distinguishes an existing
+#          ambiguous process, an unreadable target, and an unverified backend;
+#          respawn failed names whether the endpoint was missing or agent-less.
+#          A relaunch-gate warning says that worker proceeded ungated because
+#          the parallel sweep's private gate could not be created.
+#          Already-live and normally relaunched secondmates are silent unless
+#          FM_BOOTSTRAP_VERBOSE_FACTS=1 requests BOOTSTRAP_INFO facts.
 #          A TANGLE line means the firstmate primary checkout (FM_ROOT) is stranded
 #          on a feature branch instead of its default branch - a crewmate's work
 #          landed in the primary instead of its own worktree; restore it per the line.
