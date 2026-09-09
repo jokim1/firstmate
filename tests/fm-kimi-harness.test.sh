@@ -679,8 +679,8 @@ test_kimi_bordered_prompt_needs_no_override() {
 
 test_kimi_status_footers_keep_bordered_composer_readable() {
   local caps pending empty pending_042 empty_042 non_kimi leftbar leftbar_042 out
-  # This is the cursorless Herdr tail from Kimi 0.41.0 after its first Enter
-  # was swallowed during first-message session creation.
+  # This is a normalized reconstruction of the cursorless Kimi 0.41.0 Herdr
+  # tail with the pointer still pending after an Enter; a later Enter sent it.
   caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=20')
   pending=$' │  ▐█▛█▛█▌  Welcome to Kimi Code!                  │\n │  Version:   0.41.0                               │\n │                                                  │\n ╰──────────────────────────────────────────────────╯\n\n   No session yet - one will be created on your first\n message.\n\n ╭──────────────────────────────────────────────────╮\n │ > Read the brief at /tmp/launch-brief.md         │\n │   and follow it exactly.                         │\n │                                                  │\n ╰──────────────────────────────────────────────────╯\n auto  K2.7 Coding thinking  …/firstmate-a1c221/1/fi…\n                                 context: 0% (0/256k)'
   empty=${pending/│ > Read the brief at \/tmp\/launch-brief.md         │/│ >                                                │}
@@ -691,9 +691,9 @@ test_kimi_status_footers_keep_bordered_composer_readable() {
   out=$(fm_composer_classify_screen "$caps" "$empty")
   [ "$out" = empty ] || fail "Kimi 0.41.0 empty composer with its status footer read '$out'"
   pending_042=${pending/Version:   0.41.0/Version:   0.42.0}
-  pending_042=${pending_042/ thinking / thinking: /}
+  pending_042=${pending_042/auto  K2.7 Coding thinking/auto  K3 thinking: high}
   empty_042=${empty/Version:   0.41.0/Version:   0.42.0}
-  empty_042=${empty_042/ thinking / thinking: /}
+  empty_042=${empty_042/auto  K2.7 Coding thinking/auto  K3 thinking: high}
   out=$(fm_composer_classify_screen "$caps" "$pending_042")
   [ "$out" = pending ] || fail "Kimi 0.42.0 pending composer with its status footer read '$out'"
   out=$(fm_composer_classify_screen "$caps" "$empty_042")
@@ -704,7 +704,8 @@ test_kimi_status_footers_keep_bordered_composer_readable() {
   leftbar=$'Kimi Code 0.41.0\n┃\n┃  > Read the brief at /tmp/launch-brief.md\n┃\n╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\nauto  K2.7 Coding thinking  …/firstmate\ncontext: 0% (0/256k)'
   out=$(fm_composer_classify_screen "$caps" "$leftbar")
   [ "$out" = unknown ] || fail "a left-bar composer with Kimi's status footer read '$out'"
-  leftbar_042=${leftbar/ thinking / thinking: /}
+  leftbar_042=${leftbar/Kimi Code 0.41.0/Kimi Code 0.42.0}
+  leftbar_042=${leftbar_042/auto  K2.7 Coding thinking/auto  K3 thinking: high}
   out=$(fm_composer_classify_screen "$caps" "$leftbar_042")
   [ "$out" = unknown ] || fail "a left-bar composer with Kimi 0.42.0's status footer read '$out'"
   pass "composer classifier: Kimi status footers preserve pending and empty composer verdicts"
