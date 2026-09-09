@@ -117,3 +117,25 @@ The fused `threads:launch` created workspace `ws_61230b4ed186` and app-minted th
 Post-smoke database and filesystem checks found that workspace, thread, and worktree absent while MAIN `ws_00159507e225` remained active and local.
 Post-smoke `doctor --json` and `ready --json --capability native` both report `ready=true`, `operatingState=native-enabled`, and `mutationsEnabled=true`.
 The signed publication preserves earlier releases and verifies 35 scopes with zero refusals.
+
+## Static contract re-assessment (2026-09-07, Playbot 0.106.0, no live smoke)
+
+Playbot 0.106.0 was assessed read-only against the same fused-lane contract before the pin advanced to 0.107.0, so it is carried as a static-contract manifest entry with no live smoke of its own.
+Installed `app.asar` SHA-256 at that assessment: `28498b583945bd6c87830b7309bb3336655704035205c0a54afc0cde1cfef580`.
+Bundle inspection found every fused-lane channel as an exact token and none of the removed `workspace:create`, `threads:openThread`, or `db:workspaceThreads:open` channels; the `threads:launch` payload `{ destination, thread, message?, activate? }` and result `{ workspace, thread, selectedWorkspaceId, activate, createdWorkspace }` shapes were unchanged from 0.104.0.
+The live mutation evidence for the installed host is the 0.107.0 smoke below; 0.106.0's manifest entry certifies only its static schema/IPC contract.
+
+## Phase 1 live smoke (2026-09-09, Playbot 0.107.0)
+
+Host: macOS, Playbot 0.107.0, disposable project `project_07474ac1d119` only.
+Installed `app.asar` SHA-256: `73e16bfeca6cfebafbac96c0f4e436b6524f5799e4ac0f164fab33470b2a2a2e`.
+Read-only bundle inspection found every fused-lane channel as an exact token and found none of the removed `workspace:create`, `threads:openThread`, or `db:workspaceThreads:open` channels.
+The `threads:launch` request still selects a `new-workspace` or `existing-workspace` destination and returns the app-minted `{ workspace, thread, selectedWorkspaceId, activate, createdWorkspace }` result shape.
+0.107.0 introduces the GPT 6 Astra execution model (`gpt-6-astra`) as the default and carries per-thread `executionModel` / `executionReasoningLevel` / `planningModel` / `planningReasoningLevel` selection fields; the `threads:launch` payload carries no model field, so these additive model-selection surfaces do not replace a native-lane mutation dependency.
+Command: `bin/fm-playbot-lanes.mjs smoke --json`
+Smoke run id: `2026-09-09T04-31-32-470Z` (receipt bound to the lanes script at sha256 `9fe6459cef395d7ffdc0a28dfe23f5b439c563f0c9ffecc825d805f022dafa37`).
+Result: `operatingState: native-enabled`; confinement `readAllowed=true` / `writeDenied=true` via the fixed worktree probe with structured tool proof.
+The fused `threads:launch` created workspace `ws_2c997b779e23` and app-minted thread `chat-172f566b-8065-4ba1-b3fc-7dd6a7313af9` only under the disposable project.
+Post-smoke database and filesystem checks found that workspace, thread, and worktree absent while MAIN `ws_00159507e225` remained active and local.
+Post-smoke `doctor --json` and `ready --json --capability native` both report `ready=true`, `operatingState=native-enabled`, and `mutationsEnabled=true`.
+The signed publication preserves earlier releases and verifies 42 scopes with zero refusals.
