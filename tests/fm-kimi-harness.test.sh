@@ -677,6 +677,25 @@ test_kimi_bordered_prompt_needs_no_override() {
   pass "composer classifier: kimi's existing bordered > shape is already safe without an override"
 }
 
+test_kimi_041_status_footer_keeps_bordered_composer_readable() {
+  local caps pending empty non_kimi out
+  # This is the cursorless Herdr tail from Kimi 0.41.0 after its first Enter
+  # was swallowed during first-message session creation.
+  caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=20')
+  pending=$' │  ▐█▛█▛█▌  Welcome to Kimi Code!                  │\n │  Version:   0.41.0                               │\n │                                                  │\n ╰──────────────────────────────────────────────────╯\n\n   No session yet - one will be created on your first\n message.\n\n ╭──────────────────────────────────────────────────╮\n │ > Read the brief at /tmp/launch-brief.md         │\n │   and follow it exactly.                         │\n │                                                  │\n ╰──────────────────────────────────────────────────╯\n auto  K2.7 Coding thinking  …/firstmate-a1c221/1/fi…\n                                 context: 0% (0/256k)'
+  empty=${pending/│ > Read the brief at \/tmp\/launch-brief.md         │/│ >                                                │}
+  empty=${empty/$'\n │   and follow it exactly.                         │'/}
+
+  out=$(fm_composer_classify_screen "$caps" "$pending")
+  [ "$out" = pending ] || fail "Kimi 0.41.0 pending composer with its status footer read '$out'"
+  out=$(fm_composer_classify_screen "$caps" "$empty")
+  [ "$out" = empty ] || fail "Kimi 0.41.0 empty composer with its status footer read '$out'"
+  non_kimi=${pending/ thinking / idle /}
+  out=$(fm_composer_classify_screen "$caps" "$non_kimi")
+  [ "$out" = unknown ] || fail "a non-Kimi footer below a bordered composer read '$out'"
+  pass "composer classifier: Kimi 0.41.0 status footer preserves pending and empty composer verdicts"
+}
+
 test_kimi_hook_install_is_surgical_idempotent_and_removable
 test_kimi_hook_remove_preserves_owned_newline_boundary
 test_kimi_hook_fails_closed_on_missing_malformed_or_partial_config
@@ -694,3 +713,4 @@ test_kimi_session_lock_identity
 test_kimi_busy_signature_is_scoped_to_spinner_lines
 test_watcher_never_classifies_kimi_from_its_spinner
 test_kimi_bordered_prompt_needs_no_override
+test_kimi_041_status_footer_keeps_bordered_composer_readable
