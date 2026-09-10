@@ -25,8 +25,8 @@ The MCP exposes four read-only tools at most (`health`, `identify_controller`, `
 
 ## Mutation evidence and the Phase 1 smoke
 
-The compatibility seed in `bin/fm-playbot-lanes.mjs` is the authoritative per-release record of read-only schema, IPC string, and wire-contract facts for proven releases (currently `0.90.0`, `0.92.0`, `0.93.1`, `0.94.0`, `0.101.0`, and `0.104.0`).
-Playbot `0.94.0` removed the standalone `workspace:create` and `threads:openThread` channels, and `0.101.0` and `0.104.0` retain that contract, so each seed entry also fixes the release's thread-open and workspace-create wire contracts: the abstract operation names and evidence keys stay stable, while on those releases both operations go over `threads:launch` (workspace creation is fused with opening the workspace's first thread, and thread ids are minted by the app) and each evidence record annotates the real wire channel.
+The compatibility seed in `bin/fm-playbot-lanes.mjs` is the authoritative per-release record of read-only schema, IPC string, and wire-contract facts for proven releases.
+Playbot `0.94.0` removed the standalone `workspace:create` and `threads:openThread` channels, and later certified releases retain that contract, so each seed entry also fixes the release's thread-open and workspace-create wire contracts: the abstract operation names and evidence keys stay stable, while on those releases both operations go over `threads:launch` (workspace creation is fused with opening the workspace's first thread, and thread ids are minted by the app) and each evidence record annotates the real wire channel.
 Per-operation `mutationEvidence` starts at `PHASE1-EVIDENCE-REQUIRED`.
 Only the `smoke` command may extend the overlay under `docs/verification/playbot-mutation-evidence/`:
 
@@ -45,7 +45,7 @@ bin/fm-playbot-lanes.mjs smoke --json
 ```
 
 The smoke creates a disposable non-MAIN workspace and thread on that project only, exercises create / openThread / send / stop / archiveThread / delete, runs the confinement probe, archives the thread, deletes the workspace, verifies both are absent (fail-closed on ambiguity), and writes the overlay.
-On a release with the fused contract (`0.94.0`, `0.101.0`, and `0.104.0`), the create step already opens the workspace's first thread, so the smoke adopts that thread instead of opening a second one and still records both the `workspace:create` and `threads:openThread` evidence keys from the single launch.
+On a certified release with the fused contract (`0.94.0` and later), the create step already opens the workspace's first thread, so the smoke adopts that thread instead of opening a second one and still records both the `workspace:create` and `threads:openThread` evidence keys from the single launch.
 It never targets MAIN `ws_00159507e225` or any pre-existing non-smoke workspace.
 
 ## Confinement gate-8 re-scope
@@ -59,6 +59,9 @@ Operator contract: write denial must be explicitly proved; read allowance does n
 - `phase1-evidence-required` - missing or unverified mutation evidence for required ops, or missing confinement record.
 - `courier-only-confinement` - confinement write denial failed; native workers stay disabled for that release.
 - `native-enabled` - verified evidence for create, openThread, send, stop, archiveThread, and delete, plus confinement write denial.
+
+Native backend dispatch adopts the fused first thread returned by workspace creation and labels it with the task and delivery identity instead of opening a second thread.
+The initial brief uses the task's recorded effort: an absent effort defaults to `medium`, `low` is refused because `medium` is the floor, and `medium`, `high`, `xhigh`, `max`, and `ultra` pass through unchanged.
 
 ## Operator commands
 
