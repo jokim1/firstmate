@@ -223,6 +223,27 @@ land_renumbered_migration_pr() {
   printf '%s\n' "$pr_head"
 }
 
+land_pr_head_with_unrelated_copy() {
+  local case_dir=$1 tmp pr_head
+  tmp="$case_dir/_unrelated-copy"
+  git clone -q "$case_dir/origin.git" "$tmp"
+  git -C "$tmp" checkout -q -b unrelated-copy
+  cp "$tmp/tracked.txt" "$tmp/unrelated.txt"
+  git -C "$tmp" add -- unrelated.txt
+  git -C "$tmp" -c user.email=t@t -c user.name=t \
+    commit -q -m "add unrelated copy"
+  pr_head=$(git -C "$tmp" rev-parse HEAD)
+  git -C "$tmp" push -q origin "HEAD:refs/pull/7/head"
+  git -C "$tmp" checkout -q main
+  git -C "$tmp" merge -q --squash unrelated-copy >/dev/null
+  git -C "$tmp" -c user.email=t@t -c user.name=t \
+    commit -q -m "feat: add unrelated copy (#7)"
+  git -C "$tmp" push -q origin main
+  rm -rf "$tmp"
+  git -C "$case_dir/project" fetch -q origin
+  printf '%s\n' "$pr_head"
+}
+
 # Land the feature bytes while deliberately recapturing different generated
 # evidence bytes on origin/main.
 land_feature_with_recaptured_evidence() {
@@ -963,6 +984,62 @@ test_squash_merged_renumbered_migration_allows_final_recorded_head() {
   pass "a live merged PR whose final head equals recorded pr_head allows a pipeline-renumbered migration"
 }
 
+test_recorded_head_refuses_cross_path_copy_while_local_path_exists() {
+  local case_dir rc local_head pr_head
+  case_dir=$(make_case recorded-head-unrelated-copy)
+  write_meta "$case_dir" no-mistakes ship
+  land_on_origin_main "$case_dir" tracked.txt base
+  git -C "$case_dir/wt" fetch -q origin
+  git -C "$case_dir/wt" reset -q --hard origin/main
+  printf '%s\n' payload > "$case_dir/wt/tracked.txt"
+  git -C "$case_dir/wt" add -- tracked.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "change tracked payload"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  pr_head=$(land_pr_head_with_unrelated_copy "$case_dir")
+  printf '%s\n' \
+    'pr=https://github.com/example/repo/pull/7' \
+    "pr_head=$pr_head" >> "$case_dir/state/task-x1.meta"
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "recorded-head-unrelated-copy: an unrelated copy must not prove the local path landed"
+  assert_refusal_retained_task_state "$case_dir" recorded-head-unrelated-copy "$local_head"
+  pass "recorded PR proof rejects matching bytes elsewhere while the local path still exists"
+}
+
+test_recorded_head_refuses_unlanded_mode_change() {
+  local case_dir rc local_head pr_head
+  case_dir=$(make_case recorded-head-mode-change)
+  write_meta "$case_dir" no-mistakes ship
+  land_on_origin_main "$case_dir" tracked.txt payload
+  git -C "$case_dir/wt" fetch -q origin
+  git -C "$case_dir/wt" reset -q --hard origin/main
+  chmod +x "$case_dir/wt/tracked.txt"
+  git -C "$case_dir/wt" add -- tracked.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "make tracked payload executable"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  pr_head=$(land_pr_head_with_unrelated_copy "$case_dir")
+  printf '%s\n' \
+    'pr=https://github.com/example/repo/pull/7' \
+    "pr_head=$pr_head" >> "$case_dir/state/task-x1.meta"
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "recorded-head-mode-change: matching blob bytes must not hide an unlanded mode change"
+  assert_refusal_retained_task_state "$case_dir" recorded-head-mode-change "$local_head"
+  pass "recorded PR proof compares full tree entries including file mode"
+}
+
 test_cherry_pick_with_allowlisted_evidence_difference_allows() {
   local case_dir rc
   case_dir=$(make_case cherry-pick-evidence)
@@ -1013,6 +1090,28 @@ test_landed_except_refuses_real_unlanded_file_and_prints_path() {
     "landed-except-unlanded: refusal did not print the exact differing path"
   assert_refusal_retained_task_state "$case_dir" landed-except-unlanded "$local_head"
   pass "content equivalence prints and refuses a non-allowlisted unlanded path"
+}
+
+test_landed_except_refuses_when_allowlist_is_the_only_proof() {
+  local case_dir rc local_head
+  case_dir=$(make_case landed-except-only-proof)
+  write_meta "$case_dir" local-only ship
+  wt_commit_file "$case_dir" unlanded.txt never-landed "add unlanded file"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+
+  set +e
+  run_teardown "$case_dir" --landed-except '**' \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "landed-except-only-proof: an allowlist cannot prove wholly unlanded work"
+  assert_grep 'nothing landed' "$case_dir/stderr" \
+    "landed-except-only-proof: refusal did not explain that nothing landed"
+  assert_grep 'captain --force' "$case_dir/stderr" \
+    "landed-except-only-proof: refusal did not name the discard authority"
+  assert_refusal_retained_task_state "$case_dir" landed-except-only-proof "$local_head"
+  pass "an allowlist cannot constitute landing proof by itself"
 }
 
 test_landed_except_never_overrides_closed_unmerged_pr() {
@@ -4370,8 +4469,11 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
 test_squash_merged_branch_deleted_allows
 test_squash_merged_renumbered_migration_allows_final_recorded_head
+test_recorded_head_refuses_cross_path_copy_while_local_path_exists
+test_recorded_head_refuses_unlanded_mode_change
 test_cherry_pick_with_allowlisted_evidence_difference_allows
 test_landed_except_refuses_real_unlanded_file_and_prints_path
+test_landed_except_refuses_when_allowlist_is_the_only_proof
 test_landed_except_never_overrides_closed_unmerged_pr
 test_landed_except_refuses_loudly_when_forge_read_fails
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head

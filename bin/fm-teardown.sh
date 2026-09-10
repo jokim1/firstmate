@@ -40,8 +40,9 @@
 # HEAD vs D when no pr= is recorded or the forge reports MERGED (squash), (M)
 # forge MERGED with current HEAD contained in the PR head, (P) the recorded pr=
 # reads live as MERGED and its final head equals current HEAD or the recorded
-# pr_head= while covering every local changed blob without hiding a later local
-# descendant, or (E) every path changed
+# pr_head= while covering every local changed tree entry at the same path or as
+# an exact rename without hiding a later local descendant, or (E) at least one
+# task-changed path is byte-identical on D and every other path changed
 # from merge-base(HEAD,D) to HEAD is byte-equivalent on D except the explicit
 # repeatable --landed-except patterns. E is available only when the caller gives
 # an exception pattern, and a recorded pr= must read live as MERGED before E can
@@ -1807,12 +1808,11 @@ read_recorded_pr_live_final_head() {
   LIVE_RECORDED_PR_HEAD=$head
 }
 
-# Confirm that every blob changed by current since its merge-base with final is
-# present in final, either at the same path or at another final-changed path.
-# The second form is the exact-content rename proof needed for renumbered files.
+# Confirm that every tree entry changed by current since its merge-base with
+# final is present in final at the same path or was moved to a final-changed path.
 recorded_head_covers_local_changes() {
   local current=$1 final=$2 base current_paths final_paths path final_path
-  local current_entry current_oid final_entry final_oid found=0 covered=1
+  local current_entry current_identity final_entry final_identity found=0 covered=1
   base=$(git -C "$WT" merge-base "$current" "$final" 2>/dev/null) || return 1
   current_paths=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-current-paths.XXXXXX") || return 1
   final_paths=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-final-paths.XXXXXX") || {
@@ -1833,14 +1833,20 @@ recorded_head_covers_local_changes() {
     fi
     current_entry=$(git -C "$WT" ls-tree "$current" -- "$path" 2>/dev/null) \
       || { covered=0; break; }
-    current_oid=$(printf '%s\n' "$current_entry" | awk 'NR == 1 { print $3; exit }')
-    fm_pr_head_valid "$current_oid" || { covered=0; break; }
+    [ -n "$current_entry" ] || { covered=0; break; }
+    current_identity=$(printf '%s\n' "$current_entry" \
+      | awk 'NR == 1 { print $1 " " $2 " " $3; exit }')
+    final_entry=$(git -C "$WT" ls-tree "$final" -- "$path" 2>/dev/null) \
+      || { covered=0; break; }
+    [ -z "$final_entry" ] || { covered=0; break; }
     found=0
     while IFS= read -r -d '' final_path; do
       final_entry=$(git -C "$WT" ls-tree "$final" -- "$final_path" 2>/dev/null) \
         || continue
-      final_oid=$(printf '%s\n' "$final_entry" | awk 'NR == 1 { print $3; exit }')
-      if [ "$current_oid" = "$final_oid" ]; then
+      [ -n "$final_entry" ] || continue
+      final_identity=$(printf '%s\n' "$final_entry" \
+        | awk 'NR == 1 { print $1 " " $2 " " $3; exit }')
+      if [ "$current_identity" = "$final_identity" ]; then
         found=1
         break
       fi
@@ -1886,7 +1892,7 @@ path_matches_landed_exception() {
 # Every differing path is printed, and any path outside the explicit allowlist
 # refuses the proof.
 land_content_equivalent_except() {
-  local D=$1 current=$2 base paths_file path diff_rc nonallowed=0 compare_error=0
+  local D=$1 current=$2 base paths_file path diff_rc identical=0 nonallowed=0 compare_error=0
   [ "${#LANDED_EXCEPT[@]}" -gt 0 ] || return 1
   if [ -n "${PR_URL:-}" ]; then
     if [ "$LIVE_RECORDED_PR_STATE_READ" != 1 ]; then
@@ -1906,7 +1912,7 @@ land_content_equivalent_except() {
     git -C "$WT" diff --quiet --no-ext-diff "$D" "$current" -- "$path" \
       || diff_rc=$?
     case "$diff_rc" in
-      0) ;;
+      0) identical=1 ;;
       1)
         if path_matches_landed_exception "$path"; then
           printf 'landed-content difference (allowlisted): %s\n' "$path" >&2
@@ -1925,6 +1931,10 @@ land_content_equivalent_except() {
   fi
   if [ "$nonallowed" = 1 ]; then
     echo "REFUSED: content-equivalence found non-allowlisted differing paths on the live default branch." >&2
+    return 1
+  fi
+  if [ "$identical" != 1 ]; then
+    echo "REFUSED: content-equivalence proved nothing landed; discarding this work needs captain --force." >&2
     return 1
   fi
   return 0
