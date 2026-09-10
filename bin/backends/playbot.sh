@@ -245,7 +245,6 @@ fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id
     --branch "$slug" \
     --base-ref "$base" \
     --expected-commit "$expected" \
-    --approval-mode full-access \
     --title "$thread_title"
 }
 
@@ -263,7 +262,6 @@ fm_backend_playbot_thread_create() {  # <workspace-id> <task-id> <delivery-id> -
   fm_backend_playbot_tool_check || return 1
   fm_backend_playbot_lane open-thread \
     --workspace-id "$workspace_id" \
-    --approval-mode full-access \
     --title "firstmate:${task_id}${delivery_id:+:$delivery_id}"
 }
 

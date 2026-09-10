@@ -871,6 +871,8 @@ PLAYBOT_DELIVERY_ID=
 PLAYBOT_BINDING_GEN=
 PLAYBOT_BRIEF_DIGEST=
 PLAYBOT_TXN_STATE=
+PLAYBOT_TXN_MODE=
+PLAYBOT_TXN_YOLO=
 PLAYBOT_WORKER_STARTED_REENTRY=0
 PLAYBOT_RECOVERY_WIRING_CLEANUP=0
 HERDR_PROJECTION_ABORT_CLEANUP=0
@@ -941,6 +943,7 @@ playbot_txn_write() {  # <state>
     echo "task_id=$ID"; echo "brief_digest=$PLAYBOT_BRIEF_DIGEST"
     echo "project_binding_gen=$PLAYBOT_BINDING_GEN"
     echo "requested_base=${PLAYBOT_REQUESTED_BASE:-HEAD}"
+    echo "mode=$MODE"; echo "yolo=$YOLO"
     echo "delivery_id=$PLAYBOT_DELIVERY_ID"; echo "state=$stage"
     [ -z "${PLAYBOT_WORKSPACE_ID:-}" ] || echo "workspace_id=$PLAYBOT_WORKSPACE_ID"
     [ -z "${PLAYBOT_THREAD_ID:-}" ] || echo "thread_id=$PLAYBOT_THREAD_ID"
@@ -958,6 +961,8 @@ playbot_txn_load_existing() {
   PLAYBOT_BRIEF_DIGEST=$(playbot_txn_get "$path" brief_digest) || true
   PLAYBOT_BINDING_GEN=$(playbot_txn_get "$path" project_binding_gen) || true
   PLAYBOT_REQUESTED_BASE=$(playbot_txn_get "$path" requested_base) || true
+  PLAYBOT_TXN_MODE=$(playbot_txn_get "$path" mode) || true
+  PLAYBOT_TXN_YOLO=$(playbot_txn_get "$path" yolo) || true
   PLAYBOT_DELIVERY_ID=$(playbot_txn_get "$path" delivery_id) || true
   PLAYBOT_WORKSPACE_ID=$(playbot_txn_get "$path" workspace_id) || true
   PLAYBOT_THREAD_ID=$(playbot_txn_get "$path" thread_id) || true
@@ -990,6 +995,23 @@ playbot_dispatch_transaction() {
       *) echo "error: playbot txn $ID unknown state '$stage'" >&2; return 1 ;;
     esac
   else stage=new; fi
+  if [ "$stage" != new ]; then
+    if [ -z "$PLAYBOT_TXN_MODE" ] && [ -z "$PLAYBOT_TXN_YOLO" ]; then
+      if [ "$MODE" != local-only ] || [ "$YOLO" != off ]; then
+        PLAYBOT_ABORT_CLEANUP=0
+        echo "error: legacy playbot txn $ID can recover only with mode=local-only yolo=off" >&2
+        return 1
+      fi
+    elif [ -z "$PLAYBOT_TXN_MODE" ] || [ -z "$PLAYBOT_TXN_YOLO" ]; then
+      PLAYBOT_ABORT_CLEANUP=0
+      echo "error: playbot txn $ID has incomplete delivery posture; refuse recovery" >&2
+      return 1
+    elif [ "$PLAYBOT_TXN_MODE" != "$MODE" ] || [ "$PLAYBOT_TXN_YOLO" != "$YOLO" ]; then
+      PLAYBOT_ABORT_CLEANUP=0
+      echo "error: playbot txn $ID delivery posture mode=$PLAYBOT_TXN_MODE yolo=$PLAYBOT_TXN_YOLO does not match requested mode=$MODE yolo=$YOLO; refuse recovery" >&2
+      return 1
+    fi
+  fi
   binding_raw=$(fm_backend_playbot_binding_resolve "$PROJ_ABS") || {
     echo "error: playbot project binding missing/mismatched for $PROJ_ABS" >&2; return 1; }
   active_project_id=${binding_raw%%$'\t'*}; rest=${binding_raw#*$'\t'}

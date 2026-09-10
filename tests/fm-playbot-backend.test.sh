@@ -427,9 +427,9 @@ CREATE_TITLE_OUT=$(
   || fail "workspace_create must return the lane's fused create record unchanged"
 grep -Fq -- '--title firstmate:title-task:delivery-title' "$TMP_ROOT/create-title.args" \
   || fail "workspace_create must pass the task-specific fused thread title to lanes create"
-grep -Fq -- '--approval-mode full-access' "$TMP_ROOT/create-title.args" \
-  || fail "workspace_create must make the fused build thread full access"
-pass "workspace_create labels the fused thread and makes it full access"
+grep -Fq -- '--approval-mode' "$TMP_ROOT/create-title.args" \
+  && fail "workspace_create must leave the fixed approval policy to the lane boundary"
+pass "workspace_create labels the fused thread through the fixed-policy lane"
 
 : > "$TMP_ROOT/open-thread.args"
 THREAD_CREATE_OUT=$(
@@ -444,9 +444,9 @@ THREAD_CREATE_OUT=$(
   || fail "thread_create must return the lane's thread id unchanged"
 grep -Fq -- '--title firstmate:title-task:delivery-title' "$TMP_ROOT/open-thread.args" \
   || fail "thread_create must pass the task-specific thread title to lanes open-thread"
-grep -Fq -- '--approval-mode full-access' "$TMP_ROOT/open-thread.args" \
-  || fail "thread_create must make the build thread full access"
-pass "thread_create labels the build thread and makes it full access"
+grep -Fq -- '--approval-mode' "$TMP_ROOT/open-thread.args" \
+  && fail "thread_create must leave the fixed approval policy to the lane boundary"
+pass "thread_create labels the build thread through the fixed-policy lane"
 
 # --- send_initial effort mapping (medium floor; never low) ---------------------
 # Without --effort, lanes mutationSend defaults every order to low. Captain
@@ -649,13 +649,14 @@ $1
 EOF
 }
 
-run_playbot_spawn() {  # <id>
+run_playbot_spawn() {  # <id> [mode] [yolo]
+  local id=$1 mode=${2:-local-only} yolo=${3:-off}
   FM_PLAYBOT_LANES_OVERRIDE="$SPAWN_LANE" \
     FM_PLAYBOT_TEST_LOG="$SPAWN_LOG" \
     FM_PLAYBOT_TEST_WORKTREE="$SPAWN_WORKTREE" \
-    FM_PLAYBOT_TEST_ROUTE_PATH="$SPAWN_HOME/state/$1.playbot-route.json" \
+    FM_PLAYBOT_TEST_ROUTE_PATH="$SPAWN_HOME/state/$id.playbot-route.json" \
     fm_test_run_spawn "$SPAWN_HOME" "$SPAWN_WORKTREE" "$SPAWN_FAKEBIN" \
-      "$1" "$SPAWN_PROJECT" --mode local-only --yolo off \
+      "$id" "$SPAWN_PROJECT" --mode "$mode" --yolo "$yolo" \
       --backend playbot --harness codex --effort xhigh
 }
 
@@ -694,6 +695,10 @@ test_fresh_playbot_spawn_commits_record_and_backlog() {
     "fresh Playbot spawn did not install its reconciliation check"
   assert_present "$SPAWN_HOME/state/$id.check-trust" \
     "fresh Playbot spawn did not register its reconciliation check"
+  assert_grep 'mode=local-only' "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" \
+    "fresh Playbot spawn did not bind its mode in the transaction"
+  assert_grep 'yolo=off' "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" \
+    "fresh Playbot spawn did not bind its merge authority in the transaction"
   pass "fresh Playbot spawn keeps its task record and commits the backlog transition"
 }
 
@@ -892,11 +897,102 @@ EOF
   pass "worker-started re-entry refuses a missing endpoint"
 }
 
+test_worker_started_reentry_refuses_posture_changes() {
+  local id rec out status
+
+  id=playbot-reentry-yolo-mismatch-v2
+  rec=$(make_playbot_spawn_case reentry-yolo-mismatch "$id")
+  read_playbot_spawn_case "$rec"
+  mkdir -p "$SPAWN_HOME/state/.playbot-dispatch"
+  cat > "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" <<EOF
+task_id=$id
+brief_digest=digest-fixture
+project_binding_gen=1
+requested_base=HEAD
+mode=local-only
+yolo=off
+delivery_id=delivery-fixture
+state=worker-started
+workspace_id=workspace-fixture
+thread_id=thread-fixture
+playbot_project_id=project-fixture
+playbot_project_root_id=root-fixture
+worktree=$SPAWN_WORKTREE
+EOF
+  status=0
+  out=$(run_playbot_spawn "$id" local-only on) || status=$?
+  [ "$status" -ne 0 ] || fail "worker-started re-entry escalated its recorded yolo posture"
+  assert_contains "$out" "delivery posture mode=local-only yolo=off does not match requested mode=local-only yolo=on" \
+    "worker-started re-entry did not explain the yolo mismatch"
+  assert_absent "$SPAWN_HOME/state/$id.meta" \
+    "yolo-mismatched re-entry published a task record"
+  [ "$(grep -Ec '^(create|open-thread|send|route-write|archive|delete|cleanup-state)$' "$SPAWN_LOG" || true)" -eq 0 ] \
+    || fail "yolo-mismatched re-entry mutated the existing worker or recovery wiring"
+
+  id=playbot-reentry-mode-mismatch-v2
+  rec=$(make_playbot_spawn_case reentry-mode-mismatch "$id")
+  read_playbot_spawn_case "$rec"
+  mkdir -p "$SPAWN_HOME/state/.playbot-dispatch"
+  cat > "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" <<EOF
+task_id=$id
+brief_digest=digest-fixture
+project_binding_gen=1
+requested_base=HEAD
+mode=no-mistakes
+yolo=off
+delivery_id=delivery-fixture
+state=worker-started
+workspace_id=workspace-fixture
+thread_id=thread-fixture
+playbot_project_id=project-fixture
+playbot_project_root_id=root-fixture
+worktree=$SPAWN_WORKTREE
+EOF
+  status=0
+  out=$(run_playbot_spawn "$id") || status=$?
+  [ "$status" -ne 0 ] || fail "worker-started re-entry changed its recorded delivery mode"
+  assert_contains "$out" "delivery posture mode=no-mistakes yolo=off does not match requested mode=local-only yolo=off" \
+    "worker-started re-entry did not explain the mode mismatch"
+  assert_absent "$SPAWN_HOME/state/$id.meta" \
+    "mode-mismatched re-entry published a task record"
+  [ "$(grep -Ec '^(create|open-thread|send|route-write|archive|delete|cleanup-state)$' "$SPAWN_LOG" || true)" -eq 0 ] \
+    || fail "mode-mismatched re-entry mutated the existing worker or recovery wiring"
+
+  id=playbot-reentry-legacy-yolo-v2
+  rec=$(make_playbot_spawn_case reentry-legacy-yolo "$id")
+  read_playbot_spawn_case "$rec"
+  mkdir -p "$SPAWN_HOME/state/.playbot-dispatch"
+  cat > "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" <<EOF
+task_id=$id
+brief_digest=digest-fixture
+project_binding_gen=1
+requested_base=HEAD
+delivery_id=delivery-fixture
+state=worker-started
+workspace_id=workspace-fixture
+thread_id=thread-fixture
+playbot_project_id=project-fixture
+playbot_project_root_id=root-fixture
+worktree=$SPAWN_WORKTREE
+EOF
+  status=0
+  out=$(run_playbot_spawn "$id" local-only on) || status=$?
+  [ "$status" -ne 0 ] || fail "legacy worker-started re-entry escalated yolo authority"
+  assert_contains "$out" "legacy playbot txn $id can recover only with mode=local-only yolo=off" \
+    "legacy worker-started re-entry did not explain its restricted recovery posture"
+  assert_absent "$SPAWN_HOME/state/$id.meta" \
+    "legacy yolo-on re-entry published a task record"
+  [ "$(grep -Ec '^(create|open-thread|send|route-write|archive|delete|cleanup-state)$' "$SPAWN_LOG" || true)" -eq 0 ] \
+    || fail "legacy yolo-on re-entry mutated the existing worker or recovery wiring"
+  pass "worker-started re-entry refuses recorded and legacy posture changes"
+}
+
 test_fresh_playbot_spawn_commits_record_and_backlog
 test_worker_started_reentry_commits_without_redispatch
 test_fresh_playbot_backlog_failure_retires_worker
 test_worker_started_reentry_backlog_failure_preserves_worker
 test_worker_started_reentry_refuses_changed_project_binding
 test_worker_started_reentry_refuses_missing_endpoint
+test_worker_started_reentry_refuses_posture_changes
 
 printf 'fm-playbot-backend: all tests passed\n'

@@ -877,14 +877,14 @@ for (const release of FUSED_RELEASES) {
 // Without a caller id the fused open returns the app-minted id from the launch result.
 const db = new DatabaseSync(resolve(fixtureDir, 'playbot.db'));
 db.prepare('INSERT INTO workspace_threads VALUES (?, ?, ?, ?, ?, ?)').run('chat-launched', 'workspace-task', null, null, 'idle', 0);
-const opened = await mutationOpenThread({ workspaceId: 'workspace-task', approvalMode: 'full-access' }, { paths, appVersion: '0.104.0', forSmoke: true, port });
+const opened = await mutationOpenThread({ workspaceId: 'workspace-task' }, { paths, appVersion: '0.104.0', forSmoke: true, port });
 if (opened.threadId !== 'chat-launched' || opened.wireChannel !== 'threads:launch') {
   throw new Error(`fused open must return the app-minted thread id via threads:launch, got ${JSON.stringify({ threadId: opened.threadId, wireChannel: opened.wireChannel })}`);
 }
 
 // Fused create must wait for a provisioned worktree path: an empty path row is
 // still "half-written" and must time out rather than be adopted.
-const createRequest = { projectId: 'project-alpha', projectRootId: 'root-alpha', baseRef: 'main', branch: 'fixture-fused', expectedCommit: 'deadbeef', approvalMode: 'full-access' };
+const createRequest = { projectId: 'project-alpha', projectRootId: 'root-alpha', baseRef: 'main', branch: 'fixture-fused', expectedCommit: 'deadbeef' };
 db.prepare('INSERT INTO workspaces VALUES (?, ?, ?, ?, ?)').run('ws-fused', 'project-alpha', null, 'worktree', 'active');
 db.prepare('INSERT INTO workspace_roots VALUES (?, ?, ?, ?)').run('ws-fused', 'root-alpha', '', 'fixture-fused');
 db.prepare('INSERT INTO workspace_threads VALUES (?, ?, ?, ?, ?, ?)').run('chat-fused', 'ws-fused', null, null, 'idle', 0);

@@ -1739,7 +1739,7 @@ function launchThreadPayload(request, title) {
   return {
     thread: {
       title,
-      approvalMode: request.approvalMode ?? 'default',
+      approvalMode: 'full-access',
       planMode: request.planMode === true,
       ephemeral: request.ephemeral === true
     },
@@ -1850,7 +1850,7 @@ async function mutationOpenThreadLegacy(request, options = {}) {
     id: request.id ?? mintNativeThreadId(),
     workspaceId: request.workspaceId,
     title: request.title ?? 'firstmate-smoke',
-    approvalMode: request.approvalMode ?? 'default',
+    approvalMode: 'full-access',
     planMode: request.planMode === true,
     ephemeral: request.ephemeral === true
   };
@@ -2571,8 +2571,7 @@ export async function runPhase1Smoke(options = {}) {
       baseRef: options.baseRef ?? 'main',
       branch,
       expectedCommit,
-      threadTitle: smokeThreadTitle,
-      approvalMode: 'default'
+      threadTitle: smokeThreadTitle
     }, smokeOpts);
     created.workspaceId = create.result.id;
     if (created.workspaceId === project.mainWorkspaceId) {
@@ -2611,8 +2610,7 @@ export async function runPhase1Smoke(options = {}) {
     } else {
       opened = await mutationOpenThread({
         workspaceId: created.workspaceId,
-        title: smokeThreadTitle,
-        approvalMode: 'default'
+        title: smokeThreadTitle
       }, smokeOpts);
     }
     created.threadId = opened.threadId;
@@ -3855,8 +3853,8 @@ Read-only commands:
                                                      verify exact thread/workspace/worktree absence
 
 Mutation commands (refuse with ${PHASE1_MARKER} until smoke evidence exists for that op/release):
-  create --project-id <id> --project-root-id <id> --branch <slug> --base-ref <ref> --expected-commit <sha> [--approval-mode <mode>]
-  open-thread --workspace-id <id> [--thread-id <native-id>] [--title <text>] [--approval-mode <mode>]
+  create --project-id <id> --project-root-id <id> --branch <slug> --base-ref <ref> --expected-commit <sha>
+  open-thread --workspace-id <id> [--thread-id <native-id>] [--title <text>]
   send --thread-id <id> --text <text> [--effort low] [--service-tier fast]
   stop --thread-id <id>
   archive --thread-id <id>
@@ -4118,8 +4116,7 @@ async function main() {
           baseRef: args['base-ref'],
           expectedCommit: args['expected-commit'],
           mode: args.mode,
-          threadTitle: args.title,
-          approvalMode: args['approval-mode']
+          threadTitle: args.title
         }, { paths, appVersion });
         // On 0.94.0 create is fused with the first thread's launch; surface its id.
         if (args.json) output({ workspaceId: result.result.id, result: result.result, ...(result.fused ? { fusedThreadId: result.threadId } : {}) });
@@ -4133,8 +4130,7 @@ async function main() {
         const result = await mutationOpenThread({
           id: args['thread-id'],
           workspaceId: args['workspace-id'],
-          title: args.title,
-          approvalMode: args['approval-mode']
+          title: args.title
         }, { paths, appVersion });
         if (args.json) output({ threadId: result.threadId });
         else process.stdout.write(`${result.threadId}\n`);
