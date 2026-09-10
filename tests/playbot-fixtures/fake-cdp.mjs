@@ -13,7 +13,8 @@
 //   ws-launch               WS answers a threads:launch invoke with the result
 //                           selected by destination kind from the JSON map in
 //                           FAKE_CDP_LAUNCH_RESULTS ({ "new-workspace": ...,
-//                           "existing-workspace": ... })
+//                           "existing-workspace": ... }); optional expected
+//                           approval and send effort values fail mismatches
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { createServer as createTcpServer } from 'node:net';
@@ -124,11 +125,23 @@ if (scenario === 'ws-ok') {
 
 if (scenario === 'ws-launch') {
   const results = JSON.parse(process.env.FAKE_CDP_LAUNCH_RESULTS ?? '{}');
+  const expectedApprovalMode = process.env.FAKE_CDP_EXPECT_APPROVAL_MODE ?? '';
+  const expectedSendEffort = process.env.FAKE_CDP_EXPECT_SEND_EFFORT ?? '';
   attachWebSocket(server, (text) => {
     const message = JSON.parse(text);
     const expression = String(message.params?.expression ?? '');
+    if (expression.includes('"threads:send"')) {
+      const effort = /"effort":"([^"]+)"/.exec(expression)?.[1] ?? null;
+      const envelope = expectedSendEffort && effort !== expectedSendEffort
+        ? { ok: false, channel: 'threads:send', request: null, error: `fake send expected effort ${expectedSendEffort}; got ${effort}` }
+        : { ok: true, channel: 'threads:send', request: null, resultWasUndefined: false, resultType: 'object', result: { threadId: 'chat-launched' }, rendererAppRunId: null };
+      return JSON.stringify({ id: message.id, result: { result: { type: 'object', value: envelope } } });
+    }
     const kind = /"kind":"(new-workspace|existing-workspace)"/.exec(expression)?.[1] ?? null;
-    const envelope = kind && results[kind]
+    const approvalMode = /"approvalMode":"([^"]+)"/.exec(expression)?.[1] ?? null;
+    const envelope = expectedApprovalMode && approvalMode !== expectedApprovalMode
+      ? { ok: false, channel: 'threads:launch', request: null, error: `fake launch expected approval mode ${expectedApprovalMode}; got ${approvalMode}` }
+      : kind && results[kind]
       ? { ok: true, channel: 'threads:launch', request: null, resultWasUndefined: false, resultType: 'object', result: results[kind], rendererAppRunId: null }
       : { ok: false, channel: 'threads:launch', request: null, error: `fake launch has no result for destination ${kind}` };
     return JSON.stringify({ id: message.id, result: { result: { type: 'object', value: envelope } } });
