@@ -1,0 +1,13 @@
+ok - backend=playbot ignores only Playbot-owned uncommitted churn after landing proof
+ok - backend=playbot still refuses uncommitted paths outside Playbot-owned churn
+ok - backend=playbot refuses project.godot changes beyond plugin registration
+ok - Playbot registration cannot hide another enabled plugin removal
+ok - Playbot registration cannot hide a project.godot mode change
+ok - Playbot ownership excludes similarly named addon paths
+ok - Playbot registration rejects dot-segment paths
+ok - Playbot autoload registration rejects dot-segment paths
+ok - Playbot registration cannot hide a section header removal
+ok - backend=playbot refuses worker-owned files under .fm
+ok - non-Playbot backends do not inherit the Playbot-owned churn carveout
+ok - Playbot workspace-record-gone teardown removes the recorded git worktree and retires receipts
+ok - Playbot workspace-record-gone fallback failure writes the retention receipt
