@@ -148,6 +148,64 @@ fm_backend_playbot_parse_workspace_create() {  # <raw> -> <workspace-id>\t<workt
   printf '%s\t%s\t%s\n' "$ws" "$wt" "$thread"
 }
 
+# Playbot injects its desktop addon into every new workspace: untracked
+# addons/playbot/ plus a project.godot change when that file exists. Those
+# paths are expected launch dirt on a real Godot project; every other dirty
+# path still blocks spawn. fm-spawn skips the pooled-slot fetch/reset for
+# backend=playbot and calls fm_backend_playbot_worktree_dirt_allows_launch
+# instead - Playbot already creates at the requested base and self-heals to
+# EXPECTED_MAIN_SHA in order preflight.
+fm_backend_playbot_path_is_injection() {  # <path>
+  local path=${1-}
+  path=${path%/}
+  case "$path" in
+    project.godot) return 0 ;;
+    addons/playbot|addons/playbot/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_backend_playbot_status_is_injection_only() {  # <porcelain-status>
+  local status=${1-} line path left right
+  [ -z "$status" ] && return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    # Porcelain: two status chars, a space, then the path (or "old -> new").
+    path=${line#???}
+    case "$path" in
+      *' -> '*)
+        left=${path%% -> *}
+        right=${path#* -> *}
+        fm_backend_playbot_path_is_injection "$left" || return 1
+        fm_backend_playbot_path_is_injection "$right" || return 1
+        ;;
+      *)
+        fm_backend_playbot_path_is_injection "$path" || return 1
+        ;;
+    esac
+  done <<EOF
+$status
+EOF
+  return 0
+}
+
+fm_backend_playbot_worktree_dirt_allows_launch() {  # <worktree>
+  local worktree=${1-} status
+  [ -n "$worktree" ] || {
+    echo "error: playbot worktree dirt check needs a path" >&2
+    return 1
+  }
+  status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
+    echo "error: could not inspect playbot worktree '$worktree' before launch" >&2
+    return 1
+  }
+  if fm_backend_playbot_status_is_injection_only "$status"; then
+    return 0
+  fi
+  echo "error: playbot worktree '$worktree' is not clean; refusing to launch over unexpected uncommitted work" >&2
+  return 1
+}
+
 # fm_backend_playbot_workspace_create: native workspace:create minting one
 # task-owned workspace whose slug embeds the task id (plan section 3.4 step 4).
 # On success it prints "workspace_id<TAB>canonical_worktree_path<TAB>thread_id"

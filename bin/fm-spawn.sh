@@ -186,14 +186,17 @@
 #   behavior suite from the repository primary checkout while that marker is
 #   set (its header owns the refusal). A secondmate runs in its own home and is
 #   not marked.
-#   Only after this isolation check, every fresh ship or scout requires a clean
-#   task worktree. When an origin configuration is detected, spawn fetches it,
-#   resolves the current remote default branch, and resets to its tip. When none
-#   is detected, spawn skips that remote freshness check and launches from the
-#   clean worktree's current HEAD. Relaunch reuses the recorded worktree without
-#   fetching or resetting its base. An unreachable detected origin, unresolved
-#   default branch, or non-clean worktree refuses a fresh spawn rather than
-#   risking a PR based on stale history or discarding local work.
+#   Only after this isolation check, every fresh ship or scout except Playbot
+#   requires a clean task worktree. When an origin configuration is detected,
+#   spawn fetches it, resolves the current remote default branch, and resets to
+#   its tip. When none is detected, spawn skips that remote freshness check and
+#   launches from the clean worktree's current HEAD. Playbot instead owns
+#   create-at-base and preflight convergence: spawn never fetches, resets, or
+#   cleans its worktree, allows only the app's addons/playbot/ and project.godot
+#   injection, and refuses every other dirty path. Relaunch reuses the recorded
+#   worktree without fetching or resetting its base. An unreachable detected
+#   origin, unresolved default branch, or disallowed dirty worktree refuses a
+#   fresh spawn rather than risking stale history or discarding local work.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
 #   same clean check, but is reported as a stale checkout naming each submodule
 #   and both pins; nothing is converged or removed, and no remedy is suggested.
@@ -3357,7 +3360,16 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$BACKEND" != play
   fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
-  freshen_spawn_worktree_base "$WT" || exit 1
+  if [ "$BACKEND" = playbot ]; then
+    # Playbot owns workspace create-at-base and self-heals to EXPECTED_MAIN_SHA
+    # in order preflight, so the pooled-slot fetch/reset is the wrong gate.
+    # Keep spawn_worktree_isolated (already enforced above) and a cleanliness
+    # check that allows only Playbot's known injection (addons/playbot/ and
+    # project.godot). Never fetch, reset, or clean a Playbot worktree here.
+    fm_backend_playbot_worktree_dirt_allows_launch "$WT" || exit 1
+  else
+    freshen_spawn_worktree_base "$WT" || exit 1
+  fi
 fi
 
 # Pre-register Claude's workspace trust for the worktree, at the first point the
