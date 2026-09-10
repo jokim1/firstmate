@@ -187,14 +187,17 @@
 #   behavior suite from the repository primary checkout while that marker is
 #   set (its header owns the refusal). A secondmate runs in its own home and is
 #   not marked.
-#   Only after this isolation check, every fresh ship or scout requires a clean
-#   task worktree. When an origin configuration is detected, spawn fetches it,
-#   resolves the current remote default branch, and resets to its tip. When none
-#   is detected, spawn skips that remote freshness check and launches from the
-#   clean worktree's current HEAD. Relaunch reuses the recorded worktree without
-#   fetching or resetting its base. An unreachable detected origin, unresolved
-#   default branch, or non-clean worktree refuses a fresh spawn rather than
-#   risking a PR based on stale history or discarding local work.
+#   Only after this isolation check, every fresh ship or scout except Playbot
+#   requires a clean task worktree. When an origin configuration is detected,
+#   spawn fetches it, resolves the current remote default branch, and resets to
+#   its tip. When none is detected, spawn skips that remote freshness check and
+#   launches from the clean worktree's current HEAD. Playbot instead owns
+#   create-at-base and preflight convergence: spawn never fetches, resets, or
+#   cleans its worktree, allows only the app's addons/playbot/ and project.godot
+#   injection, and refuses every other dirty path. Relaunch reuses the recorded
+#   worktree without fetching or resetting its base. An unreachable detected
+#   origin, unresolved default branch, or disallowed dirty worktree refuses a
+#   fresh spawn rather than risking stale history or discarding local work.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
 #   same clean check, but is reported as a stale checkout naming each submodule
 #   and both pins; nothing is converged or removed, and no remedy is suggested.
@@ -993,9 +996,17 @@ playbot_dispatch_transaction() {
   slug="fm-${ID}"
   if [ "$stage" = prepared ]; then
     create_raw=$(fm_backend_playbot_workspace_create "$PROJ_ABS" "$slug" \
-      "${PLAYBOT_REQUESTED_BASE:-HEAD}" "$ID") || {
+      "${PLAYBOT_REQUESTED_BASE:-HEAD}" "$ID" \
+      "firstmate:${ID}:${PLAYBOT_DELIVERY_ID}") || {
       echo "error: playbot workspace:create failed for $slug (txn=prepared)" >&2; return 1; }
-    PLAYBOT_WORKSPACE_ID=${create_raw%%$'\t'*}; WT=${create_raw#*$'\t'}
+    # Fused releases (0.94.0+) append the first-thread id as a third field.
+    # Parse through the adapter so isolation sees the worktree path alone.
+    create_raw=$(fm_backend_playbot_parse_workspace_create "$create_raw") || {
+      echo "error: playbot workspace:create malformed record" >&2; return 1; }
+    PLAYBOT_WORKSPACE_ID=${create_raw%%$'\t'*}
+    rest=${create_raw#*$'\t'}
+    WT=${rest%%$'\t'*}
+    PLAYBOT_THREAD_ID=${rest#*$'\t'}
     [ -n "$PLAYBOT_WORKSPACE_ID" ] && [ -n "$WT" ] && [ "$WT" != "$PLAYBOT_WORKSPACE_ID" ] || {
       echo "error: playbot workspace:create malformed record" >&2; return 1; }
     validate_spawn_worktree "playbot workspace create" "$slug" || return 1
@@ -1004,11 +1015,8 @@ playbot_dispatch_transaction() {
   if [ "$stage" = created ]; then
     [ -n "$PLAYBOT_WORKSPACE_ID" ] || {
       echo "error: playbot txn created without workspace_id" >&2; return 1; }
-    PLAYBOT_THREAD_ID=$(fm_backend_playbot_thread_create \
-      "$PLAYBOT_WORKSPACE_ID" "$ID" "$PLAYBOT_DELIVERY_ID") || {
-      echo "error: playbot thread create failed for $ID (txn=created)" >&2; return 1; }
     [ -n "$PLAYBOT_THREAD_ID" ] || {
-      echo "error: playbot thread create returned empty id" >&2; return 1; }
+      echo "error: playbot txn created without fused thread_id" >&2; return 1; }
     playbot_txn_write thread-created || return 1; stage=thread-created
   fi
   T="playbot:$PLAYBOT_THREAD_ID"; W="fm-$ID"; WT_TARGET=$T
@@ -1032,7 +1040,8 @@ playbot_finish_dispatch() {
     meta-published|submitted)
       [ "$stage" = submitted ] || playbot_txn_write submitted || return 1
       send_verdict=$(fm_backend_playbot_send_initial \
-        "playbot:$PLAYBOT_THREAD_ID" "$BRIEF" "$PLAYBOT_DELIVERY_ID" "$PLAYBOT_BRIEF_DIGEST") || {
+        "playbot:$PLAYBOT_THREAD_ID" "$BRIEF" "$PLAYBOT_DELIVERY_ID" "$PLAYBOT_BRIEF_DIGEST" \
+        "${EFFORT-}") || {
         echo "error: playbot initial brief failed for $ID (txn=submitted)" >&2; return 1; }
       case "$send_verdict" in
         accepted|empty) playbot_txn_write accepted || return 1; stage=accepted ;;
@@ -1390,6 +1399,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
     if [ "$KIND" = ship ] && [ "$MODE" != local-only ]; then
       echo "error: backend=playbot refuses ship mode '$MODE' (v1: local-only only)" >&2; exit 1
     fi
+    fm_backend_playbot_map_send_effort "$EFFORT" >/dev/null || exit 1
     fm_backend_playbot_runtime_check || exit 1
   fi
 fi
@@ -3368,7 +3378,16 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$BACKEND" != play
   fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
-  freshen_spawn_worktree_base "$WT" || exit 1
+  if [ "$BACKEND" = playbot ]; then
+    # Playbot owns workspace create-at-base and self-heals to EXPECTED_MAIN_SHA
+    # in order preflight, so the pooled-slot fetch/reset is the wrong gate.
+    # Keep spawn_worktree_isolated (already enforced above) and a cleanliness
+    # check that allows only Playbot's known injection (addons/playbot/ and
+    # project.godot). Never fetch, reset, or clean a Playbot worktree here.
+    fm_backend_playbot_worktree_dirt_allows_launch "$WT" || exit 1
+  else
+    freshen_spawn_worktree_base "$WT" || exit 1
+  fi
 fi
 
 # Pre-register Claude's workspace trust for the worktree, at the first point the

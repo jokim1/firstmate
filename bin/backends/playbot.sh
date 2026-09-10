@@ -110,15 +110,113 @@ fm_backend_playbot_binding_resolve() {  # <canonical-project-path> -> <project-i
   fm_backend_playbot_lane binding-resolve --project-path "$project"
 }
 
+# fm_backend_playbot_parse_workspace_create: split the lanes create non-JSON
+# record into workspace id, worktree path, and fused thread id.
+# Since 0.94.0 create is fused with the first thread's launch and prints
+# "workspace_id<TAB>worktree<TAB>fused_thread_id". A naive split that takes
+# everything after the first tab as the worktree path tangles the thread id
+# into the isolation check. Refuses anything but three non-empty fields.
+fm_backend_playbot_parse_workspace_create() {  # <raw> -> <workspace-id>\t<worktree>\t<thread-id>
+  local raw=${1-} ws rest wt thread
+  raw=${raw%$'\n'}
+  [ -n "$raw" ] || {
+    echo "error: playbot workspace:create record is empty" >&2
+    return 1
+  }
+  ws=${raw%%$'\t'*}
+  if [ "$raw" = "$ws" ]; then
+    echo "error: playbot workspace:create record missing worktree field" >&2
+    return 1
+  fi
+  rest=${raw#*$'\t'}
+  wt=${rest%%$'\t'*}
+  [ "$rest" != "$wt" ] || {
+    echo "error: playbot workspace:create record missing fused thread field" >&2
+    return 1
+  }
+  thread=${rest#*$'\t'}
+  case "$thread" in
+    ''|*$'\t'*)
+      echo "error: playbot workspace:create record must contain exactly three non-empty fields" >&2
+      return 1
+      ;;
+  esac
+  [ -n "$ws" ] && [ -n "$wt" ] || {
+    echo "error: playbot workspace:create record must contain exactly three non-empty fields" >&2
+    return 1
+  }
+  printf '%s\t%s\t%s\n' "$ws" "$wt" "$thread"
+}
+
+# Playbot injects its desktop addon into every new workspace: untracked
+# addons/playbot/ plus a project.godot change when that file exists. Those
+# paths are expected launch dirt on a real Godot project; every other dirty
+# path still blocks spawn. fm-spawn skips the pooled-slot fetch/reset for
+# backend=playbot and calls fm_backend_playbot_worktree_dirt_allows_launch
+# instead - Playbot already creates at the requested base and self-heals to
+# EXPECTED_MAIN_SHA in order preflight.
+fm_backend_playbot_path_is_injection() {  # <path>
+  local path=${1-}
+  path=${path%/}
+  case "$path" in
+    project.godot) return 0 ;;
+    addons/playbot|addons/playbot/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_backend_playbot_status_is_injection_only() {  # <porcelain-status>
+  local status=${1-} line path left right
+  [ -z "$status" ] && return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    # Porcelain: two status chars, a space, then the path (or "old -> new").
+    path=${line#???}
+    case "$path" in
+      *' -> '*)
+        left=${path%% -> *}
+        right=${path#* -> *}
+        fm_backend_playbot_path_is_injection "$left" || return 1
+        fm_backend_playbot_path_is_injection "$right" || return 1
+        ;;
+      *)
+        fm_backend_playbot_path_is_injection "$path" || return 1
+        ;;
+    esac
+  done <<EOF
+$status
+EOF
+  return 0
+}
+
+fm_backend_playbot_worktree_dirt_allows_launch() {  # <worktree>
+  local worktree=${1-} status
+  [ -n "$worktree" ] || {
+    echo "error: playbot worktree dirt check needs a path" >&2
+    return 1
+  }
+  status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
+    echo "error: could not inspect playbot worktree '$worktree' before launch" >&2
+    return 1
+  }
+  if fm_backend_playbot_status_is_injection_only "$status"; then
+    return 0
+  fi
+  echo "error: playbot worktree '$worktree' is not clean; refusing to launch over unexpected uncommitted work" >&2
+  return 1
+}
+
 # fm_backend_playbot_workspace_create: native workspace:create minting one
 # task-owned workspace whose slug embeds the task id (plan section 3.4 step 4).
-# On success it must print "workspace_id<TAB>canonical_worktree_path". The lanes
-# CLI enforces the per-release evidence gate before IPC.
-fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id> -> <workspace-id>\t<worktree>
-  local project_path=${1:-} slug=${2:-} base=${3:-} task_id=${4:-}
+# On success it prints "workspace_id<TAB>canonical_worktree_path<TAB>thread_id"
+# on fused releases (0.94.0+). Parse that
+# record with fm_backend_playbot_parse_workspace_create before isolation checks.
+# The lanes CLI enforces the per-release evidence gate before IPC.
+fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id> <thread-title> -> <workspace-id>\t<worktree>\t<thread-id>
+  local project_path=${1:-} slug=${2:-} base=${3:-} task_id=${4:-} thread_title=${5:-}
   local project_id root_id binding_gen expected commit_out binding
-  [ -n "$project_path" ] && [ -n "$slug" ] && [ -n "$base" ] && [ -n "$task_id" ] || {
-    echo "error: playbot workspace_create needs <project-path> <slug> <base> <task-id>" >&2
+  [ -n "$project_path" ] && [ -n "$slug" ] && [ -n "$base" ] && [ -n "$task_id" ] && [ -n "$thread_title" ] || {
+    echo "error: playbot workspace_create needs <project-path> <slug> <base> <task-id> <thread-title>" >&2
     return 1
   }
   case "$slug" in
@@ -145,7 +243,8 @@ fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id
     --project-root-id "$root_id" \
     --branch "$slug" \
     --base-ref "$base" \
-    --expected-commit "$expected"
+    --expected-commit "$expected" \
+    --title "$thread_title"
 }
 
 # fm_backend_playbot_thread_create: mint one least-privileged worker thread in
@@ -189,21 +288,49 @@ fm_backend_playbot_route_write() {  # <state-dir> <task-id> <spawn-gen> <route-g
     --meta "$state_dir/$id.meta"
 }
 
+# fm_backend_playbot_map_send_effort: map a firstmate effort onto the Playbot
+# threads:send effort set for the live release. Playbot 0.107.0 advertises
+# low|medium|high|xhigh|max|ultra. Captain rule: Playbot dispatch effort is
+# never low - medium is the floor - so low is refused rather than sent; an
+# absent/empty value becomes medium; medium|high|xhigh|max|ultra pass through
+# unchanged (max and ultra are both accepted, so max does not need promotion).
+fm_backend_playbot_map_send_effort() {  # <firstmate-effort> -> <lane-effort>
+  local effort=${1-}
+  [ -n "$effort" ] || effort=medium
+  case "$effort" in
+    low)
+      echo "error: playbot send_initial refuses effort 'low'; medium is the floor" >&2
+      return 1
+      ;;
+    medium|high|xhigh|max|ultra)
+      printf '%s\n' "$effort"
+      ;;
+    *)
+      echo "error: playbot send_initial unsupported effort '$effort' (accepted: medium|high|xhigh|max|ultra)" >&2
+      return 1
+      ;;
+  esac
+}
+
 # fm_backend_playbot_send_initial: initial multiline brief delivery, the final
 # stage of the fm-spawn-owned transaction (plan section 3.4 step 7 and section
 # 3.6's stable delivery marker; distinct from fm-send's one-line steer
-# contract). On success it must print exactly one verdict token
-# (accepted|empty); every pending, uncertain, rejected, or corrupt outcome is a
-# nonzero exit with a stable diagnostic on stderr.
-fm_backend_playbot_send_initial() {  # <target> <brief-file> <delivery-id> <brief-digest> -> verdict
-  local thread brief=${2:-} delivery_id=${3:-}
+# contract). Passes the task's recorded effort through to lanes send after
+# fm_backend_playbot_map_send_effort (medium floor; never low). On success it
+# must print exactly one verdict token (accepted|empty); every pending,
+# uncertain, rejected, or corrupt outcome is a nonzero exit with a stable
+# diagnostic on stderr.
+fm_backend_playbot_send_initial() {  # <target> <brief-file> <delivery-id> <brief-digest> [effort] -> verdict
+  local thread brief=${2:-} delivery_id=${3:-} effort mapped
   thread=$(fm_backend_playbot_target_thread "${1:-}") || return 1
   [ -n "$brief" ] && [ -f "$brief" ] || {
     echo "error: playbot send_initial needs a readable brief file" >&2
     return 1
   }
+  mapped=$(fm_backend_playbot_map_send_effort "${5-}") || return 1
   fm_backend_playbot_tool_check || return 1
-  if fm_backend_playbot_lane send --thread-id "$thread" --text-file "$brief" >/dev/null; then
+  if fm_backend_playbot_lane send --thread-id "$thread" --text-file "$brief" \
+      --effort "$mapped" >/dev/null; then
     printf 'accepted\n'
     return 0
   fi
