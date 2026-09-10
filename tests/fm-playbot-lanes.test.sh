@@ -300,7 +300,10 @@ const {
   validateThreadLaunchResult,
   scanFileForNeedles,
   COMPATIBILITY_MANIFEST,
-  MUTATION_WIRE_CHANNELS
+  MUTATION_WIRE_CHANNELS,
+  APPROVAL_RESPONSE_OPERATIONS,
+  PLAYBOT_APPROVAL_POLICY,
+  decidePlaybotPendingRequest
 } = await import(lanesUrl);
 
 const evidenceRoot = process.argv[3];
@@ -495,9 +498,50 @@ if (threadOpenContract('9.9.9').wireChannel !== 'threads:openThread') {
 if (!MUTATION_WIRE_CHANNELS.includes('threads:launch') || !MUTATION_WIRE_CHANNELS.includes('threads:openThread')) {
   throw new Error('wire-channel allowlist must include both threads:launch and the legacy openThread channel');
 }
+if (JSON.stringify(APPROVAL_RESPONSE_OPERATIONS) !== JSON.stringify([
+  'threads:respondToApproval',
+  'threads:respondToUserInput',
+  'threads:respondToMcpElicitation'
+])) {
+  throw new Error('the approval responder must expose only the three allowed response operations');
+}
+if (PLAYBOT_APPROVAL_POLICY.maxRequestsPerPoll !== 4 || PLAYBOT_APPROVAL_POLICY.safeUserInputConfirmations.length !== 0) {
+  throw new Error('the approval policy must stay bounded and deny unknown user input by default');
+}
+const policyWorktree = resolve(dirname(applicationDb), 'worktrees/task');
+const policyEnv = {
+  HOME: resolve(dirname(applicationDb), 'home'),
+  GODOT_USER_HOME: resolve(dirname(applicationDb), 'godot-user'),
+  UV_CACHE_DIR: resolve(dirname(applicationDb), 'uv-cache')
+};
+const permissionDecision = decidePlaybotPendingRequest('approval', {
+  id: 'permission-roots',
+  method: 'item/permissions/requestApproval',
+  params: {
+    permissions: {
+      fileSystem: {
+        read: [policyEnv.UV_CACHE_DIR],
+        write: [policyEnv.GODOT_USER_HOME]
+      }
+    }
+  }
+}, { proposedFileChanges: [] }, { worktree: policyWorktree, env: policyEnv });
+if (permissionDecision.disposition !== 'respond' || permissionDecision.response.scope !== 'session') {
+  throw new Error('Godot user-dir and uv-cache grants must match the session filesystem rule');
+}
+const prefixEscape = decidePlaybotPendingRequest('approval', {
+  id: 'prefix-escape',
+  method: 'item/commandExecution/requestApproval',
+  params: { cwd: policyWorktree, command: `touch ${policyWorktree}-outside` }
+}, { proposedFileChanges: [] }, { worktree: policyWorktree, env: policyEnv });
+if (prefixEscape.disposition !== 'leave-pending') {
+  throw new Error('a path that only shares the worktree prefix must remain outside the allowlist');
+}
 const ipc094 = COMPATIBILITY_MANIFEST.releases['0.94.0'].ipcChannelStrings;
-if (!ipc094.includes('threads:launch') || !ipc094.includes('threads:setActiveThread')) {
-  throw new Error('0.94.0 IPC surface must assert threads:launch and threads:setActiveThread');
+if (!ipc094.includes('threads:launch') || !ipc094.includes('threads:setActiveThread')
+    || !ipc094.includes('threads:getSnapshot')
+    || APPROVAL_RESPONSE_OPERATIONS.some((channel) => !ipc094.includes(channel))) {
+  throw new Error('0.94.0 IPC surface must assert launch, snapshot, and the three approval response channels');
 }
 if (ipc094.includes('threads:openThread') || ipc094.includes('db:workspaceThreads:open')) {
   throw new Error('0.94.0 IPC surface must not assert the removed openThread channels');
@@ -840,7 +884,7 @@ const ipc = (release) => [...COMPATIBILITY_MANIFEST.releases[release].ipcChannel
 if (JSON.stringify(ipc('0.104.0')) !== JSON.stringify(ipc('0.94.0')) || JSON.stringify(ipc('0.104.0')) !== JSON.stringify(ipc('0.101.0'))) {
   throw new Error('0.104.0 must assert exactly the 0.94.0/0.101.0 IPC surface');
 }
-if (ipc('0.104.0').length !== 7) throw new Error('0.104.0 must assert the seven fused-lane channels');
+if (ipc('0.104.0').length !== 11) throw new Error('0.104.0 must assert the seven fused-lane plus four approval channels');
 for (const removed of ['workspace:create', 'threads:openThread', 'db:workspaceThreads:open']) {
   if (ipc('0.104.0').includes(removed)) throw new Error(`0.104.0 IPC surface must not assert removed channel ${removed}`);
 }

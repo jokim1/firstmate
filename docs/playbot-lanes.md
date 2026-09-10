@@ -8,9 +8,9 @@ The courier remains available as an independent delivery path.
 
 ## Components
 
-- `bin/fm-playbot-lanes.mjs` - topology/rollout client, compatibility manifest and doctor, mutation IPC, Phase 1 smoke recorder, content-addressed stdio MCP server, controller lease validation, lock-owner setup CLI, and dispatch-transaction record writers.
+- `bin/fm-playbot-lanes.mjs` - topology/rollout client, compatibility manifest and doctor, mutation IPC, native approval policy, Phase 1 smoke recorder, content-addressed stdio MCP server, controller lease validation, lock-owner setup CLI, and dispatch-transaction record writers.
 - `bin/backends/playbot.sh` - the `fm_backend_playbot_*` adapter interface the shared-core seam dispatches to.
-- `bin/fm-playbot-reconcile.mjs` - durable completion reconciliation driven only by the registered per-task custom check.
+- `bin/fm-playbot-reconcile.mjs` - durable completion and pending-input approval reconciliation driven only by the registered per-task custom check.
 - `.agents/skills/playbot-lanes/SKILL.md` - the agent operating procedure.
 - `docs/verification/playbot-lanes.md` - the verification record.
 - `docs/verification/playbot-mutation-evidence/` - smoke-written, content-hash-bound mutation evidence overlay (see below).
@@ -54,6 +54,15 @@ Authoritative rationale: `data/fm-playbot-phase1-smoke/report.md#gate-8-confinem
 
 Operator contract: write denial must be explicitly proved; read allowance does not block native operation when write denial is proved. Ambiguous evidence blocks native operation.
 
+Build threads keep Playbot's `default` approval posture and the Codex sandbox.
+When reconciliation observes `pending_input`, it reads that exact thread's snapshot and applies the data policy exported as `PLAYBOT_APPROVAL_POLICY`.
+The policy session-allows commands whose working directory and referenced paths remain in the task worktree, filesystem grants confined to the worktree, the platform Godot user directory, or the uv cache, and Playbot asset-generation confirmations whose targets remain in the worktree.
+Out-of-worktree paths, network approvals, commands with recognized network clients, unknown approval methods, arbitrary user input, and unknown MCP elicitations remain pending and append a `blocked:` status for firstmate.
+Each new decision is recorded with the bounded request text in the mode-0600 `state/<id>.playbot-approvals.jsonl` journal.
+The outbox retains a bounded fingerprint cursor, so an unchanged request is neither answered nor reported twice.
+Each poll examines at most four new requests and uses only `threads:respondToApproval`, `threads:respondToUserInput`, and `threads:respondToMcpElicitation` to answer them.
+This native responder replaces the prior computer-use approval loop without changing launch posture or relaxing gate 8.
+
 ## Operating states
 
 - `phase1-evidence-required` - missing or unverified mutation evidence for required ops, or missing confinement record.
@@ -61,7 +70,7 @@ Operator contract: write denial must be explicitly proved; read allowance does n
 - `native-enabled` - verified evidence for create, openThread, send, stop, archiveThread, and delete, plus confinement write denial.
 
 Native backend dispatch adopts the fused first thread returned by workspace creation and labels it with the task and delivery identity instead of opening a second thread.
-Playbot build threads retain the lane's native default approval posture so the disposable-smoke confinement write-denial remains enforceable; `--yolo` remains the separate merge-authority control.
+Playbot build threads retain the lane's native default approval posture so the disposable-smoke confinement write-denial remains enforceable; the bounded native responder above handles policy-approved requests, and `--yolo` remains the separate merge-authority control.
 The initial brief uses the task's recorded effort: an absent effort defaults to `medium`, `low` is refused because `medium` is the floor, and `medium`, `high`, `xhigh`, `max`, and `ultra` pass through unchanged.
 Playbot owns workspace creation and base convergence, so spawn preserves its expected app-injected Godot files while refusing unrelated uncommitted work; the [`fm-spawn.sh` header](../bin/fm-spawn.sh) owns the exact fresh-worktree gate.
 If a dispatch transaction reached `worker-started` but its task record and backlog transition are missing, rerun the original spawn command to adopt and validate the existing worker without creating or messaging another one; the [`fm-spawn.sh` header](../bin/fm-spawn.sh) owns the exact recovery command, matching rules, and failure cleanup.
@@ -90,5 +99,5 @@ Live Playbot paths default to the standard macOS install locations and every one
 
 ## Verification
 
-The hermetic suite (`tests/fm-playbot-lanes.test.sh`, `tests/fm-playbot-backend.test.sh`, `tests/fm-playbot-reconcile.test.sh`, fixtures under `tests/playbot-fixtures/`) is green without a live Playbot and covers gating, evidence integrity, shape parsing, spawn commit and recovery, forged-completion, size-cap, wedge-timer, and concurrent-check regressions.
+The hermetic suite (`tests/fm-playbot-lanes.test.sh`, `tests/fm-playbot-backend.test.sh`, `tests/fm-playbot-reconcile.test.sh`, fixtures under `tests/playbot-fixtures/`) is green without a live Playbot and covers gating, evidence integrity, shape parsing, approval response/refusal/idempotence, spawn commit and recovery, forged-completion, size-cap, wedge-timer, and concurrent-check regressions.
 Current evidence and live gate results are recorded in `docs/verification/playbot-lanes.md`.

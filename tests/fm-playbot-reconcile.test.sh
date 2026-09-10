@@ -21,6 +21,8 @@ RECONCILE="$ROOT/bin/fm-playbot-reconcile.mjs"
 HOME_DIR="$TMP_ROOT/home"
 STATE="$HOME_DIR/state"
 mkdir -p "$STATE"
+APPROVAL_CDP_PID=
+trap '[ -z "$APPROVAL_CDP_PID" ] || kill "$APPROVAL_CDP_PID" 2>/dev/null; fm_test_cleanup' EXIT
 
 export FM_HOME="$HOME_DIR"
 export FM_STATE_OVERRIDE="$STATE"
@@ -98,6 +100,26 @@ outbox_field() {
 const o = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 console.log(eval(process.argv[2]));
 ' "$STATE/$1.playbot-outbox.json" "$2"
+}
+
+run_fixture_reconcile() {
+  node --input-type=module - "$RECONCILE" "$1" "$2" <<'NODE'
+import { pathToFileURL } from 'node:url';
+const reconcile = await import(pathToFileURL(process.argv[2]).href);
+const result = await reconcile.reconcileCheck(process.argv[3], {
+  checkKeyQueued: process.argv[4] === '1',
+  approvalOptions: { forSmoke: true }
+});
+for (const line of result.printed) process.stdout.write(`${line}\n`);
+process.exitCode = result.exitCode;
+NODE
+}
+
+approval_state_field() {
+  node -e '
+const state = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+console.log(eval(process.argv[2]));
+' "$APPROVAL_STATE" "$1"
 }
 
 printf '%s\n' "$$" > "$STATE/.lock"
@@ -196,16 +218,85 @@ node "$RECONCILE" check rc-scout --check-key-queued 1 >/dev/null || fail "oversi
 [ ! -e "$HOME_DIR/data/rc-scout/report.md" ] || fail "no truncated copy of the authoritative report may be made"
 pass "scout report over 1 MiB keeps the workspace retained with a static failure event and no truncated copy"
 
-# --- pending input is distinct from a completed turn --------------------------------
+# --- native pending-input approval responder ----------------------------------------
 
-write_task_fixture rc-input thread-pending workspace-pending worktrees/pending ship
-node "$RECONCILE" check rc-input --check-key-queued 0 >/dev/null || fail "input-request check failed"
-[ "$(outbox_field rc-input 'o.events.length')" = 1 ] || fail "a pending_input transition must produce exactly one event"
-[ "$(outbox_field rc-input 'o.events[0].kind')" = "input-request" ] || fail "the input transition must classify as input-request"
-[ ! -e "$STATE/rc-input.turn-ended" ] || fail "an input request is not a completed turn and must not touch turn-ended"
-node "$RECONCILE" check rc-input --check-key-queued 1 >/dev/null || fail "input re-check failed"
-[ "$(outbox_field rc-input 'o.events.length')" = 1 ] || fail "an unchanged pending_input status must not re-fire the event"
-pass "pending input is a distinct, deduplicated input-request event, never a completion"
+APPROVAL_STATE="$TMP_ROOT/approval-state.json"
+FAKE_CDP_APPROVAL_STATE="$APPROVAL_STATE" \
+  node "$ROOT/tests/playbot-fixtures/fake-cdp.mjs" ws-approvals > "$TMP_ROOT/approval-cdp-port" &
+APPROVAL_CDP_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$TMP_ROOT/approval-cdp-port" ] && break
+  sleep 0.2
+done
+APPROVAL_CDP_PORT=$(cat "$TMP_ROOT/approval-cdp-port")
+[ -n "$APPROVAL_CDP_PORT" ] || fail "approval fake CDP server did not bind"
+printf '%s\n' "$APPROVAL_CDP_PORT" > "$FIX/DevToolsActivePort"
+PENDING_WORKTREE=$(cd "$FIX/worktrees/pending" && pwd -P)
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-command","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"touch generated.txt"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-allow thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-allow 0 >/dev/null || fail "allow-listed command reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an in-worktree command must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].channel')" = "threads:respondToApproval" ] || fail "the command must use respondToApproval"
+[ "$(approval_state_field 'state.responses[0].request.response.decision')" = "acceptForSession" ] || fail "the command must be session-approved"
+[ "$(outbox_field rc-allow 'o.events.length')" = 0 ] || fail "an answered command must not emit an input-request event"
+grep -Fq 'touch generated.txt' "$STATE/rc-allow.playbot-approvals.jsonl" || fail "the approval journal must retain the answered request text"
+pass "allow-listed in-worktree command is session-approved over Playbot IPC and journaled"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-write","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"touch /tmp/playbot-escape"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-deny-write thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-deny-write 0 >/dev/null || fail "out-of-worktree refusal reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an out-of-worktree write must stay pending without an IPC response"
+grep -Fq 'blocked: Playbot approval request deny-write left pending' "$STATE/rc-deny-write.status" || fail "an out-of-worktree write must append a blocked status"
+grep -Fq 'touch /tmp/playbot-escape' "$STATE/rc-deny-write.playbot-approvals.jsonl" || fail "the refusal journal must retain the request text"
+[ "$(outbox_field rc-deny-write 'o.events[0].kind')" = "input-request" ] || fail "a refused request must remain an input-request event"
+pass "out-of-worktree write is refused, left pending, journaled, and raised as blocked"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-network","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"curl https://unknown.example/asset","networkApprovalContext":{"host":"unknown.example","protocol":"https"}}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-deny-network thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-deny-network 0 >/dev/null || fail "unknown-network refusal reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "unknown network access must stay pending without an IPC response"
+grep -Fq 'deny-unknown-network' "$STATE/rc-deny-network.status" || fail "unknown network access must append a policy-specific blocked status"
+pass "unknown network access is refused and left pending"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[{"id":"unknown-question","method":"item/tool/requestUserInput","params":{"questions":[{"header":"Choice","question":"Which direction?"}]}}],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-user-input thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-user-input 0 >/dev/null || fail "unknown user-input reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "unknown user input must stay pending without an IPC response"
+grep -Fq 'deny-unknown-user-input' "$STATE/rc-user-input.status" || fail "unknown user input must append a policy-specific blocked status"
+pass "unknown user input is never guessed and stays pending for firstmate"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"consumeResponses":false,"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-once","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"pwd"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-idempotent thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-idempotent 1 >/dev/null || fail "first idempotence reconcile failed"
+run_fixture_reconcile rc-idempotent 1 >/dev/null || fail "repeat idempotence reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "the same approval request must be answered only once across repeat polls"
+[ "$(wc -l < "$STATE/rc-idempotent.playbot-approvals.jsonl" | tr -d ' ')" = 1 ] || fail "the same approval decision must be journaled only once"
+pass "repeat reconciliation is idempotent for an unchanged pending approval"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-elicitation","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png"}]}]}],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-asset thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset 0 >/dev/null || fail "asset elicitation reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "known-safe asset elicitation must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].channel')" = "threads:respondToMcpElicitation" ] || fail "asset elicitation must use respondToMcpElicitation"
+[ "$(approval_state_field 'state.responses[0].request.response._meta.persist')" = session ] || fail "asset elicitation must be allowed for the session"
+pass "known-safe in-worktree asset elicitation passes through the MCP response IPC"
+
+kill "$APPROVAL_CDP_PID" 2>/dev/null
+wait "$APPROVAL_CDP_PID" 2>/dev/null
+APPROVAL_CDP_PID=
 
 # --- multi-turn rollout: two events, one printed line --------------------------------
 

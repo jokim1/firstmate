@@ -15,9 +15,12 @@
 //                           FAKE_CDP_LAUNCH_RESULTS ({ "new-workspace": ...,
 //                           "existing-workspace": ... }); optional expected
 //                           approval and send effort values fail mismatches
+//   ws-approvals            WS serves a thread snapshot and records approval
+//                           responses in FAKE_CDP_APPROVAL_STATE
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { createServer as createTcpServer } from 'node:net';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const scenario = process.argv[2];
 if (!scenario) {
@@ -144,6 +147,55 @@ if (scenario === 'ws-launch') {
       : kind && results[kind]
       ? { ok: true, channel: 'threads:launch', request: null, resultWasUndefined: false, resultType: 'object', result: results[kind], rendererAppRunId: null }
       : { ok: false, channel: 'threads:launch', request: null, error: `fake launch has no result for destination ${kind}` };
+    return JSON.stringify({ id: message.id, result: { result: { type: 'object', value: envelope } } });
+  });
+}
+
+if (scenario === 'ws-approvals') {
+  const statePath = process.env.FAKE_CDP_APPROVAL_STATE;
+  if (!statePath) throw new Error('ws-approvals requires FAKE_CDP_APPROVAL_STATE');
+  attachWebSocket(server, (text) => {
+    const message = JSON.parse(text);
+    const expression = String(message.params?.expression ?? '');
+    const channelMatch = /const channel = ("[^"]+")/.exec(expression);
+    const requestMatch = /const request = ([^\n]+);/.exec(expression);
+    const channel = channelMatch ? JSON.parse(channelMatch[1]) : null;
+    const request = requestMatch ? JSON.parse(requestMatch[1]) : null;
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    let result = state.snapshot;
+    if (channel === 'threads:getSnapshot') {
+      state.snapshotReads = (state.snapshotReads ?? 0) + 1;
+    } else {
+      state.responses ??= [];
+      state.responses.push({ channel, request });
+      if (state.consumeResponses !== false) {
+        const field = channel === 'threads:respondToApproval'
+          ? 'approvalRequests'
+          : channel === 'threads:respondToUserInput'
+            ? 'userInputRequests'
+            : channel === 'threads:respondToMcpElicitation'
+              ? 'mcpElicitationRequests'
+              : null;
+        if (field) {
+          state.snapshot[field] = state.snapshot[field].filter((item) => item.id !== request?.requestId);
+          const remaining = state.snapshot.approvalRequests.length
+            + state.snapshot.userInputRequests.length
+            + state.snapshot.mcpElicitationRequests.length;
+          if (remaining === 0) state.snapshot.agentStatus = 'working';
+        }
+      }
+      result = state.snapshot;
+    }
+    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+    const envelope = {
+      ok: true,
+      channel,
+      request,
+      resultWasUndefined: false,
+      resultType: 'object',
+      result,
+      rendererAppRunId: null
+    };
     return JSON.stringify({ id: message.id, result: { result: { type: 'object', value: envelope } } });
   });
 }
