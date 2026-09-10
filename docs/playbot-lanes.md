@@ -88,5 +88,5 @@ Live Playbot paths default to the standard macOS install locations and every one
 
 ## Verification
 
-The hermetic suite (`tests/fm-playbot-lanes.test.sh`, `tests/fm-playbot-backend.test.sh`, `tests/fm-playbot-reconcile.test.sh`, fixtures under `tests/playbot-fixtures/`) is green without a live Playbot and covers gating, evidence integrity, shape parsing, forged-completion, size-cap, wedge-timer, and concurrent-check regressions.
+The hermetic suite (`tests/fm-playbot-lanes.test.sh`, `tests/fm-playbot-backend.test.sh`, `tests/fm-playbot-reconcile.test.sh`, fixtures under `tests/playbot-fixtures/`) is green without a live Playbot and covers gating, evidence integrity, shape parsing, spawn commit and recovery, forged-completion, size-cap, wedge-timer, and concurrent-check regressions.
 Current evidence and live gate results are recorded in `docs/verification/playbot-lanes.md`.

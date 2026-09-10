@@ -786,6 +786,7 @@ pass "mutation evidence records, hash integrity, shape parsers, and write-denial
 LAUNCH_FIX="$TMP_ROOT/fixtures-launch"
 node "$ROOT/tests/playbot-fixtures/generate.mjs" "$LAUNCH_FIX" >/dev/null || fail "launch fixture generation failed"
 FAKE_CDP_LAUNCH_RESULTS='{"existing-workspace":{"createdWorkspace":false,"workspace":{"id":"workspace-task"},"thread":{"id":"chat-launched"}},"new-workspace":{"createdWorkspace":true,"workspace":{"id":"ws-fused"},"thread":{"id":"chat-fused"}}}' \
+  FAKE_CDP_EXPECT_APPROVAL_MODE=full-access \
   node "$ROOT/tests/playbot-fixtures/fake-cdp.mjs" ws-launch > "$TMP_ROOT/launch-cdp-port" &
 LAUNCH_CDP_PID=$!
 trap 'kill "$CDP_PID" "$LAUNCH_CDP_PID" 2>/dev/null; fm_test_cleanup' EXIT
@@ -876,14 +877,14 @@ for (const release of FUSED_RELEASES) {
 // Without a caller id the fused open returns the app-minted id from the launch result.
 const db = new DatabaseSync(resolve(fixtureDir, 'playbot.db'));
 db.prepare('INSERT INTO workspace_threads VALUES (?, ?, ?, ?, ?, ?)').run('chat-launched', 'workspace-task', null, null, 'idle', 0);
-const opened = await mutationOpenThread({ workspaceId: 'workspace-task' }, { paths, appVersion: '0.104.0', forSmoke: true, port });
+const opened = await mutationOpenThread({ workspaceId: 'workspace-task', approvalMode: 'full-access' }, { paths, appVersion: '0.104.0', forSmoke: true, port });
 if (opened.threadId !== 'chat-launched' || opened.wireChannel !== 'threads:launch') {
   throw new Error(`fused open must return the app-minted thread id via threads:launch, got ${JSON.stringify({ threadId: opened.threadId, wireChannel: opened.wireChannel })}`);
 }
 
 // Fused create must wait for a provisioned worktree path: an empty path row is
 // still "half-written" and must time out rather than be adopted.
-const createRequest = { projectId: 'project-alpha', projectRootId: 'root-alpha', baseRef: 'main', branch: 'fixture-fused', expectedCommit: 'deadbeef' };
+const createRequest = { projectId: 'project-alpha', projectRootId: 'root-alpha', baseRef: 'main', branch: 'fixture-fused', expectedCommit: 'deadbeef', approvalMode: 'full-access' };
 db.prepare('INSERT INTO workspaces VALUES (?, ?, ?, ?, ?)').run('ws-fused', 'project-alpha', null, 'worktree', 'active');
 db.prepare('INSERT INTO workspace_roots VALUES (?, ?, ?, ?)').run('ws-fused', 'root-alpha', '', 'fixture-fused');
 db.prepare('INSERT INTO workspace_threads VALUES (?, ?, ?, ?, ?, ?)').run('chat-fused', 'ws-fused', null, null, 'idle', 0);
@@ -899,6 +900,6 @@ if (created.fused !== true || created.wireChannel !== 'threads:launch' || create
 }
 db.close();
 NODE
-pass "fused threads:launch releases certify 0.104.0 as a clean onboard, reject caller thread ids, and require a provisioned worktree path"
+pass "fused threads:launch releases certify 0.104.0, preserve full-access approval, reject caller thread ids, and require a provisioned worktree path"
 
 printf 'fm-playbot-lanes: all tests passed\n'

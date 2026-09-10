@@ -124,11 +124,15 @@ if (scenario === 'ws-ok') {
 
 if (scenario === 'ws-launch') {
   const results = JSON.parse(process.env.FAKE_CDP_LAUNCH_RESULTS ?? '{}');
+  const expectedApprovalMode = process.env.FAKE_CDP_EXPECT_APPROVAL_MODE ?? '';
   attachWebSocket(server, (text) => {
     const message = JSON.parse(text);
     const expression = String(message.params?.expression ?? '');
     const kind = /"kind":"(new-workspace|existing-workspace)"/.exec(expression)?.[1] ?? null;
-    const envelope = kind && results[kind]
+    const approvalMode = /"approvalMode":"([^"]+)"/.exec(expression)?.[1] ?? null;
+    const envelope = expectedApprovalMode && approvalMode !== expectedApprovalMode
+      ? { ok: false, channel: 'threads:launch', request: null, error: `fake launch expected approval mode ${expectedApprovalMode}; got ${approvalMode}` }
+      : kind && results[kind]
       ? { ok: true, channel: 'threads:launch', request: null, resultWasUndefined: false, resultType: 'object', result: results[kind], rendererAppRunId: null }
       : { ok: false, channel: 'threads:launch', request: null, error: `fake launch has no result for destination ${kind}` };
     return JSON.stringify({ id: message.id, result: { result: { type: 'object', value: envelope } } });

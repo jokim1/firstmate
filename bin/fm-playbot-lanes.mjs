@@ -3855,8 +3855,8 @@ Read-only commands:
                                                      verify exact thread/workspace/worktree absence
 
 Mutation commands (refuse with ${PHASE1_MARKER} until smoke evidence exists for that op/release):
-  create --project-id <id> --project-root-id <id> --branch <slug> --base-ref <ref> --expected-commit <sha>
-  open-thread --workspace-id <id> [--thread-id <native-id>] [--title <text>]
+  create --project-id <id> --project-root-id <id> --branch <slug> --base-ref <ref> --expected-commit <sha> [--approval-mode <mode>]
+  open-thread --workspace-id <id> [--thread-id <native-id>] [--title <text>] [--approval-mode <mode>]
   send --thread-id <id> --text <text> [--effort low] [--service-tier fast]
   stop --thread-id <id>
   archive --thread-id <id>
@@ -4118,7 +4118,8 @@ async function main() {
           baseRef: args['base-ref'],
           expectedCommit: args['expected-commit'],
           mode: args.mode,
-          threadTitle: args.title
+          threadTitle: args.title,
+          approvalMode: args['approval-mode']
         }, { paths, appVersion });
         // On 0.94.0 create is fused with the first thread's launch; surface its id.
         if (args.json) output({ workspaceId: result.result.id, result: result.result, ...(result.fused ? { fusedThreadId: result.threadId } : {}) });
@@ -4132,7 +4133,8 @@ async function main() {
         const result = await mutationOpenThread({
           id: args['thread-id'],
           workspaceId: args['workspace-id'],
-          title: args.title
+          title: args.title,
+          approvalMode: args['approval-mode']
         }, { paths, appVersion });
         if (args.json) output({ threadId: result.threadId });
         else process.stdout.write(`${result.threadId}\n`);

@@ -244,13 +244,15 @@ fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id
     --branch "$slug" \
     --base-ref "$base" \
     --expected-commit "$expected" \
+    --approval-mode full-access \
     --title "$thread_title"
 }
 
-# fm_backend_playbot_thread_create: mint one least-privileged worker thread in
-# the exact task workspace (plan section 3.4 step 5). On success it must print
-# the exact persisted thread id, never inferred from newest or selected UI
-# state. The lanes CLI enforces the per-release evidence gate before IPC.
+# fm_backend_playbot_thread_create: mint one build thread with the captain's
+# full-access approval posture in the exact task workspace (plan section 3.4
+# step 5). On success it must print the exact persisted thread id, never
+# inferred from newest or selected UI state. The lanes CLI enforces the
+# per-release evidence gate before IPC.
 fm_backend_playbot_thread_create() {  # <workspace-id> <task-id> <delivery-id> -> <thread-id>
   local workspace_id=${1:-} task_id=${2:-} delivery_id=${3:-}
   [ -n "$workspace_id" ] && [ -n "$task_id" ] || {
@@ -260,6 +262,7 @@ fm_backend_playbot_thread_create() {  # <workspace-id> <task-id> <delivery-id> -
   fm_backend_playbot_tool_check || return 1
   fm_backend_playbot_lane open-thread \
     --workspace-id "$workspace_id" \
+    --approval-mode full-access \
     --title "firstmate:${task_id}${delivery_id:+:$delivery_id}"
 }
 

@@ -5,13 +5,14 @@ Design contract: plan v3 (`data/lanemcp-impl-plan/report.md`, captain-private).
 
 ## Hermetic suite (current)
 
-Date: 2026-08-27
+Date: 2026-09-10
 Host: macOS, Node v26.5.0, no live Playbot interaction of any kind.
 
 ```text
 node --check bin/fm-playbot-lanes.mjs
 node --check bin/fm-playbot-reconcile.mjs
 bash -n bin/backends/playbot.sh
+bash -n bin/fm-spawn.sh
 bash tests/fm-playbot-lanes.test.sh
 bash tests/fm-playbot-backend.test.sh
 bash tests/fm-playbot-reconcile.test.sh
@@ -35,6 +36,9 @@ Covered guarantees:
 - release-aware wire contracts resolve thread-open and workspace-create to `threads:launch` (app-minted `chat-*` id, fused create) on `0.94.0`, `0.101.0`, and `0.104.0`, keep the legacy channels for `0.93.1` and unknown releases, and assert a static IPC surface for those fused releases that omits the removed `workspace:create` / `threads:openThread` / `db:workspaceThreads:open` channels.
 - on the fused releases, `open-thread` refuses a caller-chosen thread id before any IPC call, and the fused create keeps polling until the provisioned workspace row carries a non-empty worktree path (an empty path times out instead of being adopted).
 - the spawn dirt gate accepts only a clean worktree or Playbot's known Godot injection while preserving and refusing every unrelated dirty path.
+- Playbot workspace-create and legacy thread-open requests explicitly set the build thread's approval mode to `full-access`, while the task effort continues to pass through the send request.
+- a fresh Playbot spawn preserves its published task record, commits its backlog row to In flight through the shared final commit, and installs the hash-bound reconciliation check.
+- a same-id `worker-started` transaction recovery republishes its recorded workspace, thread, and worktree with a refreshed bound route, commits the backlog row, preserves worker edits, and makes no workspace-create, thread-open, or brief-send call.
 - `validateThreadLaunchResult` rejects a missing or non-`chat-` thread id, a wrong-workspace binding, an existing-workspace launch that created a workspace, and a new-workspace launch that did not report `createdWorkspace`.
 - the doctor's static IPC scan matches channel needles as exact bounded tokens (an event string such as `workspace:created` cannot satisfy the `workspace:create` needle), while the generic preload-bridge scan keeps substring matching.
 

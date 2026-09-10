@@ -9,6 +9,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-playbot-backend-tests)
 FIX="$TMP_ROOT/fixtures"
@@ -268,8 +270,17 @@ fm_backend_playbot_route_write "$STATE" be-ep 1 1 project-alpha root-alpha \
 [ -f "$STATE/be-ep.playbot-route.json" ] || fail "route_write must write state/<id>.playbot-route.json"
 if [ "$(uname)" = Darwin ]; then ROUTE_MODE=$(stat -f %Lp "$STATE/be-ep.playbot-route.json"); else ROUTE_MODE=$(stat -c %a "$STATE/be-ep.playbot-route.json"); fi
 [ "$ROUTE_MODE" = 600 ] || fail "route record must be mode 0600"
+sed -i.bak -e 's/^spawn_gen=1$/spawn_gen=2/' -e 's/^playbot_route_gen=1$/playbot_route_gen=2/' "$STATE/be-ep.meta"
+rm -f "$STATE/be-ep.meta.bak"
+fm_backend_playbot_route_write "$STATE" be-ep 2 2 project-alpha root-alpha \
+  workspace-task thread-complete delivery-be-ep "$WORKTREE_TASK" \
+  || fail "route_write must accept same-endpoint re-entry with fresh generations"
+[ "$(jq -r '.spawnGen' "$STATE/be-ep.playbot-route.json")" = 2 ] \
+  || fail "re-entry route_write did not replace the spawn generation"
+[ "$(jq -r '.routeGen' "$STATE/be-ep.playbot-route.json")" = 2 ] \
+  || fail "re-entry route_write did not replace the route generation"
 cp "$STATE/be-ep.meta" "$STATE/be-bad.meta"
-if fm_backend_playbot_route_write "$STATE" be-bad 1 1 project-alpha root-alpha \
+if fm_backend_playbot_route_write "$STATE" be-bad 2 2 project-alpha root-alpha \
   workspace-task thread-WRONG delivery-be-ep "$WORKTREE_TASK" >/dev/null 2>&1; then
   fail "route_write must refuse a dispatch identity that disagrees with the published meta"
 fi
@@ -416,7 +427,26 @@ CREATE_TITLE_OUT=$(
   || fail "workspace_create must return the lane's fused create record unchanged"
 grep -Fq -- '--title firstmate:title-task:delivery-title' "$TMP_ROOT/create-title.args" \
   || fail "workspace_create must pass the task-specific fused thread title to lanes create"
-pass "workspace_create labels the fused thread with the task and delivery"
+grep -Fq -- '--approval-mode full-access' "$TMP_ROOT/create-title.args" \
+  || fail "workspace_create must make the fused build thread full access"
+pass "workspace_create labels the fused thread and makes it full access"
+
+: > "$TMP_ROOT/open-thread.args"
+THREAD_CREATE_OUT=$(
+  fm_backend_playbot_tool_check() { return 0; }
+  fm_backend_playbot_lane() {
+    printf '%s\n' "$*" > "$TMP_ROOT/open-thread.args"
+    printf 'chat-title\n'
+  }
+  fm_backend_playbot_thread_create workspace-title title-task delivery-title
+) || fail "thread_create with the build-thread approval posture must succeed under a mocked lane"
+[ "$THREAD_CREATE_OUT" = chat-title ] \
+  || fail "thread_create must return the lane's thread id unchanged"
+grep -Fq -- '--title firstmate:title-task:delivery-title' "$TMP_ROOT/open-thread.args" \
+  || fail "thread_create must pass the task-specific thread title to lanes open-thread"
+grep -Fq -- '--approval-mode full-access' "$TMP_ROOT/open-thread.args" \
+  || fail "thread_create must make the build thread full access"
+pass "thread_create labels the build thread and makes it full access"
 
 # --- send_initial effort mapping (medium floor; never low) ---------------------
 # Without --effort, lanes mutationSend defaults every order to low. Captain
@@ -549,5 +579,146 @@ if fm_backend_playbot_status_is_injection_only "$(printf ' M README.md\n')"; the
   fail "status_is_injection_only must refuse a modified non-injection path"
 fi
 pass "Playbot spawn dirt gate allows injection-only dirt and refuses any other dirty path"
+
+# --- spawn commit and worker-started recovery (plan 3.4 / V2SIM-4) ---------
+
+make_playbot_spawn_lane() {  # <case-dir>
+  local case_dir=$1 lane
+  lane="$case_dir/fake-playbot-lanes.mjs"
+  cat > "$lane" <<'JS'
+#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+
+const [command] = process.argv.slice(2);
+appendFileSync(process.env.FM_PLAYBOT_TEST_LOG, `${command}\n`);
+switch (command) {
+  case 'ready':
+  case 'route-write':
+    break;
+  case 'binding-resolve':
+    process.stdout.write('project-fixture\troot-fixture\t1\n');
+    break;
+  case 'create':
+    process.stdout.write(`workspace-fixture\t${process.env.FM_PLAYBOT_TEST_WORKTREE}\tthread-fixture\n`);
+    break;
+  case 'send':
+    break;
+  default:
+    process.stderr.write(`unexpected fake Playbot command: ${command}\n`);
+    process.exitCode = 1;
+}
+JS
+  chmod +x "$lane"
+  printf '%s\n' "$lane"
+}
+
+make_playbot_spawn_case() {  # <name> <id>
+  local name=$1 id=$2 case_dir home project worktree fakebin lane log
+  case_dir="$TMP_ROOT/spawn-$name"
+  home="$case_dir/home"
+  project="$case_dir/project"
+  worktree="$case_dir/worktree"
+  log="$case_dir/playbot.log"
+  fm_test_spawn_home "$home" codex
+  fm_test_spawn_brief "$home" "$id"
+  git init --quiet -b main "$project"
+  printf 'base\n' > "$project/README.md"
+  git -C "$project" add README.md
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm initial
+  git -C "$project" worktree add --quiet --detach "$worktree" HEAD
+  tasks-axi add "$id" "Playbot spawn fixture" --kind ship \
+    --file "$home/data/backlog.md" >/dev/null || fail "could not seed the Playbot spawn backlog row"
+  fakebin=$(fm_test_make_spawn_fakebin "$case_dir/fakebin" codex)
+  lane=$(make_playbot_spawn_lane "$case_dir")
+  : > "$log"
+  printf '%s\n' "$home|$project|$worktree|$fakebin|$lane|$log"
+}
+
+read_playbot_spawn_case() {
+  IFS='|' read -r SPAWN_HOME SPAWN_PROJECT SPAWN_WORKTREE SPAWN_FAKEBIN SPAWN_LANE SPAWN_LOG <<EOF
+$1
+EOF
+}
+
+run_playbot_spawn() {  # <id>
+  FM_PLAYBOT_LANES_OVERRIDE="$SPAWN_LANE" \
+    FM_PLAYBOT_TEST_LOG="$SPAWN_LOG" \
+    FM_PLAYBOT_TEST_WORKTREE="$SPAWN_WORKTREE" \
+    fm_test_run_spawn "$SPAWN_HOME" "$SPAWN_WORKTREE" "$SPAWN_FAKEBIN" \
+      "$1" "$SPAWN_PROJECT" --mode local-only --yolo off \
+      --backend playbot --harness codex --effort xhigh
+}
+
+playbot_backlog_state() {  # <home> <id>
+  tasks-axi show "$2" --file "$1/data/backlog.md" 2>/dev/null \
+    | sed -n 's/^  state: *//p' | head -1
+}
+
+test_fresh_playbot_spawn_commits_record_and_backlog() {
+  local id=playbot-fresh-v2 rec out status
+  rec=$(make_playbot_spawn_case fresh "$id")
+  read_playbot_spawn_case "$rec"
+
+  out=$(run_playbot_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "fresh Playbot spawn should succeed"$'\n'"$out"
+  assert_present "$SPAWN_HOME/state/$id.meta" \
+    "fresh Playbot spawn rolled back its published task record"
+  [ "$(playbot_backlog_state "$SPAWN_HOME" "$id")" = in_flight ] \
+    || fail "fresh Playbot spawn did not commit its backlog row to In flight"
+  assert_present "$SPAWN_HOME/state/$id.check.sh" \
+    "fresh Playbot spawn did not install its reconciliation check"
+  assert_present "$SPAWN_HOME/state/$id.check-trust" \
+    "fresh Playbot spawn did not register its reconciliation check"
+  pass "fresh Playbot spawn keeps its task record and commits the backlog transition"
+}
+
+test_worker_started_reentry_commits_without_redispatch() {
+  local id=playbot-reentry-v2 rec out status
+  rec=$(make_playbot_spawn_case reentry "$id")
+  read_playbot_spawn_case "$rec"
+  mkdir -p "$SPAWN_HOME/state/.playbot-dispatch"
+  cat > "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" <<EOF
+task_id=$id
+brief_digest=digest-fixture
+project_binding_gen=1
+requested_base=HEAD
+delivery_id=delivery-fixture
+state=worker-started
+workspace_id=workspace-fixture
+thread_id=thread-fixture
+playbot_project_id=project-fixture
+playbot_project_root_id=root-fixture
+worktree=$SPAWN_WORKTREE
+EOF
+  printf 'worker-owned change\n' > "$SPAWN_WORKTREE/worker-change.txt"
+
+  out=$(run_playbot_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "worker-started Playbot re-entry should succeed"$'\n'"$out"
+  assert_present "$SPAWN_HOME/state/$id.meta" \
+    "worker-started re-entry did not republish the task record"
+  assert_grep 'playbot_workspace_id=workspace-fixture' "$SPAWN_HOME/state/$id.meta" \
+    "worker-started re-entry did not preserve the transaction workspace"
+  assert_grep 'playbot_thread_id=thread-fixture' "$SPAWN_HOME/state/$id.meta" \
+    "worker-started re-entry did not preserve the transaction thread"
+  assert_grep "worktree=$SPAWN_WORKTREE" "$SPAWN_HOME/state/$id.meta" \
+    "worker-started re-entry did not preserve the transaction worktree"
+  [ "$(playbot_backlog_state "$SPAWN_HOME" "$id")" = in_flight ] \
+    || fail "worker-started re-entry did not commit its backlog row to In flight"
+  assert_present "$SPAWN_HOME/state/$id.check.sh" \
+    "worker-started re-entry did not install its reconciliation check"
+  assert_present "$SPAWN_HOME/state/$id.check-trust" \
+    "worker-started re-entry did not register its reconciliation check"
+  [ "$(grep -c '^route-write$' "$SPAWN_LOG" || true)" -eq 1 ] \
+    || fail "worker-started re-entry did not republish its route exactly once"
+  [ "$(grep -Ec '^(create|open-thread|send)$' "$SPAWN_LOG" || true)" -eq 0 ] \
+    || fail "worker-started re-entry created a second Playbot resource or resent the brief"
+  pass "worker-started Playbot re-entry republishes and commits without redispatch"
+}
+
+test_fresh_playbot_spawn_commits_record_and_backlog
+test_worker_started_reentry_commits_without_redispatch
 
 printf 'fm-playbot-backend: all tests passed\n'
