@@ -62,6 +62,7 @@ Operator contract: write denial must be explicitly proved; read allowance does n
 
 Native backend dispatch adopts the fused first thread returned by workspace creation and labels it with the task and delivery identity instead of opening a second thread.
 The initial brief uses the task's recorded effort: an absent effort defaults to `medium`, `low` is refused because `medium` is the floor, and `medium`, `high`, `xhigh`, `max`, and `ultra` pass through unchanged.
+Playbot owns workspace creation and base convergence, so spawn preserves its expected app-injected Godot files while refusing unrelated uncommitted work; the [`fm-spawn.sh` header](../bin/fm-spawn.sh) owns the exact fresh-worktree gate.
 
 ## Operator commands
 
