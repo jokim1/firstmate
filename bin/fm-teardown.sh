@@ -1424,8 +1424,32 @@ playbot_owned_churn_path() {  # <repo-relative-path>
   esac
 }
 
+playbot_enabled_values_without_registration() {  # <enabled-line>
+  perl -e '
+    my $line = shift;
+    $line =~ s/^enabled=PackedStringArray\(// or exit 1;
+    $line =~ s/\)$// or exit 1;
+    $line =~ s/^\s+//;
+    exit 0 if $line eq q{};
+    my $first = 1;
+    while (length $line) {
+      my $value;
+      if ($first) {
+        $line =~ s/^("(?:\\.|[^"\\])*")// or exit 1;
+        $value = $1;
+        $first = 0;
+      } else {
+        $line =~ s/^,\s*("(?:\\.|[^"\\])*")// or exit 1;
+        $value = $1;
+      }
+      print "$value\n" unless $value =~ m{addons/playbot};
+      $line =~ s/^\s+//;
+    }
+  ' "${1-}"
+}
+
 playbot_project_registration_only() {
-  local diff line content saw_playbot=0
+  local diff line content normalized old_enabled= new_enabled= saw_playbot=0
   diff=$(git -C "$WT" --no-pager diff --no-ext-diff --unified=0 HEAD -- project.godot 2>/dev/null) \
     || return 1
   [ -n "$diff" ] || return 1
@@ -1435,8 +1459,16 @@ playbot_project_registration_only() {
       +*|-*)
         content=${line#?}
         case "$content" in
+          enabled=*)
+            normalized=$(playbot_enabled_values_without_registration "$content") || return 1
+            case "$line" in
+              +*) [ -z "$normalized" ] || new_enabled="${new_enabled}${normalized}"$'\n' ;;
+              -*) [ -z "$normalized" ] || old_enabled="${old_enabled}${normalized}"$'\n' ;;
+            esac
+            case "$content" in *addons/playbot*) saw_playbot=1 ;; esac
+            ;;
           *addons/playbot*) saw_playbot=1 ;;
-          ''|'[editor_plugins]'|'[autoload]'|enabled=*) ;;
+          ''|'[editor_plugins]'|'[autoload]') ;;
           *) return 1 ;;
         esac
         ;;
@@ -1444,7 +1476,7 @@ playbot_project_registration_only() {
   done <<EOF
 $diff
 EOF
-  [ "$saw_playbot" -eq 1 ]
+  [ "$saw_playbot" -eq 1 ] && [ "$old_enabled" = "$new_enabled" ]
 }
 
 dirty_status_path() {  # <git-status-porcelain-line>

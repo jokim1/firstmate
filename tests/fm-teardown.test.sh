@@ -3252,6 +3252,25 @@ test_playbot_project_registration_plus_real_edit_refuses() {
   pass "backend=playbot refuses project.godot changes beyond plugin registration"
 }
 
+test_playbot_registration_does_not_hide_enabled_plugin_removal() {
+  local case_dir rc
+  case_dir=$(make_case playbot-enabled-plugin-removal-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak 's#"res://addons/other/plugin.cfg", ##' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-enabled-plugin-removal-refuses: removing another plugin must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-enabled-plugin-removal-refuses: refusal did not name project.godot"
+  pass "Playbot registration cannot hide another enabled plugin removal"
+}
+
 test_playbot_stray_fm_file_refuses() {
   local case_dir rc
   case_dir=$(make_case playbot-stray-fm-refuses)
@@ -4750,6 +4769,7 @@ test_fractional_legacy_retry_wait_refuses_without_arithmetic_error
 test_playbot_owned_churn_only_does_not_block_landed_teardown
 test_playbot_owned_churn_plus_real_edit_refuses
 test_playbot_project_registration_plus_real_edit_refuses
+test_playbot_registration_does_not_hide_enabled_plugin_removal
 test_playbot_stray_fm_file_refuses
 test_non_playbot_owned_churn_paths_still_refuse
 test_playbot_workspace_record_gone_fallback_removes_worktree_without_receipt
