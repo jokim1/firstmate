@@ -428,8 +428,8 @@ CREATE_TITLE_OUT=$(
 grep -Fq -- '--title firstmate:title-task:delivery-title' "$TMP_ROOT/create-title.args" \
   || fail "workspace_create must pass the task-specific fused thread title to lanes create"
 grep -Fq -- '--approval-mode' "$TMP_ROOT/create-title.args" \
-  && fail "workspace_create must leave the fixed approval policy to the lane boundary"
-pass "workspace_create labels the fused thread through the fixed-policy lane"
+  && fail "workspace_create must not override the lane's default approval posture"
+pass "workspace_create leaves approval posture at the lane default"
 
 : > "$TMP_ROOT/open-thread.args"
 THREAD_CREATE_OUT=$(
@@ -439,14 +439,14 @@ THREAD_CREATE_OUT=$(
     printf 'chat-title\n'
   }
   fm_backend_playbot_thread_create workspace-title title-task delivery-title
-) || fail "thread_create with the build-thread approval posture must succeed under a mocked lane"
+) || fail "thread_create with the default approval posture must succeed under a mocked lane"
 [ "$THREAD_CREATE_OUT" = chat-title ] \
   || fail "thread_create must return the lane's thread id unchanged"
 grep -Fq -- '--title firstmate:title-task:delivery-title' "$TMP_ROOT/open-thread.args" \
   || fail "thread_create must pass the task-specific thread title to lanes open-thread"
 grep -Fq -- '--approval-mode' "$TMP_ROOT/open-thread.args" \
-  && fail "thread_create must leave the fixed approval policy to the lane boundary"
-pass "thread_create labels the build thread through the fixed-policy lane"
+  && fail "thread_create must not override the lane's default approval posture"
+pass "thread_create leaves approval posture at the lane default"
 
 # --- send_initial effort mapping (medium floor; never low) ---------------------
 # Without --effort, lanes mutationSend defaults every order to low. Captain

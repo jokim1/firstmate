@@ -17,7 +17,6 @@
 # refuses with PHASE1-EVIDENCE-REQUIRED until the Phase 1 disposable smoke has
 # recorded per-operation evidence for the live Playbot release. Read-only
 # functions and the home-local route-record write work without that evidence.
-# Captain's standing 2026-08-15 B build-thread ruling in .agents/skills/playbot-operating/SKILL.md authorizes full-access for local-only build threads in disposable workspaces; MERGE-class threads remain out of scope.
 
 FM_PLAYBOT_BACKEND_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 FM_PLAYBOT_LANES="${FM_PLAYBOT_LANES_OVERRIDE:-$FM_PLAYBOT_BACKEND_DIR/../fm-playbot-lanes.mjs}"
@@ -248,11 +247,10 @@ fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id
     --title "$thread_title"
 }
 
-# fm_backend_playbot_thread_create: mint one build thread with the captain's
-# full-access approval posture in the exact task workspace (plan section 3.4
-# step 5). On success it must print the exact persisted thread id, never
-# inferred from newest or selected UI state. The lanes CLI enforces the
-# per-release evidence gate before IPC.
+# fm_backend_playbot_thread_create: mint one least-privileged worker thread in
+# the exact task workspace (plan section 3.4 step 5). On success it must print
+# the exact persisted thread id, never inferred from newest or selected UI
+# state. The lanes CLI enforces the per-release evidence gate before IPC.
 fm_backend_playbot_thread_create() {  # <workspace-id> <task-id> <delivery-id> -> <thread-id>
   local workspace_id=${1:-} task_id=${2:-} delivery_id=${3:-}
   [ -n "$workspace_id" ] && [ -n "$task_id" ] || {

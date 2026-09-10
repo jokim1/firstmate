@@ -786,7 +786,8 @@ pass "mutation evidence records, hash integrity, shape parsers, and write-denial
 LAUNCH_FIX="$TMP_ROOT/fixtures-launch"
 node "$ROOT/tests/playbot-fixtures/generate.mjs" "$LAUNCH_FIX" >/dev/null || fail "launch fixture generation failed"
 FAKE_CDP_LAUNCH_RESULTS='{"existing-workspace":{"createdWorkspace":false,"workspace":{"id":"workspace-task"},"thread":{"id":"chat-launched"}},"new-workspace":{"createdWorkspace":true,"workspace":{"id":"ws-fused"},"thread":{"id":"chat-fused"}}}' \
-  FAKE_CDP_EXPECT_APPROVAL_MODE=full-access \
+  FAKE_CDP_EXPECT_APPROVAL_MODE=default \
+  FAKE_CDP_EXPECT_SEND_EFFORT=xhigh \
   node "$ROOT/tests/playbot-fixtures/fake-cdp.mjs" ws-launch > "$TMP_ROOT/launch-cdp-port" &
 LAUNCH_CDP_PID=$!
 trap 'kill "$CDP_PID" "$LAUNCH_CDP_PID" 2>/dev/null; fm_test_cleanup' EXIT
@@ -809,6 +810,7 @@ const {
   nativeDispatchState,
   playbotPaths,
   mutationOpenThread,
+  mutationSend,
   mutationWorkspaceCreate
 } = await import(pathToFileURL(process.argv[2]).href);
 const fixtureDir = process.argv[3];
@@ -881,6 +883,10 @@ const opened = await mutationOpenThread({ workspaceId: 'workspace-task' }, { pat
 if (opened.threadId !== 'chat-launched' || opened.wireChannel !== 'threads:launch') {
   throw new Error(`fused open must return the app-minted thread id via threads:launch, got ${JSON.stringify({ threadId: opened.threadId, wireChannel: opened.wireChannel })}`);
 }
+const sent = await mutationSend({ threadId: 'chat-launched', text: 'brief body', effort: 'xhigh' }, { paths, appVersion: '0.104.0', forSmoke: true, port });
+if (sent.result.threadId !== 'chat-launched') {
+  throw new Error(`send must retain the target thread while passing effort xhigh, got ${JSON.stringify(sent.result)}`);
+}
 
 // Fused create must wait for a provisioned worktree path: an empty path row is
 // still "half-written" and must time out rather than be adopted.
@@ -900,6 +906,6 @@ if (created.fused !== true || created.wireChannel !== 'threads:launch' || create
 }
 db.close();
 NODE
-pass "fused threads:launch releases certify 0.104.0, preserve full-access approval, reject caller thread ids, and require a provisioned worktree path"
+pass "fused threads:launch releases preserve default approval and xhigh send effort, reject caller thread ids, and require a provisioned worktree path"
 
 printf 'fm-playbot-lanes: all tests passed\n'

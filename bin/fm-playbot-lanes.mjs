@@ -1739,7 +1739,7 @@ function launchThreadPayload(request, title) {
   return {
     thread: {
       title,
-      approvalMode: 'full-access',
+      approvalMode: request.approvalMode ?? 'default',
       planMode: request.planMode === true,
       ephemeral: request.ephemeral === true
     },
@@ -1850,7 +1850,7 @@ async function mutationOpenThreadLegacy(request, options = {}) {
     id: request.id ?? mintNativeThreadId(),
     workspaceId: request.workspaceId,
     title: request.title ?? 'firstmate-smoke',
-    approvalMode: 'full-access',
+    approvalMode: request.approvalMode ?? 'default',
     planMode: request.planMode === true,
     ephemeral: request.ephemeral === true
   };
@@ -2571,7 +2571,8 @@ export async function runPhase1Smoke(options = {}) {
       baseRef: options.baseRef ?? 'main',
       branch,
       expectedCommit,
-      threadTitle: smokeThreadTitle
+      threadTitle: smokeThreadTitle,
+      approvalMode: 'default'
     }, smokeOpts);
     created.workspaceId = create.result.id;
     if (created.workspaceId === project.mainWorkspaceId) {
@@ -2610,7 +2611,8 @@ export async function runPhase1Smoke(options = {}) {
     } else {
       opened = await mutationOpenThread({
         workspaceId: created.workspaceId,
-        title: smokeThreadTitle
+        title: smokeThreadTitle,
+        approvalMode: 'default'
       }, smokeOpts);
     }
     created.threadId = opened.threadId;
