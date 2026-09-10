@@ -231,26 +231,49 @@ fm_backend_playbot_route_write() {  # <state-dir> <task-id> <spawn-gen> <route-g
     --meta "$state_dir/$id.meta"
 }
 
+# fm_backend_playbot_map_send_effort: map a firstmate effort onto the Playbot
+# threads:send effort set for the live release. Playbot 0.107.0 advertises
+# low|medium|high|xhigh|max|ultra. Captain rule: Playbot dispatch effort is
+# never low - medium is the floor - so low is refused rather than sent; an
+# absent/empty value becomes medium; medium|high|xhigh|max|ultra pass through
+# unchanged (max and ultra are both accepted, so max does not need promotion).
+fm_backend_playbot_map_send_effort() {  # <firstmate-effort> -> <lane-effort>
+  local effort=${1-}
+  [ -n "$effort" ] || effort=medium
+  case "$effort" in
+    low)
+      echo "error: playbot send_initial refuses effort 'low'; medium is the floor" >&2
+      return 1
+      ;;
+    medium|high|xhigh|max|ultra)
+      printf '%s\n' "$effort"
+      ;;
+    *)
+      echo "error: playbot send_initial unsupported effort '$effort' (accepted: medium|high|xhigh|max|ultra)" >&2
+      return 1
+      ;;
+  esac
+}
+
 # fm_backend_playbot_send_initial: initial multiline brief delivery, the final
 # stage of the fm-spawn-owned transaction (plan section 3.4 step 7 and section
 # 3.6's stable delivery marker; distinct from fm-send's one-line steer
-# contract). Passes the task's recorded effort through to lanes send; defaults
-# to medium when the caller omits it (captain standing Playbot-order default),
-# because lanes otherwise defaults every send to low. On success it must print
-# exactly one verdict token (accepted|empty); every pending, uncertain,
-# rejected, or corrupt outcome is a nonzero exit with a stable diagnostic on
-# stderr.
+# contract). Passes the task's recorded effort through to lanes send after
+# fm_backend_playbot_map_send_effort (medium floor; never low). On success it
+# must print exactly one verdict token (accepted|empty); every pending,
+# uncertain, rejected, or corrupt outcome is a nonzero exit with a stable
+# diagnostic on stderr.
 fm_backend_playbot_send_initial() {  # <target> <brief-file> <delivery-id> <brief-digest> [effort] -> verdict
-  local thread brief=${2:-} delivery_id=${3:-} effort=${5:-medium}
+  local thread brief=${2:-} delivery_id=${3:-} effort mapped
   thread=$(fm_backend_playbot_target_thread "${1:-}") || return 1
   [ -n "$brief" ] && [ -f "$brief" ] || {
     echo "error: playbot send_initial needs a readable brief file" >&2
     return 1
   }
-  [ -n "$effort" ] || effort=medium
+  mapped=$(fm_backend_playbot_map_send_effort "${5-}") || return 1
   fm_backend_playbot_tool_check || return 1
   if fm_backend_playbot_lane send --thread-id "$thread" --text-file "$brief" \
-      --effort "$effort" >/dev/null; then
+      --effort "$mapped" >/dev/null; then
     printf 'accepted\n'
     return 0
   fi

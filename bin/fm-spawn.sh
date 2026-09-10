@@ -1044,7 +1044,7 @@ playbot_finish_dispatch() {
       [ "$stage" = submitted ] || playbot_txn_write submitted || return 1
       send_verdict=$(fm_backend_playbot_send_initial \
         "playbot:$PLAYBOT_THREAD_ID" "$BRIEF" "$PLAYBOT_DELIVERY_ID" "$PLAYBOT_BRIEF_DIGEST" \
-        "${EFFORT:-medium}") || {
+        "${EFFORT-}") || {
         echo "error: playbot initial brief failed for $ID (txn=submitted)" >&2; return 1; }
       case "$send_verdict" in
         accepted|empty) playbot_txn_write accepted || return 1; stage=accepted ;;

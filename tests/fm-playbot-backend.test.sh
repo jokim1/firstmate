@@ -399,9 +399,29 @@ if fm_backend_playbot_parse_workspace_create "ws-only" >/dev/null 2>&1; then
 fi
 pass "fused three-field create parse isolates the worktree path for the isolation check"
 
-# --- send_initial threads recorded effort (default medium) ---------------------
-# Without --effort, lanes mutationSend defaults every order to low. The captain
-# standing Playbot-order default is medium; spawn must pass the task effort.
+# --- send_initial effort mapping (medium floor; never low) ---------------------
+# Without --effort, lanes mutationSend defaults every order to low. Captain
+# rule: Playbot dispatch effort is never low - medium is the floor. 0.107.0
+# advertises low|medium|high|xhigh|max|ultra; firstmate medium..ultra pass
+# through, low is refused.
+
+[ "$(fm_backend_playbot_map_send_effort medium)" = medium ] \
+  || fail "map_send_effort must pass medium through"
+[ "$(fm_backend_playbot_map_send_effort high)" = high ] \
+  || fail "map_send_effort must pass high through"
+[ "$(fm_backend_playbot_map_send_effort xhigh)" = xhigh ] \
+  || fail "map_send_effort must pass xhigh through"
+[ "$(fm_backend_playbot_map_send_effort max)" = max ] \
+  || fail "map_send_effort must pass max through on 0.107 (max is accepted)"
+[ "$(fm_backend_playbot_map_send_effort ultra)" = ultra ] \
+  || fail "map_send_effort must pass ultra through"
+[ "$(fm_backend_playbot_map_send_effort '')" = medium ] \
+  || fail "map_send_effort must default an empty effort to medium"
+if fm_backend_playbot_map_send_effort low >/dev/null 2>"$TMP_ROOT/effort-low.err"; then
+  fail "map_send_effort must refuse low"
+fi
+grep -qi 'refuses effort .low.' "$TMP_ROOT/effort-low.err" \
+  || fail "low refusal must name the floor, got: $(cat "$TMP_ROOT/effort-low.err")"
 
 echo 'brief body' > "$TMP_ROOT/brief-effort.md"
 : > "$TMP_ROOT/send-effort.args"
@@ -416,7 +436,7 @@ SEND_EFFORT_OUT=$(
 ) || fail "send_initial with explicit effort must succeed under a mocked lane"
 [ "$SEND_EFFORT_OUT" = accepted ] || fail "send_initial must print accepted on mocked success"
 grep -Fq -- '--effort high' "$TMP_ROOT/send-effort.args" \
-  || fail "send_initial must pass the caller effort through to lanes send, got: $(cat "$TMP_ROOT/send-effort.args")"
+  || fail "send_initial must pass the mapped effort through to lanes send, got: $(cat "$TMP_ROOT/send-effort.args")"
 : > "$TMP_ROOT/send-effort.args"
 SEND_DEFAULT_OUT=$(
   fm_backend_playbot_tool_check() { return 0; }
@@ -430,6 +450,16 @@ SEND_DEFAULT_OUT=$(
 [ "$SEND_DEFAULT_OUT" = accepted ] || fail "default-effort send_initial must print accepted"
 grep -Fq -- '--effort medium' "$TMP_ROOT/send-effort.args" \
   || fail "send_initial must default --effort to medium when omitted, got: $(cat "$TMP_ROOT/send-effort.args")"
-pass "send_initial threads recorded effort and defaults to medium"
+if (
+  fm_backend_playbot_tool_check() { return 0; }
+  fm_backend_playbot_lane() { return 0; }
+  fm_backend_playbot_send_initial playbot:thread-complete "$TMP_ROOT/brief-effort.md" \
+    delivery-effort digest-effort low
+) >/dev/null 2>"$TMP_ROOT/send-low.err"; then
+  fail "send_initial must refuse effort low before calling the lane"
+fi
+grep -qi 'refuses effort .low.' "$TMP_ROOT/send-low.err" \
+  || fail "send_initial low refusal must name the floor, got: $(cat "$TMP_ROOT/send-low.err")"
+pass "send_initial maps effort with a medium floor and refuses low"
 
 printf 'fm-playbot-backend: all tests passed\n'
