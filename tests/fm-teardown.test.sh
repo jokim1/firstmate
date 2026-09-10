@@ -3108,6 +3108,177 @@ land_shippable_commit() {
   git -C "$case_dir/project" fetch -q origin
 }
 
+write_playbot_meta() {  # <case-dir>
+  local case_dir=$1
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=playbot:thread-task-x1" \
+    "endpoint_task_id=task-x1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only" \
+    "backend=playbot" \
+    "playbot_project_id=project-alpha" \
+    "playbot_project_root_id=root-alpha" \
+    "playbot_workspace_id=workspace-task-x1" \
+    "playbot_thread_id=thread-task-x1" \
+    "playbot_route_gen=1" \
+    "playbot_delivery_id=delivery-task-x1"
+}
+
+write_playbot_lane_fixture() {  # <case-dir> <agent-state> <delete-mode>
+  local case_dir=$1 agent_state=$2 delete_mode=$3
+  cat > "$case_dir/playbot-lanes.mjs" <<'JS'
+import { appendFileSync } from "node:fs";
+
+const [command] = process.argv.slice(2);
+const log = process.env.FM_PLAYBOT_TEST_LOG;
+if (command === "validate-endpoint") process.exit(0);
+if (command === "agent-state") {
+  process.stdout.write(`${process.env.FM_PLAYBOT_TEST_AGENT_STATE}\n`);
+  process.exit(0);
+}
+appendFileSync(log, `${command}\n`);
+if (command === "delete" && process.env.FM_PLAYBOT_TEST_DELETE_MODE === "record-gone") {
+  console.error("Error: workspace id resolved 0 rows; exact unique match required");
+  process.exit(1);
+}
+if (command === "delete" && process.env.FM_PLAYBOT_TEST_DELETE_MODE === "fail") {
+  console.error("Error: workspace:delete failed for another reason");
+  process.exit(1);
+}
+process.exit(0);
+JS
+  export FM_PLAYBOT_LANES_OVERRIDE="$case_dir/playbot-lanes.mjs"
+  export FM_PLAYBOT_TEST_LOG="$case_dir/playbot.log"
+  export FM_PLAYBOT_TEST_AGENT_STATE="$agent_state"
+  export FM_PLAYBOT_TEST_DELETE_MODE="$delete_mode"
+  : > "$case_dir/playbot.log"
+}
+
+clear_playbot_lane_fixture_env() {
+  unset FM_PLAYBOT_LANES_OVERRIDE FM_PLAYBOT_TEST_LOG \
+    FM_PLAYBOT_TEST_AGENT_STATE FM_PLAYBOT_TEST_DELETE_MODE
+}
+
+add_playbot_owned_churn() {  # <case-dir>
+  local case_dir=$1
+  mkdir -p "$case_dir/wt/addons/playbot/bin" "$case_dir/wt/.fm"
+  printf '%s\n' plugin > "$case_dir/wt/addons/playbot/plugin.gd"
+  printf '%s\n' native > "$case_dir/wt/addons/playbot/bin/native.dylib"
+  printf '%s\n' enabled > "$case_dir/wt/project.godot"
+  printf '%s\n' courier > "$case_dir/wt/.fm/courier-marker"
+}
+
+test_playbot_owned_churn_only_does_not_block_landed_teardown() {
+  local case_dir rc
+  case_dir=$(make_case playbot-owned-churn-allow)
+  write_playbot_meta "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  write_playbot_lane_fixture "$case_dir" missing ok
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  clear_playbot_lane_fixture_env
+
+  expect_code 0 "$rc" "playbot-owned-churn-allow: Playbot-owned churn should not block landed teardown"
+  assert_grep "playbot-owned churn ignored: addons/playbot/bin/native.dylib" "$case_dir/stderr" \
+    "playbot-owned-churn-allow: ignored addon churn was not printed"
+  assert_grep "playbot-owned churn ignored: project.godot" "$case_dir/stderr" \
+    "playbot-owned-churn-allow: ignored project.godot churn was not printed"
+  assert_grep "playbot-owned churn ignored: .fm/courier-marker" "$case_dir/stderr" \
+    "playbot-owned-churn-allow: ignored courier churn was not printed"
+  ! grep -q REFUSED "$case_dir/stderr" \
+    || fail "playbot-owned-churn-allow: teardown refused Playbot-owned churn"
+  pass "backend=playbot ignores only Playbot-owned uncommitted churn after landing proof"
+}
+
+test_playbot_owned_churn_plus_real_edit_refuses() {
+  local case_dir rc
+  case_dir=$(make_case playbot-owned-churn-plus-real-edit)
+  write_playbot_meta "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  mkdir -p "$case_dir/wt/src"
+  printf '%s\n' real > "$case_dir/wt/src/real-edit.txt"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-owned-churn-plus-real-edit: real uncommitted work must refuse"
+  assert_grep "playbot-owned churn ignored:" "$case_dir/stderr" \
+    "playbot-owned-churn-plus-real-edit: Playbot churn was not classified before refusal"
+  assert_grep "first non-Playbot-owned uncommitted path: src/real-edit.txt" "$case_dir/stderr" \
+    "playbot-owned-churn-plus-real-edit: refusal did not name the real edit"
+  pass "backend=playbot still refuses uncommitted paths outside Playbot-owned churn"
+}
+
+test_non_playbot_owned_churn_paths_still_refuse() {
+  local case_dir rc
+  case_dir=$(make_case non-playbot-owned-churn-refuses)
+  write_meta "$case_dir" local-only ship
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "non-playbot-owned-churn-refuses: non-Playbot backend must keep the dirty gate"
+  assert_grep "has uncommitted changes" "$case_dir/stderr" \
+    "non-playbot-owned-churn-refuses: dirty refusal was not reported"
+  if grep -q "playbot-owned churn ignored:" "$case_dir/stderr"; then
+    fail "non-playbot-owned-churn-refuses: Playbot churn allowlist leaked to another backend"
+  fi
+  pass "non-Playbot backends do not inherit the Playbot-owned churn carveout"
+}
+
+test_playbot_workspace_record_gone_fallback_removes_worktree_without_receipt() {
+  local case_dir rc
+  case_dir=$(make_case playbot-record-gone-fallback)
+  write_playbot_meta "$case_dir"
+  land_shippable_commit "$case_dir"
+  printf '%s\n' stale > "$case_dir/state/task-x1.playbot-retention"
+  write_playbot_lane_fixture "$case_dir" missing record-gone
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  clear_playbot_lane_fixture_env
+
+  expect_code 0 "$rc" "playbot-record-gone-fallback: record-gone fallback should complete teardown"
+  assert_absent "$case_dir/wt" \
+    "playbot-record-gone-fallback: fallback left the Playbot worktree directory behind"
+  assert_absent "$case_dir/state/task-x1.playbot-retention" \
+    "playbot-record-gone-fallback: fallback left a retention receipt behind"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "playbot-record-gone-fallback: successful fallback did not retire task metadata"
+  assert_grep "workspace record gone; removed recorded git worktree" "$case_dir/stderr" \
+    "playbot-record-gone-fallback: fallback removal was not reported"
+  pass "Playbot workspace-record-gone teardown removes the recorded git worktree and retires receipts"
+}
+
+test_playbot_workspace_record_gone_fallback_failure_writes_receipt() {
+  local case_dir rc
+  case_dir=$(make_case playbot-record-gone-fallback-failure)
+  write_playbot_meta "$case_dir"
+  land_shippable_commit "$case_dir"
+  write_playbot_lane_fixture "$case_dir" missing record-gone
+  rm -rf "$case_dir/wt/.git"
+
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  clear_playbot_lane_fixture_env
+
+  expect_code 0 "$rc" "playbot-record-gone-fallback-failure: endpoint-gone teardown should still retire records with a receipt"
+  assert_present "$case_dir/state/task-x1.playbot-retention" \
+    "playbot-record-gone-fallback-failure: fallback failure did not write a retention receipt"
+  assert_grep "reason=workspace-record-gone-after-thread-gone" "$case_dir/state/task-x1.playbot-retention" \
+    "playbot-record-gone-fallback-failure: receipt did not record the record-gone reason"
+  assert_present "$case_dir/wt" \
+    "playbot-record-gone-fallback-failure: failing fallback unexpectedly removed the directory"
+  pass "Playbot workspace-record-gone fallback failure writes the retention receipt"
+}
+
 test_parked_own_run_is_aborted_before_teardown() {
   local case_dir rc head
   case_dir=$(make_case parked-run-abort)
@@ -4519,6 +4690,11 @@ test_transient_index_lock_clears_after_first_attempt_and_retry_succeeds
 test_persistent_index_lock_exhausts_retries_and_refuses_loudly
 test_empty_retry_wait_uses_default_without_aborting
 test_fractional_legacy_retry_wait_refuses_without_arithmetic_error
+test_playbot_owned_churn_only_does_not_block_landed_teardown
+test_playbot_owned_churn_plus_real_edit_refuses
+test_non_playbot_owned_churn_paths_still_refuse
+test_playbot_workspace_record_gone_fallback_removes_worktree_without_receipt
+test_playbot_workspace_record_gone_fallback_failure_writes_receipt
 test_parked_own_run_is_aborted_before_teardown
 test_parked_run_advanced_past_unfetched_head_is_still_aborted
 test_parked_run_with_mismatched_ledger_head_is_never_aborted
