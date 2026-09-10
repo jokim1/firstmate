@@ -33,7 +33,7 @@ Covered guarantees:
 - the CDP transport rejects every pending request on close, error, and timeout, skips dead targets, and serializes channel/payload only as JSON inside the fixed invoke bridge.
 - a fake Playbot snapshot/response IPC server proves an in-root structured filesystem grant is turn-approved, while every command request and an out-of-root structured grant stay pending with one journal record and one `blocked:` status.
 - an in-root file-change proposal receives only the single-request `accept` decision, then a second out-of-root proposal is independently validated, journaled, and left pending.
-- repeat reconciliation journals one unchanged command request only once without answering it; asset generation accepts an in-root linked file for one request, independently blocks a later remote URL request, leaves an out-of-root `file:` reference pending with the reference named, and requires the exact confirmation message.
+- repeat reconciliation journals one unchanged command request only once without answering it; asset generation accepts a root-confined target without links for one request, independently blocks a later remote URL request, leaves even an in-root linked asset pending, and requires the exact confirmation message.
 - the approval responder processes at most four new requests per poll, denies unknown user-input and MCP requests by default, and exposes only the two required response operations.
 - the MCP server exposes `health` only until per-thread caller identity is proven, denies task-data tools with the phase marker, and exposes no mutation tools.
 - concurrent registered checks collapse onto one outbox event set through the per-task lock in the generated wrapper.

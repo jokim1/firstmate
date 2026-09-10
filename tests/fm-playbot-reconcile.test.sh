@@ -298,17 +298,15 @@ run_fixture_reconcile rc-idempotent 1 >/dev/null || fail "repeat idempotence rec
 [ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an unchanged command request must never receive an IPC response"
 pass "repeat reconciliation journals an unchanged command request only once"
 
-mkdir -p "$PENDING_WORKTREE/assets"
-printf 'linked fixture\n' > "$PENDING_WORKTREE/assets/source.png"
 cat > "$APPROVAL_STATE" <<EOF
-{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-elicitation","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["assets/source.png"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-elicitation","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png"}]}]}],"agentStatus":"pending_input"},"responses":[]}
 EOF
 write_task_fixture rc-asset thread-pending workspace-pending worktrees/pending ship
 run_fixture_reconcile rc-asset 0 >/dev/null || fail "asset elicitation reconcile failed"
 [ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "known-safe asset elicitation must receive one IPC response"
 [ "$(approval_state_field 'state.responses[0].channel')" = "threads:respondToMcpElicitation" ] || fail "asset elicitation must use respondToMcpElicitation"
 [ "$(approval_state_field 'state.responses[0].request.response._meta')" = null ] || fail "asset elicitation must be accepted for one request only"
-pass "in-root target and linked asset receive one-request MCP acceptance"
+pass "in-root target without linked assets receives one-request MCP acceptance"
 
 REMOTE_ASSET_URL=https://unknown.example/private.png
 cat > "$APPROVAL_STATE" <<EOF
@@ -320,20 +318,17 @@ grep -Fq "reference=\"$REMOTE_ASSET_URL\"" "$STATE/rc-asset.status" || fail "the
 [ "$(wc -l < "$STATE/rc-asset.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "each asset request must be validated and journaled independently"
 pass "a second asset request is independently validated after acceptance"
 
-OUTSIDE_ASSET="$TMP_ROOT/private.png"
-printf 'private fixture\n' > "$OUTSIDE_ASSET"
-OUTSIDE_ASSET_URL=$(node -e 'console.log(require("url").pathToFileURL(process.argv[1]).href)' "$OUTSIDE_ASSET")
 cat > "$APPROVAL_STATE" <<EOF
-{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-external-file","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["$OUTSIDE_ASSET_URL"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-in-root-link","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["assets/source.png"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
 EOF
-write_task_fixture rc-asset-external thread-pending workspace-pending worktrees/pending ship
-run_fixture_reconcile rc-asset-external 0 >/dev/null || fail "external linked asset reconcile failed"
-[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an out-of-root file URL must stay pending without an IPC response"
-grep -Fq "reference=\"$OUTSIDE_ASSET_URL\"" "$STATE/rc-asset-external.status" || fail "the out-of-root linked asset block must name the reference"
-pass "out-of-root file linked asset stays pending and names the reference"
+write_task_fixture rc-asset-linked thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset-linked 0 >/dev/null || fail "in-root linked asset reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an in-root linked asset must stay pending without an IPC response"
+grep -Fq 'deny-linked-asset-request' "$STATE/rc-asset-linked.status" || fail "the in-root linked asset must append a policy-specific blocked status"
+pass "in-root linked asset stays pending"
 
 cat > "$APPROVAL_STATE" <<EOF
-{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-message-suffix","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI. Additional request.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["assets/source.png"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-message-suffix","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI. Additional request.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png"}]}]}],"agentStatus":"pending_input"},"responses":[]}
 EOF
 write_task_fixture rc-asset-message thread-pending workspace-pending worktrees/pending ship
 run_fixture_reconcile rc-asset-message 0 >/dev/null || fail "non-exact asset message reconcile failed"

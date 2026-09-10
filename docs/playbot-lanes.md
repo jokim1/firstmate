@@ -56,10 +56,10 @@ Operator contract: write denial must be explicitly proved; read allowance does n
 
 Build threads keep Playbot's `default` approval posture and the Codex sandbox.
 When reconciliation observes `pending_input`, it reads that exact thread's snapshot and applies the data policy exported as `PLAYBOT_APPROVAL_POLICY`.
-The policy turn-allows filesystem grants confined to the worktree, the platform Godot user directory, or the uv cache, accepts each validated in-worktree file-change proposal for that request only, and accepts each exact Playbot asset-generation confirmation only after its target and linked assets pass validation.
-Remote, malformed, and out-of-root linked asset references remain pending because they would introduce unknown network access or disclose an external local file to the asset service.
+The policy turn-allows filesystem grants confined to the worktree, the platform Godot user directory, or the uv cache, accepts each validated in-worktree file-change proposal for that request only, and accepts each exact Playbot asset-generation confirmation only when its target remains within those roots and it carries no linked assets.
+Linked-asset requests are never auto-approved because Playbot reads each reference after Firstmate responds, leaving no atomic way for Firstmate to prevent a validated path from being replaced before disclosure to the asset service.
 No responder decision carries session persistence, so later requests return through policy validation.
-Command escalations are never auto-approved because Playbot runs an approved command outside the Codex sandbox, where Firstmate cannot bound the command or its child effects to the confinement roots.
+Command escalations are never auto-approved because Playbot 0.107 has no sandbox-preserving command approval path, and Firstmate cannot bound an approved command or its child effects to the confinement roots after Playbot runs it outside the Codex sandbox.
 Command requests, out-of-worktree paths, network approvals, unknown approval methods, arbitrary user input, and unknown MCP elicitations remain pending and append a `blocked:` status for firstmate.
 Each new decision is recorded with the bounded request text in the mode-0600 `state/<id>.playbot-approvals.jsonl` journal.
 The outbox retains a bounded fingerprint cursor, so an unchanged request is neither answered nor reported twice.
@@ -67,7 +67,7 @@ Each poll examines at most four new requests and uses only `threads:respondToApp
 Those two response operations deliberately do not have separate per-operation mutation-evidence entries.
 Before reading or answering a pending request, the responder requires the release's verified `threads:send` evidence and confinement write-denial proof; an uncertified release still refuses with `PHASE1-EVIDENCE-REQUIRED`.
 The response calls are limited to request IDs returned by that exact existing thread's snapshot, cannot create or retarget a workspace, and do not change the thread's sandbox posture, so the certified native-thread and confinement gates remain the fail-closed boundary.
-The captain's build-thread auto-approve ruling is therefore limited to turn-scoped structured filesystem grants, individually validated file changes, and individually validated asset elicitations until Playbot offers a sandbox-preserving command approval kind.
+The captain's build-thread auto-approve ruling is therefore limited to turn-scoped structured filesystem grants, individually validated file changes, and linked-asset-free asset elicitations until Playbot offers a sandbox-preserving command approval kind.
 The native responder replaces the prior computer-use approval loop for those safe request kinds without changing launch posture or relaxing gate 8.
 
 ## Operating states

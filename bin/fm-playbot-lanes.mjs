@@ -1677,7 +1677,7 @@ function proposedFileChangePaths(snapshot, itemId) {
   return paths;
 }
 
-function assetTargetsStayInWorktree(request, worktree, env, policy) {
+function assetRequestStaysWithinPolicy(request, worktree, env, policy) {
   const targets = [];
   const linkedAssets = [];
   const visit = (value, key = '') => {
@@ -1695,34 +1695,22 @@ function assetTargetsStayInWorktree(request, worktree, env, policy) {
   visit(request.toolParams);
   if (targets.length === 0) return { allowed: false, blockedReference: null };
   const root = canonicalPolicyPath(worktree);
-  if (!targets.every((target) => policyPathWithin(root, canonicalPolicyPath(resolve(root, target))))) {
+  const roots = approvalFilesystemRoots(worktree, env, policy);
+  if (!targets.every((target) => roots.some((allowedRoot) => (
+    policyPathWithin(allowedRoot, canonicalPolicyPath(resolve(root, target)))
+  )))) {
     return { allowed: false, blockedReference: null };
   }
-  const roots = approvalFilesystemRoots(worktree, env, policy);
   for (const entries of linkedAssets) {
     if (!Array.isArray(entries)) {
       return { allowed: false, blockedReference: JSON.stringify(entries) };
     }
-    for (const reference of entries) {
-      if (typeof reference !== 'string' || !reference || reference.startsWith('//')) {
-        return { allowed: false, blockedReference: JSON.stringify(reference) };
-      }
-      let candidate;
-      if (reference.startsWith('file:')) {
-        try {
-          candidate = fileURLToPath(reference);
-        } catch {
-          return { allowed: false, blockedReference: reference };
-        }
-      } else if (/^[A-Za-z][A-Za-z\d+.-]*:/.test(reference)) {
-        return { allowed: false, blockedReference: reference };
-      } else {
-        candidate = resolve(root, reference);
-      }
-      const canonical = canonicalPolicyPath(candidate);
-      if (!roots.some((allowedRoot) => policyPathWithin(allowedRoot, canonical))) {
-        return { allowed: false, blockedReference: reference };
-      }
+    if (entries.length > 0) {
+      const reference = entries[0];
+      return {
+        allowed: false,
+        blockedReference: typeof reference === 'string' ? reference : JSON.stringify(reference)
+      };
     }
   }
   return { allowed: true, blockedReference: null };
@@ -1791,10 +1779,10 @@ export function decidePlaybotPendingRequest(kind, request, snapshot, options = {
       && request.responseMode === confirmation.responseMode
       && request.message === confirmation.message
     ));
-    const assetPaths = safe ? assetTargetsStayInWorktree(request, worktree, env, policy) : { allowed: false, blockedReference: null };
+    const assetPaths = safe ? assetRequestStaysWithinPolicy(request, worktree, env, policy) : { allowed: false, blockedReference: null };
     if (!safe || !assetPaths.allowed) {
       if (assetPaths.blockedReference !== null) {
-        return { ...leavePending('deny-asset-reference-outside-approved-roots'), blockedReference: assetPaths.blockedReference };
+        return { ...leavePending('deny-linked-asset-request'), blockedReference: assetPaths.blockedReference };
       }
       return leavePending('deny-unknown-mcp-elicitation');
     }
