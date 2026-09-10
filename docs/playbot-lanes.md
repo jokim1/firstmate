@@ -61,8 +61,10 @@ Operator contract: write denial must be explicitly proved; read allowance does n
 - `native-enabled` - verified evidence for create, openThread, send, stop, archiveThread, and delete, plus confinement write denial.
 
 Native backend dispatch adopts the fused first thread returned by workspace creation and labels it with the task and delivery identity instead of opening a second thread.
+Playbot build threads retain the lane's native default approval posture so the disposable-smoke confinement write-denial remains enforceable; `--yolo` remains the separate merge-authority control.
 The initial brief uses the task's recorded effort: an absent effort defaults to `medium`, `low` is refused because `medium` is the floor, and `medium`, `high`, `xhigh`, `max`, and `ultra` pass through unchanged.
 Playbot owns workspace creation and base convergence, so spawn preserves its expected app-injected Godot files while refusing unrelated uncommitted work; the [`fm-spawn.sh` header](../bin/fm-spawn.sh) owns the exact fresh-worktree gate.
+If a dispatch transaction reached `worker-started` but its task record and backlog transition are missing, rerun the original spawn command to adopt and validate the existing worker without creating or messaging another one; the [`fm-spawn.sh` header](../bin/fm-spawn.sh) owns the exact recovery command, matching rules, and failure cleanup.
 
 ## Operator commands
 
@@ -88,5 +90,5 @@ Live Playbot paths default to the standard macOS install locations and every one
 
 ## Verification
 
-The hermetic suite (`tests/fm-playbot-lanes.test.sh`, `tests/fm-playbot-backend.test.sh`, `tests/fm-playbot-reconcile.test.sh`, fixtures under `tests/playbot-fixtures/`) is green without a live Playbot and covers gating, evidence integrity, shape parsing, forged-completion, size-cap, wedge-timer, and concurrent-check regressions.
+The hermetic suite (`tests/fm-playbot-lanes.test.sh`, `tests/fm-playbot-backend.test.sh`, `tests/fm-playbot-reconcile.test.sh`, fixtures under `tests/playbot-fixtures/`) is green without a live Playbot and covers gating, evidence integrity, shape parsing, spawn commit and recovery, forged-completion, size-cap, wedge-timer, and concurrent-check regressions.
 Current evidence and live gate results are recorded in `docs/verification/playbot-lanes.md`.
