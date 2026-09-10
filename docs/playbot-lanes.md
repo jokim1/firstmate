@@ -64,7 +64,7 @@ Command requests, out-of-worktree paths, network approvals, unknown approval met
 Each new decision is recorded with the bounded request text in the mode-0600 `state/<id>.playbot-approvals.jsonl` journal.
 The outbox retains a bounded fingerprint cursor, so an unchanged request is neither answered nor reported twice.
 Each newly observed blocked request fingerprint creates its own `input-request` event even when Playbot remains continuously in `pending_input`.
-Each poll examines at most four new requests and uses only `threads:respondToApproval` and `threads:respondToMcpElicitation` to answer them.
+Each poll processes at most four new requests and uses only `threads:respondToApproval` and `threads:respondToMcpElicitation` to answer them.
 Those two response operations deliberately do not have separate per-operation mutation-evidence entries.
 Before reading or answering a pending request, the responder requires the release's verified `threads:send` evidence and confinement write-denial proof; an uncertified release still refuses with `PHASE1-EVIDENCE-REQUIRED`.
 The response calls are limited to request IDs returned by that exact existing thread's snapshot, cannot create or retarget a workspace, and do not change the thread's sandbox posture, so the certified native-thread and confinement gates remain the fail-closed boundary.
