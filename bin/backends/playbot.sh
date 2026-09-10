@@ -20,6 +20,7 @@
 
 FM_PLAYBOT_BACKEND_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 FM_PLAYBOT_LANES="${FM_PLAYBOT_LANES_OVERRIDE:-$FM_PLAYBOT_BACKEND_DIR/../fm-playbot-lanes.mjs}"
+# shellcheck disable=SC2034 # Public adapter constant consumed after dynamic backend sourcing.
 FM_PLAYBOT_COURIER_MARKER_PATH='.fm/status.log'
 
 # fm_backend_playbot_lane: invoke the lanes CLI with the repo's node.
