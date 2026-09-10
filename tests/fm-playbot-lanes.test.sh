@@ -504,9 +504,8 @@ if (JSON.stringify(APPROVAL_RESPONSE_OPERATIONS) !== JSON.stringify([
 ])) {
   throw new Error('the approval responder must expose only the two required response operations');
 }
-if (PLAYBOT_APPROVAL_POLICY.maxRequestsPerPoll !== 4
-    || JSON.stringify(Object.keys(PLAYBOT_APPROVAL_POLICY.allowedExecutables)) !== JSON.stringify(['godot', 'uv'])) {
-  throw new Error('the approval policy must stay bounded to the two named executables');
+if (PLAYBOT_APPROVAL_POLICY.maxRequestsPerPoll !== 4) {
+  throw new Error('the approval policy must stay bounded');
 }
 const policyWorktree = resolve(dirname(applicationDb), 'worktrees/task');
 const policyEnv = {
@@ -529,26 +528,14 @@ const permissionDecision = decidePlaybotPendingRequest('approval', {
 if (permissionDecision.disposition !== 'respond' || permissionDecision.response.scope !== 'session') {
   throw new Error('Godot user-dir and uv-cache grants must match the session filesystem rule');
 }
-const prefixEscape = decidePlaybotPendingRequest('approval', {
-  id: 'prefix-escape',
+const commandDecision = decidePlaybotPendingRequest('approval', {
+  id: 'command-pending',
   method: 'item/commandExecution/requestApproval',
-  params: { cwd: policyWorktree, command: `touch ${policyWorktree}-outside` }
+  params: { cwd: policyWorktree, command: 'uv --offline run tool.py' }
 }, { proposedFileChanges: [] }, { worktree: policyWorktree, env: policyEnv });
-if (prefixEscape.disposition !== 'leave-pending') {
-  throw new Error('a path that only shares the worktree prefix must remain outside the allowlist');
-}
-for (const [id, command] of [
-  ['shell-write-escape', "sh -c 'cd /; touch tmp/playbot-escape'"],
-  ['shell-network-escape', "sh -c 'curl unknown.example'"]
-]) {
-  const decision = decidePlaybotPendingRequest('approval', {
-    id,
-    method: 'item/commandExecution/requestApproval',
-    params: { cwd: policyWorktree, command }
-  }, { proposedFileChanges: [] }, { worktree: policyWorktree, env: policyEnv });
-  if (decision.disposition !== 'leave-pending') {
-    throw new Error(`${id} must remain pending`);
-  }
+if (commandDecision.disposition !== 'leave-pending'
+    || commandDecision.ruleId !== 'deny-command-approval-outside-sandbox') {
+  throw new Error('every command approval must remain pending outside the Codex sandbox');
 }
 const ipc094 = COMPATIBILITY_MANIFEST.releases['0.94.0'].ipcChannelStrings;
 if (!ipc094.includes('threads:launch') || !ipc094.includes('threads:setActiveThread')

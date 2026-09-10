@@ -109,30 +109,6 @@ export const PLAYBOT_APPROVAL_POLICY = Object.freeze({
     permissions: 'item/permissions/requestApproval'
   }),
   allowedFilesystemRoots: Object.freeze(['worktree', 'godot-user-dir', 'uv-cache']),
-  allowedExecutables: Object.freeze({
-    godot: Object.freeze({
-      paths: Object.freeze([
-        '/Applications/Godot.app/Contents/MacOS/Godot',
-        '/opt/homebrew/bin/godot',
-        '/usr/local/bin/godot',
-        '/usr/bin/godot'
-      ]),
-      requiredFlags: Object.freeze([])
-    }),
-    uv: Object.freeze({
-      paths: Object.freeze([
-        '$HOME/.local/bin/uv',
-        '/opt/homebrew/bin/uv',
-        '/usr/local/bin/uv',
-        '/usr/bin/uv'
-      ]),
-      requiredFlags: Object.freeze(['--offline'])
-    })
-  }),
-  forbiddenCommandNames: Object.freeze([
-    'sh', 'bash', 'zsh', 'dash', 'eval', 'exec', 'source', 'xargs', 'env', 'nohup'
-  ]),
-  forbiddenCommandTokens: Object.freeze(['-c', '-e']),
   safeMcpElicitations: Object.freeze([
     Object.freeze({
       serverName: 'playbot',
@@ -1665,108 +1641,6 @@ function approvalFilesystemRoots(worktree, env = process.env, policy = PLAYBOT_A
   return policy.allowedFilesystemRoots.flatMap((kind) => rootsByKind[kind] ?? []).map(canonicalPolicyPath);
 }
 
-function commandWords(command) {
-  if (Array.isArray(command)) {
-    return command.every((part) => typeof part === 'string') ? command : null;
-  }
-  if (typeof command !== 'string' || !command.trim()) return null;
-  const words = [];
-  let word = '';
-  let quote = null;
-  let escaped = false;
-  for (const char of command) {
-    if (escaped) {
-      word += char;
-      escaped = false;
-      continue;
-    }
-    if (char === '\\' && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) quote = null;
-      else word += char;
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char) || ';|&<>'.includes(char)) {
-      if (word) words.push(word);
-      word = '';
-      if (';|&<>'.includes(char)) words.push(char);
-      continue;
-    }
-    word += char;
-  }
-  if (escaped || quote) return null;
-  if (word) words.push(word);
-  return words;
-}
-
-function commandText(command) {
-  if (typeof command === 'string') return command;
-  if (Array.isArray(command) && command.every((part) => typeof part === 'string')) {
-    return command.join(' ');
-  }
-  return null;
-}
-
-function commandHasUnknownNetwork(command) {
-  const text = commandText(command);
-  return !text || /(?:https?|ftp|ssh):\/\//i.test(text);
-}
-
-function resolveCommandExecutable(executable, cwd, env = process.env) {
-  const candidates = isAbsolute(executable) || executable.includes('/') || executable.includes('\\')
-    ? [resolve(cwd, executable)]
-    : String(env.PATH ?? '').split(delimiter).filter(Boolean).map((directory) => resolve(directory, executable));
-  for (const candidate of candidates) {
-    try {
-      accessSync(candidate, fsConstants.X_OK);
-      return canonicalPolicyPath(candidate);
-    } catch {}
-  }
-  return null;
-}
-
-function allowedExecutablePaths(executablePolicy, env = process.env) {
-  const home = env.HOME ?? homedir();
-  return executablePolicy.paths.map((candidate) => (
-    canonicalPolicyPath(candidate === '$HOME' || candidate.startsWith('$HOME/')
-      ? resolve(home, candidate.slice('$HOME/'.length))
-      : candidate)
-  ));
-}
-
-function commandAllowed(command, cwd, worktree, env = process.env, policy = PLAYBOT_APPROVAL_POLICY) {
-  const raw = commandText(command);
-  const words = commandWords(command);
-  if (!raw || !words || /[\r\n\0]/.test(raw)) return false;
-  if (/[`|&;<>()]/.test(raw) || /(^|[^\\])[<>]/.test(raw) || /\$/.test(raw)) return false;
-  const names = words.map((word) => basename(word).toLowerCase());
-  if (names.some((name) => policy.forbiddenCommandNames.includes(name))) return false;
-  if (words.some((word) => policy.forbiddenCommandTokens.includes(word))) return false;
-
-  const executable = resolveCommandExecutable(words[0], cwd, env);
-  if (!executable || policyPathWithin(worktree, executable)) return false;
-  const executableName = basename(executable).toLowerCase();
-  const executablePolicy = policy.allowedExecutables[executableName];
-  if (!executablePolicy || !allowedExecutablePaths(executablePolicy, env).includes(executable)) return false;
-  if (executablePolicy.requiredFlags.some((flag) => !words.includes(flag))) return false;
-
-  const roots = approvalFilesystemRoots(worktree, env, policy);
-  return words.slice(1).every((word) => {
-    const value = word.startsWith('-') && word.includes('=') ? word.slice(word.indexOf('=') + 1) : word;
-    if (!value || value.startsWith('-')) return true;
-    const candidate = resolve(cwd, value);
-    const canonical = canonicalPolicyPath(candidate);
-    return roots.some((root) => policyPathWithin(root, canonical));
-  });
-}
-
 function permissionPathsAllowed(permissions, worktree, env = process.env, policy = PLAYBOT_APPROVAL_POLICY) {
   if (!isPlainObject(permissions)) return false;
   if (Object.keys(permissions).some((key) => !['network', 'fileSystem'].includes(key))) return false;
@@ -1852,16 +1726,7 @@ export function decidePlaybotPendingRequest(kind, request, snapshot, options = {
   if (kind === 'approval') {
     const params = isPlainObject(request.params) ? request.params : {};
     if (request.method === policy.approvalMethods.command) {
-      if (params.networkApprovalContext || params.additionalPermissions || commandHasUnknownNetwork(params.command)) {
-        return leavePending('deny-unknown-network');
-      }
-      if (typeof params.cwd !== 'string' || !policyPathWithin(worktree, canonicalPolicyPath(params.cwd))) {
-        return leavePending('deny-command-cwd-outside-worktree');
-      }
-      if (!commandAllowed(params.command, params.cwd, worktree, env, policy)) {
-        return leavePending('deny-command-outside-approved-boundary');
-      }
-      return respond('allow-in-worktree-command-session', 'threads:respondToApproval', { decision: 'acceptForSession' });
+      return leavePending('deny-command-approval-outside-sandbox');
     }
     if (request.method === policy.approvalMethods.permissions) {
       if (!permissionPathsAllowed(params.permissions, worktree, env, policy)) {
