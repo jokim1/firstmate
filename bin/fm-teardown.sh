@@ -37,13 +37,22 @@
 # tasks: teardown proceeds only on positive land proof against a live default tip,
 # never because a feature branch is merely reachable from a remote. Positive land is
 # (A) current HEAD is an ancestor of the live default tip D, (T) tree equality of
-# HEAD vs D when no pr= is recorded or the forge reports MERGED (squash), or (M)
-# forge MERGED with current HEAD contained in the PR head. Live D is fetched from
-# origin (else the sole remote); after fetch the remote default branch name and OID
-# must still match the fetched snapshot (same-branch force-push drift refuses).
+# HEAD vs D when no pr= is recorded or the forge reports MERGED (squash), (M)
+# forge MERGED with current HEAD contained in the PR head, (P) the recorded pr=
+# reads live as MERGED and its final head equals current HEAD or the recorded
+# pr_head= while covering every local changed tree entry at the same path or in
+# the exact rename/renumber shape without hiding a later local descendant, or
+# (E) at least one task-changed path is identical on D and every other path
+# changed from merge-base(HEAD,D) to HEAD is identical on D except the explicit
+# repeatable --landed-except patterns. The exception allowlist cannot constitute
+# proof by itself, and a recorded pr= must read live as MERGED before E can
+# authorize cleanup. Live D is fetched from origin (else the sole remote); after
+# fetch the remote default branch name and OID must still match the fetched
+# snapshot (same-branch force-push drift refuses).
 # Recorded pr= overlay: OPEN always refuses; CLOSED and unconfirmed accept only A
-# (never T); MERGED accepts A/M/T. Missing ordinary-ship worktree refuses (restore
-# an inspectable worktree or captain --force); pr_head alone never authorizes.
+# (never T/E); MERGED accepts A/M/T/P/E. Missing ordinary-ship worktree refuses
+# (restore an inspectable worktree or captain --force); pr_head alone never
+# authorizes because P also requires the live final PR head to match it.
 # The same dirty+land+four-way classify recheck runs after quiescence immediately
 # before every ordinary destructive worktree return or removal: each Treehouse
 # return attempt (including lock retries) and Playbot workspace deletion after
@@ -53,11 +62,10 @@
 # local-default carveout when there is no remote.
 # Squash merges collapse the branch's commits, so per-commit patch ids against main
 # no longer match, and a pipeline rebase can leave the local worktree diverged from
-# the PR head. A diverged copy is not treated as landed: path-set coverage, git
-# cherry, and merge-tree containment each fail to prove content landed without also
-# accepting unlanded edits to the same paths. Teardown still accepts a merged PR
-# whose head contains the current local work (ancestor or equivalent patch ids),
-# or a clean content-in-default tree match. Anything else refuses.
+# the PR head. Teardown accepts a diverged copy only through P's final-head-bound
+# rename/renumber proof or E's explicit-exception proof. The older path-set, git
+# cherry, and merge-tree signals still do not prove arbitrary divergent content
+# landed without also accepting unlanded edits to the same paths.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
@@ -125,9 +133,15 @@
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
+#        [--landed-except <repo-relative-glob>]...
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
+#   --landed-except adds an explicit repo-relative glob to the repeatable
+#   path-scoped exception allowlist. At least one task-changed path must still be
+#   identical on the live default, so the allowlist can never prove landing by
+#   itself. It does not relax the dirty-worktree gate or override an open,
+#   closed, or unreadable recorded PR.
 #   --legacy-record accepts a task record that predates the spawn_gen field:
 #   teardown then proceeds only when the recorded endpoint is confirmed dead or
 #   agent-less (bin/fm-backend.sh's recovery-grade classifier), and without
@@ -276,11 +290,26 @@ fi
 ID=$1
 FORCE=
 LEGACY_RECORD_GIVEN=0
+LANDED_EXCEPT=()
 shift
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=--force ;;
     --legacy-record) LEGACY_RECORD_GIVEN=1 ;;
+    --landed-except)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "error: invalid teardown request" >&2
+        exit 2
+      fi
+      case "$1" in
+        ''|--*|/*|..|../*|*/..|*/../*)
+          echo "error: invalid teardown request" >&2
+          exit 2
+          ;;
+      esac
+      LANDED_EXCEPT+=("$1")
+      ;;
     *)
       echo "error: invalid teardown request" >&2
       exit 2
@@ -1104,6 +1133,7 @@ if [ "${FM_TEARDOWN_GUARD_DONE:-0}" != 1 ]; then
 fi
 HOME_PATH=$(grep '^home=' "$META" | cut -d= -f2- || true)
 PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
+RECORDED_META_PR_HEAD=$(grep '^pr_head=' "$META" | tail -1 | cut -d= -f2- || true)
 # tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
 # (/tmp/fm-<id>/); absent for tasks spawned before that change, so tolerate empty.
 TASK_TMP=$(grep '^tasktmp=' "$META" | cut -d= -f2- || true)
@@ -1668,6 +1698,249 @@ live_default_tip() {
   printf '%s\n' "$D"
 }
 
+WORK_UNLANDED_FORGE_READ_REASON=
+LIVE_RECORDED_PR_STATE=
+LIVE_RECORDED_PR_STATE_READ=0
+LIVE_RECORDED_PR_HEAD=
+
+# Read the recorded PR's state from its canonical forge URL through the
+# supported forge wrapper. The state is intentionally separate from the final
+# head lookup so E can require a live MERGED verdict even if it needs no head.
+read_recorded_pr_live_state() {
+  local view states state_count state forge_cwd
+  WORK_UNLANDED_FORGE_READ_REASON=
+  LIVE_RECORDED_PR_STATE=
+  LIVE_RECORDED_PR_STATE_READ=0
+  [ -n "${PR_URL:-}" ] || return 1
+  if ! fm_pr_url_parse "$PR_URL"; then
+    WORK_UNLANDED_FORGE_READ_REASON="could not read the recorded PR because its URL is invalid: $PR_URL"
+    return 2
+  fi
+  if [ -n "${PROJ:-}" ] && [ -d "$PROJ" ]; then
+    forge_cwd=$PROJ
+  else
+    forge_cwd=${WT:-$PWD}
+  fi
+  case "$FM_PR_PROVIDER" in
+    github)
+      if ! command -v gh-axi >/dev/null 2>&1; then
+        WORK_UNLANDED_FORGE_READ_REASON="could not read the recorded PR from GitHub because gh-axi is unavailable: $PR_URL"
+        return 2
+      fi
+      if ! view=$(cd "$forge_cwd" && gh-axi pr view "$FM_PR_NUMBER" \
+          --repo "$FM_PR_PATH" 2>/dev/null) || [ -z "$view" ]; then
+        WORK_UNLANDED_FORGE_READ_REASON="could not read the recorded PR live from GitHub with gh-axi: $PR_URL"
+        return 2
+      fi
+      ;;
+    gitlab)
+      if ! command -v glab >/dev/null 2>&1; then
+        WORK_UNLANDED_FORGE_READ_REASON="could not read the recorded PR from GitLab because glab is unavailable: $PR_URL"
+        return 2
+      fi
+      if ! view=$(cd "$forge_cwd" && glab mr view "$FM_PR_NUMBER" \
+          -R "https://$FM_PR_HOST/$FM_PR_PATH" 2>/dev/null) || [ -z "$view" ]; then
+        WORK_UNLANDED_FORGE_READ_REASON="could not read the recorded PR live from GitLab with glab: $PR_URL"
+        return 2
+      fi
+      ;;
+    *)
+      WORK_UNLANDED_FORGE_READ_REASON="could not read the recorded PR because its forge is unsupported: $PR_URL"
+      return 2
+      ;;
+  esac
+  states=$(printf '%s\n' "$view" | sed -n \
+    's/^[[:space:]]*state:[[:space:]]*//p' | sed '/^$/d')
+  state_count=$(printf '%s\n' "$states" | sed '/^$/d' | wc -l | tr -d ' ')
+  if [ "$state_count" != 1 ]; then
+    WORK_UNLANDED_FORGE_READ_REASON="could not read one exact state for the recorded PR from its forge: $PR_URL"
+    return 2
+  fi
+  state=$states
+  case "$state" in
+    open|opened|OPEN) LIVE_RECORDED_PR_STATE=OPEN ;;
+    merged|MERGED) LIVE_RECORDED_PR_STATE=MERGED ;;
+    closed|CLOSED) LIVE_RECORDED_PR_STATE=CLOSED ;;
+    *)
+      WORK_UNLANDED_FORGE_READ_REASON="could not read a recognized state for the recorded PR from its forge: $PR_URL"
+      return 2
+      ;;
+  esac
+  LIVE_RECORDED_PR_STATE_READ=1
+}
+
+# Read the immutable final head ref from the exact repository named by pr= and
+# fetch its commit object into the worktree object database.
+read_recorded_pr_live_final_head() {
+  local repo_url ref out lines head
+  LIVE_RECORDED_PR_HEAD=
+  fm_pr_url_parse "$PR_URL" || return 2
+  case "$FM_PR_PROVIDER" in
+    github)
+      repo_url="https://github.com/$FM_PR_PATH.git"
+      ref="refs/pull/$FM_PR_NUMBER/head"
+      ;;
+    gitlab)
+      repo_url="https://$FM_PR_HOST/$FM_PR_PATH.git"
+      ref="refs/merge-requests/$FM_PR_NUMBER/head"
+      ;;
+    *) return 2 ;;
+  esac
+  if ! out=$(git -C "$WT" ls-remote "$repo_url" "$ref" 2>/dev/null) \
+    || [ -z "$out" ]; then
+    WORK_UNLANDED_FORGE_READ_REASON="could not read the recorded PR's final head from its forge: $PR_URL"
+    return 2
+  fi
+  lines=$(printf '%s\n' "$out" | sed '/^$/d' | wc -l | tr -d ' ')
+  head=$(printf '%s\n' "$out" | awk 'NR == 1 { print $1; exit }')
+  if [ "$lines" != 1 ] || ! fm_pr_head_valid "$head"; then
+    WORK_UNLANDED_FORGE_READ_REASON="could not read one exact final head for the recorded PR from its forge: $PR_URL"
+    return 2
+  fi
+  if ! git -C "$WT" cat-file -e "$head^{commit}" 2>/dev/null \
+    && ! git -C "$WT" fetch --quiet "$repo_url" "$ref" >/dev/null 2>&1; then
+    WORK_UNLANDED_FORGE_READ_REASON="could not fetch the recorded PR's final head from its forge: $PR_URL"
+    return 2
+  fi
+  if ! git -C "$WT" cat-file -e "$head^{commit}" 2>/dev/null; then
+    WORK_UNLANDED_FORGE_READ_REASON="could not verify the recorded PR's final head commit after fetching it: $PR_URL"
+    return 2
+  fi
+  LIVE_RECORDED_PR_HEAD=$head
+}
+
+# Confirm that every tree entry changed by current since its merge-base with
+# final is present in final at the same path or was moved to a final-changed path.
+recorded_head_covers_local_changes() {
+  local current=$1 final=$2 base current_paths final_paths path final_path
+  local current_entry current_identity final_entry final_identity found=0 covered=1
+  base=$(git -C "$WT" merge-base "$current" "$final" 2>/dev/null) || return 1
+  current_paths=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-current-paths.XXXXXX") || return 1
+  final_paths=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-final-paths.XXXXXX") || {
+    rm -f -- "$current_paths"
+    return 1
+  }
+  if ! git -C "$WT" diff --name-only -z --no-renames "$base" "$current" -- \
+      > "$current_paths" \
+    || ! git -C "$WT" diff --name-only -z --no-renames "$base" "$final" -- \
+      > "$final_paths"; then
+    rm -f -- "$current_paths" "$final_paths"
+    return 1
+  fi
+  while IFS= read -r -d '' path; do
+    if git -C "$WT" diff --quiet --no-ext-diff "$final" "$current" -- \
+        "$path"; then
+      continue
+    fi
+    current_entry=$(git -C "$WT" ls-tree "$current" -- "$path" 2>/dev/null) \
+      || { covered=0; break; }
+    [ -n "$current_entry" ] || { covered=0; break; }
+    current_identity=$(printf '%s\n' "$current_entry" \
+      | awk 'NR == 1 { print $1 " " $2 " " $3; exit }')
+    final_entry=$(git -C "$WT" ls-tree "$final" -- "$path" 2>/dev/null) \
+      || { covered=0; break; }
+    [ -z "$final_entry" ] || { covered=0; break; }
+    found=0
+    while IFS= read -r -d '' final_path; do
+      final_entry=$(git -C "$WT" ls-tree "$final" -- "$final_path" 2>/dev/null) \
+        || continue
+      [ -n "$final_entry" ] || continue
+      final_identity=$(printf '%s\n' "$final_entry" \
+        | awk 'NR == 1 { print $1 " " $2 " " $3; exit }')
+      if [ "$current_identity" = "$final_identity" ]; then
+        found=1
+        break
+      fi
+    done < "$final_paths"
+    if [ "$found" != 1 ]; then
+      covered=0
+      break
+    fi
+  done < "$current_paths"
+  rm -f -- "$current_paths" "$final_paths"
+  [ "$covered" = 1 ]
+}
+
+# P: the forge confirms MERGED and the final PR head binds to current HEAD or
+# recorded pr_head=. A current HEAD descended from the recorded head is a later
+# local change and must not be hidden by the older metadata binding.
+recorded_pr_final_head_proven() {
+  local current=$1
+  read_recorded_pr_live_state || return 1
+  [ "$LIVE_RECORDED_PR_STATE" = MERGED ] || return 1
+  read_recorded_pr_live_final_head || return 1
+  [ "$LIVE_RECORDED_PR_HEAD" = "$current" ] && return 0
+  fm_pr_head_valid "${RECORDED_META_PR_HEAD:-}" || return 1
+  [ "$LIVE_RECORDED_PR_HEAD" = "$RECORDED_META_PR_HEAD" ] || return 1
+  if git -C "$WT" merge-base --is-ancestor "$RECORDED_META_PR_HEAD" \
+      "$current" 2>/dev/null; then
+    return 1
+  fi
+  recorded_head_covers_local_changes "$current" "$LIVE_RECORDED_PR_HEAD"
+}
+
+path_matches_landed_exception() {
+  local path=$1 pattern
+  for pattern in "${LANDED_EXCEPT[@]}"; do
+    # The unquoted right side is the caller's explicit repository-path glob.
+    # shellcheck disable=SC2053
+    [[ "$path" == $pattern ]] && return 0
+  done
+  return 1
+}
+
+# E: compare only the paths the task changed relative to its merge-base with D.
+# Every differing path is printed, and any path outside the explicit allowlist
+# refuses the proof.
+land_content_equivalent_except() {
+  local D=$1 current=$2 base paths_file path diff_rc identical=0 nonallowed=0 compare_error=0
+  [ "${#LANDED_EXCEPT[@]}" -gt 0 ] || return 1
+  if [ -n "${PR_URL:-}" ]; then
+    if [ "$LIVE_RECORDED_PR_STATE_READ" != 1 ]; then
+      read_recorded_pr_live_state || return 1
+    fi
+    [ "$LIVE_RECORDED_PR_STATE" = MERGED ] || return 1
+  fi
+  base=$(git -C "$WT" merge-base "$current" "$D" 2>/dev/null) || return 1
+  paths_file=$(mktemp "${TMPDIR:-/tmp}/fm-teardown-landed-paths.XXXXXX") || return 1
+  if ! git -C "$WT" diff --name-only -z --no-renames "$base" "$current" -- \
+      > "$paths_file"; then
+    rm -f -- "$paths_file"
+    return 1
+  fi
+  while IFS= read -r -d '' path; do
+    diff_rc=0
+    git -C "$WT" diff --quiet --no-ext-diff "$D" "$current" -- "$path" \
+      || diff_rc=$?
+    case "$diff_rc" in
+      0) identical=1 ;;
+      1)
+        if path_matches_landed_exception "$path"; then
+          printf 'landed-content difference (allowlisted): %s\n' "$path" >&2
+        else
+          printf 'landed-content difference (not allowlisted): %s\n' "$path" >&2
+          nonallowed=1
+        fi
+        ;;
+      *) compare_error=1 ;;
+    esac
+  done < "$paths_file"
+  rm -f -- "$paths_file"
+  if [ "$compare_error" = 1 ]; then
+    echo "REFUSED: content-equivalence could not compare every task-changed path on the live default branch." >&2
+    return 1
+  fi
+  if [ "$nonallowed" = 1 ]; then
+    echo "REFUSED: content-equivalence found non-allowlisted differing paths on the live default branch." >&2
+    return 1
+  fi
+  if [ "$identical" != 1 ]; then
+    echo "REFUSED: content-equivalence proved nothing landed; discarding this work needs captain --force." >&2
+    return 1
+  fi
+  return 0
+}
+
 # Tree equality of tip vs D (merge-tree). Provenance-blind; caller gates on PR state.
 land_tree_eq() {
   local D=$1 tip=${2:-HEAD} default_tree merged_tree repo
@@ -1770,6 +2043,10 @@ classify_recorded_pr_state() {
 ship_land_proven() {
   local branch=$1 D current pr_rc=0
   WORK_UNLANDED_PR_OPEN=
+  WORK_UNLANDED_FORGE_READ_REASON=
+  LIVE_RECORDED_PR_STATE=
+  LIVE_RECORDED_PR_STATE_READ=0
+  LIVE_RECORDED_PR_HEAD=
   [ -d "${WT:-}" ] || return 1
   current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
 
@@ -1796,6 +2073,11 @@ ship_land_proven() {
     return 0
   fi
 
+  # P: the live final PR head itself binds the recorded merge to this task.
+  if [ -n "${PR_URL:-}" ] && recorded_pr_final_head_proven "$current"; then
+    return 0
+  fi
+
   # M: MERGED + containment (GitHub head; GitLab often lacks head oid → T under MERGED)
   if [ -n "${PR_URL:-}" ] && [ "${RECORDED_PR_STATE:-}" = MERGED ]; then
     if [ -n "${RECORDED_PR_HEAD:-}" ]; then
@@ -1807,6 +2089,7 @@ ship_land_proven() {
     fi
     # FR1: MERGED ⇒ tree equality allowed
     land_tree_eq "$D" HEAD && return 0
+    land_content_equivalent_except "$D" "$current" && return 0
     return 1
   fi
 
@@ -1818,6 +2101,7 @@ ship_land_proven() {
     # Discover merged PR by branch (existing behavior) or tree equality
     pr_is_merged "$branch" && return 0
     land_tree_eq "$D" HEAD && return 0
+    land_content_equivalent_except "$D" "$current" && return 0
     return 1
   fi
 
@@ -1828,6 +2112,7 @@ ship_land_proven() {
   # a confirmed merge here; a genuinely closed-unmerged or open PR is not merged
   # and still refuses.
   pr_is_merged "$branch" && return 0
+  land_content_equivalent_except "$D" "$current" && return 0
   return 1
 }
 
@@ -2126,7 +2411,11 @@ teardown_treehouse_return_attempt() {
 }
 
 validate_worktree_teardown_safety() {
-  local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
+  local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch D current
+  WORK_UNLANDED_FORGE_READ_REASON=
+  LIVE_RECORDED_PR_STATE=
+  LIVE_RECORDED_PR_STATE_READ=0
+  LIVE_RECORDED_PR_HEAD=
   # Husk never inherits --force land/dirty skip (positive land still required).
   if [ "$FORCE" = "--force" ] && [ "${TEARDOWN_IS_HUSK:-0}" != 1 ]; then
     return 0
@@ -2178,7 +2467,19 @@ validate_worktree_teardown_safety() {
       return 1
     fi
     unmerged=$(printf '%s\n' "$unmerged_raw" | head -5)
+    if [ -z "$dirty" ] && [ -n "$unmerged" ] \
+      && [ "${#LANDED_EXCEPT[@]}" -gt 0 ]; then
+      current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || current=
+      D=$(live_default_tip 2>/dev/null) || D=
+      if [ -n "$current" ] && [ -n "$D" ] \
+        && land_content_equivalent_except "$D" "$current"; then
+        return 0
+      fi
+    fi
     if [ -n "$dirty" ] || [ -n "$unmerged" ]; then
+      if [ -n "$WORK_UNLANDED_FORGE_READ_REASON" ]; then
+        printf 'REFUSED: %s\n' "$WORK_UNLANDED_FORGE_READ_REASON" >&2
+      fi
       echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on any remote." >&2
       [ -n "$dirty" ] && echo "uncommitted changes present" >&2
       [ -n "$unmerged" ] && printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
@@ -2203,6 +2504,10 @@ validate_worktree_teardown_safety() {
   fi
   if ship_land_proven "$branch"; then
     return 0
+  fi
+
+  if [ -n "$WORK_UNLANDED_FORGE_READ_REASON" ]; then
+    printf 'REFUSED: %s\n' "$WORK_UNLANDED_FORGE_READ_REASON" >&2
   fi
 
   if [ -n "${WORK_UNLANDED_PR_OPEN:-}" ]; then

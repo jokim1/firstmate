@@ -128,6 +128,8 @@ SH
   # Clone as the project; give it a `main` branch and an origin/HEAD.
   git clone -q "$case_dir/origin.git" "$case_dir/project"
   git -C "$case_dir/project" remote set-head origin main 2>/dev/null || true
+  git -C "$case_dir/project" config \
+    "url.$case_dir/origin.git.insteadOf" https://github.com/example/repo.git
   # Add a worktree on a fresh task branch; that branch is where the crewmate commits.
   git -C "$case_dir/project" worktree add -q -b fm/task-x1 "$case_dir/wt" main
 
@@ -193,6 +195,70 @@ land_on_origin_main() {
   git -C "$tmp" -c user.email=t@t -c user.name=t commit -q -m "squash $file"
   git -C "$tmp" push -q origin HEAD:main
   rm -rf "$tmp"
+}
+
+# Land a pipeline-rewritten PR head whose migration path differs from the stale
+# local task commit, then squash that exact head onto origin/main.
+# Echoes: <final-pr-head>
+land_renumbered_migration_pr() {
+  local case_dir=$1 tmp pr_head
+  tmp="$case_dir/_renumber"
+  git clone -q "$case_dir/origin.git" "$tmp"
+  git -C "$tmp" checkout -q -b pipeline-renumber
+  mkdir -p "$tmp/migrations"
+  printf '%s\n' 'create table payloads(id integer);' \
+    > "$tmp/migrations/20260910130000.sql"
+  git -C "$tmp" add -- migrations/20260910130000.sql
+  git -C "$tmp" -c user.email=t@t -c user.name=t \
+    commit -q -m "renumber payload migration"
+  pr_head=$(git -C "$tmp" rev-parse HEAD)
+  git -C "$tmp" push -q origin "HEAD:refs/pull/7/head"
+  git -C "$tmp" checkout -q main
+  git -C "$tmp" merge -q --squash pipeline-renumber >/dev/null
+  git -C "$tmp" -c user.email=t@t -c user.name=t \
+    commit -q -m "feat: payload migration (#7)"
+  git -C "$tmp" push -q origin main
+  rm -rf "$tmp"
+  git -C "$case_dir/project" fetch -q origin
+  printf '%s\n' "$pr_head"
+}
+
+land_pr_head_with_unrelated_copy() {
+  local case_dir=$1 tmp pr_head
+  tmp="$case_dir/_unrelated-copy"
+  git clone -q "$case_dir/origin.git" "$tmp"
+  git -C "$tmp" checkout -q -b unrelated-copy
+  cp "$tmp/tracked.txt" "$tmp/unrelated.txt"
+  git -C "$tmp" add -- unrelated.txt
+  git -C "$tmp" -c user.email=t@t -c user.name=t \
+    commit -q -m "add unrelated copy"
+  pr_head=$(git -C "$tmp" rev-parse HEAD)
+  git -C "$tmp" push -q origin "HEAD:refs/pull/7/head"
+  git -C "$tmp" checkout -q main
+  git -C "$tmp" merge -q --squash unrelated-copy >/dev/null
+  git -C "$tmp" -c user.email=t@t -c user.name=t \
+    commit -q -m "feat: add unrelated copy (#7)"
+  git -C "$tmp" push -q origin main
+  rm -rf "$tmp"
+  git -C "$case_dir/project" fetch -q origin
+  printf '%s\n' "$pr_head"
+}
+
+# Land the feature bytes while deliberately recapturing different generated
+# evidence bytes on origin/main.
+land_feature_with_recaptured_evidence() {
+  local case_dir=$1 tmp
+  tmp="$case_dir/_recaptured"
+  git clone -q "$case_dir/origin.git" "$tmp"
+  mkdir -p "$tmp/src" "$tmp/docs/evidence"
+  printf '%s\n' landed > "$tmp/src/feature.txt"
+  printf '%s\n' recaptured > "$tmp/docs/evidence/readability.txt"
+  git -C "$tmp" add -- src/feature.txt docs/evidence/readability.txt
+  git -C "$tmp" -c user.email=t@t -c user.name=t \
+    commit -q -m "land feature with recaptured evidence"
+  git -C "$tmp" push -q origin main
+  rm -rf "$tmp"
+  git -C "$case_dir/project" fetch -q origin
 }
 
 # Override GitHub lookups to report PR 7 as merged with the supplied head.
@@ -889,6 +955,215 @@ test_squash_merged_branch_deleted_allows() {
   expect_code 0 "$rc" "squash-merged: teardown should succeed when the PR is merged"
   ! grep -q REFUSED "$case_dir/stderr" || fail "squash-merged: teardown printed a REFUSED line"
   pass "squash-merged + deleted-branch worktree (PR merged) is torn down (the fix)"
+}
+
+test_squash_merged_renumbered_migration_allows_final_recorded_head() {
+  local case_dir rc pr_head
+  case_dir=$(make_case squash-renumbered-migration)
+  write_meta "$case_dir" no-mistakes ship
+  mkdir -p "$case_dir/wt/migrations"
+  printf '%s\n' 'create table payloads(id integer);' \
+    > "$case_dir/wt/migrations/20260910120000.sql"
+  git -C "$case_dir/wt" add -- migrations/20260910120000.sql
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "add payload migration"
+  pr_head=$(land_renumbered_migration_pr "$case_dir")
+  printf '%s\n' \
+    'pr=https://github.com/example/repo/pull/7' \
+    "pr_head=$pr_head" >> "$case_dir/state/task-x1.meta"
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "squash-renumbered-migration: the live merged PR's final recorded head should prove landing: $(cat "$case_dir/stderr")"
+  ! grep -q REFUSED "$case_dir/stderr" \
+    || fail "squash-renumbered-migration: teardown printed a REFUSED line"
+  pass "a live merged PR whose final head equals recorded pr_head allows a pipeline-renumbered migration"
+}
+
+test_recorded_head_refuses_cross_path_copy_while_local_path_exists() {
+  local case_dir rc local_head pr_head
+  case_dir=$(make_case recorded-head-unrelated-copy)
+  write_meta "$case_dir" no-mistakes ship
+  land_on_origin_main "$case_dir" tracked.txt base
+  git -C "$case_dir/wt" fetch -q origin
+  git -C "$case_dir/wt" reset -q --hard origin/main
+  printf '%s\n' payload > "$case_dir/wt/tracked.txt"
+  git -C "$case_dir/wt" add -- tracked.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "change tracked payload"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  pr_head=$(land_pr_head_with_unrelated_copy "$case_dir")
+  printf '%s\n' \
+    'pr=https://github.com/example/repo/pull/7' \
+    "pr_head=$pr_head" >> "$case_dir/state/task-x1.meta"
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "recorded-head-unrelated-copy: an unrelated copy must not prove the local path landed"
+  assert_refusal_retained_task_state "$case_dir" recorded-head-unrelated-copy "$local_head"
+  pass "recorded PR proof rejects matching bytes elsewhere while the local path still exists"
+}
+
+test_recorded_head_refuses_unlanded_mode_change() {
+  local case_dir rc local_head pr_head
+  case_dir=$(make_case recorded-head-mode-change)
+  write_meta "$case_dir" no-mistakes ship
+  land_on_origin_main "$case_dir" tracked.txt payload
+  git -C "$case_dir/wt" fetch -q origin
+  git -C "$case_dir/wt" reset -q --hard origin/main
+  chmod +x "$case_dir/wt/tracked.txt"
+  git -C "$case_dir/wt" add -- tracked.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "make tracked payload executable"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  pr_head=$(land_pr_head_with_unrelated_copy "$case_dir")
+  printf '%s\n' \
+    'pr=https://github.com/example/repo/pull/7' \
+    "pr_head=$pr_head" >> "$case_dir/state/task-x1.meta"
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "recorded-head-mode-change: matching blob bytes must not hide an unlanded mode change"
+  assert_refusal_retained_task_state "$case_dir" recorded-head-mode-change "$local_head"
+  pass "recorded PR proof compares full tree entries including file mode"
+}
+
+test_cherry_pick_with_allowlisted_evidence_difference_allows() {
+  local case_dir rc
+  case_dir=$(make_case cherry-pick-evidence)
+  write_meta "$case_dir" local-only ship
+  mkdir -p "$case_dir/wt/src" "$case_dir/wt/docs/evidence"
+  printf '%s\n' landed > "$case_dir/wt/src/feature.txt"
+  printf '%s\n' original > "$case_dir/wt/docs/evidence/readability.txt"
+  git -C "$case_dir/wt" add -- src/feature.txt docs/evidence/readability.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "add feature and readability evidence"
+  land_feature_with_recaptured_evidence "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" --landed-except 'docs/evidence/**' \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "cherry-pick-evidence: allowlisted evidence should not block byte-equivalent landed code: $(cat "$case_dir/stderr")"
+  ! grep -q REFUSED "$case_dir/stderr" \
+    || fail "cherry-pick-evidence: teardown printed a REFUSED line"
+  pass "content equivalence accepts a cherry-pick whose only differing path is allowlisted evidence"
+}
+
+test_landed_except_refuses_real_unlanded_file_and_prints_path() {
+  local case_dir rc local_head
+  case_dir=$(make_case landed-except-unlanded)
+  write_meta "$case_dir" local-only ship
+  mkdir -p "$case_dir/wt/src" "$case_dir/wt/docs/evidence"
+  printf '%s\n' landed > "$case_dir/wt/src/feature.txt"
+  printf '%s\n' never-landed > "$case_dir/wt/src/unlanded.txt"
+  printf '%s\n' original > "$case_dir/wt/docs/evidence/readability.txt"
+  git -C "$case_dir/wt" add -- src/feature.txt src/unlanded.txt \
+    docs/evidence/readability.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "add one unlanded file"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  land_feature_with_recaptured_evidence "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" --landed-except 'docs/evidence/**' \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "landed-except-unlanded: a real unlanded file must refuse"
+  assert_grep 'src/unlanded.txt' "$case_dir/stderr" \
+    "landed-except-unlanded: refusal did not print the exact differing path"
+  assert_refusal_retained_task_state "$case_dir" landed-except-unlanded "$local_head"
+  pass "content equivalence prints and refuses a non-allowlisted unlanded path"
+}
+
+test_landed_except_refuses_when_allowlist_is_the_only_proof() {
+  local case_dir rc local_head
+  case_dir=$(make_case landed-except-only-proof)
+  write_meta "$case_dir" local-only ship
+  wt_commit_file "$case_dir" unlanded.txt never-landed "add unlanded file"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+
+  set +e
+  run_teardown "$case_dir" --landed-except '**' \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "landed-except-only-proof: an allowlist cannot prove wholly unlanded work"
+  assert_grep 'nothing landed' "$case_dir/stderr" \
+    "landed-except-only-proof: refusal did not explain that nothing landed"
+  assert_grep 'captain --force' "$case_dir/stderr" \
+    "landed-except-only-proof: refusal did not name the discard authority"
+  assert_refusal_retained_task_state "$case_dir" landed-except-only-proof "$local_head"
+  pass "an allowlist cannot constitute landing proof by itself"
+}
+
+test_landed_except_never_overrides_closed_unmerged_pr() {
+  local case_dir rc local_head
+  case_dir=$(make_case landed-except-closed-pr)
+  write_meta "$case_dir" no-mistakes ship
+  append_pr_meta_url "$case_dir"
+  mkdir -p "$case_dir/wt/docs/evidence"
+  printf '%s\n' original > "$case_dir/wt/docs/evidence/readability.txt"
+  git -C "$case_dir/wt" add -- docs/evidence/readability.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "capture readability evidence"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_closed "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" --landed-except 'docs/evidence/**' \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "landed-except-closed-pr: a closed-unmerged PR must refuse"
+  assert_grep REFUSED "$case_dir/stderr" \
+    "landed-except-closed-pr: teardown did not report a refusal"
+  assert_refusal_retained_task_state "$case_dir" landed-except-closed-pr "$local_head"
+  pass "an evidence allowlist never turns a closed-unmerged recorded PR into landing"
+}
+
+test_landed_except_refuses_loudly_when_forge_read_fails() {
+  local case_dir rc local_head
+  case_dir=$(make_case landed-except-forge-error)
+  write_meta "$case_dir" no-mistakes ship
+  append_pr_meta_url "$case_dir"
+  mkdir -p "$case_dir/wt/docs/evidence"
+  printf '%s\n' original > "$case_dir/wt/docs/evidence/readability.txt"
+  git -C "$case_dir/wt" add -- docs/evidence/readability.txt
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "capture readability evidence"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_axi_error "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" --landed-except 'docs/evidence/**' \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "landed-except-forge-error: an unreadable forge must refuse"
+  assert_grep 'could not read the recorded PR' "$case_dir/stderr" \
+    "landed-except-forge-error: refusal did not name the failed live forge read"
+  assert_refusal_retained_task_state "$case_dir" landed-except-forge-error "$local_head"
+  pass "an evidence allowlist fails closed and loudly when the forge read fails"
 }
 
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head() {
@@ -4193,6 +4468,14 @@ test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
 test_squash_merged_branch_deleted_allows
+test_squash_merged_renumbered_migration_allows_final_recorded_head
+test_recorded_head_refuses_cross_path_copy_while_local_path_exists
+test_recorded_head_refuses_unlanded_mode_change
+test_cherry_pick_with_allowlisted_evidence_difference_allows
+test_landed_except_refuses_real_unlanded_file_and_prints_path
+test_landed_except_refuses_when_allowlist_is_the_only_proof
+test_landed_except_never_overrides_closed_unmerged_pr
+test_landed_except_refuses_loudly_when_forge_read_fails
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows
 test_squash_merged_pr_allows_replayed_unpushed_patch
