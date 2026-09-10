@@ -3357,7 +3357,16 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$BACKEND" != play
   fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
-  freshen_spawn_worktree_base "$WT" || exit 1
+  if [ "$BACKEND" = playbot ]; then
+    # Playbot owns workspace create-at-base and self-heals to EXPECTED_MAIN_SHA
+    # in order preflight, so the pooled-slot fetch/reset is the wrong gate.
+    # Keep spawn_worktree_isolated (already enforced above) and a cleanliness
+    # check that allows only Playbot's known injection (addons/playbot/ and
+    # project.godot). Never fetch, reset, or clean a Playbot worktree here.
+    fm_backend_playbot_worktree_dirt_allows_launch "$WT" || exit 1
+  else
+    freshen_spawn_worktree_base "$WT" || exit 1
+  fi
 fi
 
 # Pre-register Claude's workspace trust for the worktree, at the first point the

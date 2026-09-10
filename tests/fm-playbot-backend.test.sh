@@ -481,4 +481,73 @@ grep -qi 'refuses effort .low.' "$TMP_ROOT/send-low.err" \
   || fail "send_initial low refusal must name the floor, got: $(cat "$TMP_ROOT/send-low.err")"
 pass "send_initial maps effort with a medium floor and refuses low"
 
+# --- spawn dirt gate: Playbot injection allowed; any other dirt refused --------
+# backend=playbot skips freshen_spawn_worktree_base (pooled fetch/reset) and
+# calls fm_backend_playbot_worktree_dirt_allows_launch instead. Playbot injects
+# addons/playbot/ plus a project.godot change into every Godot workspace, so a
+# fresh mother-clucker-shaped tree is never porcelain-clean; disposable smoke
+# projects without project.godot never hit that path.
+
+# Seed a Godot-shaped tree with an existing tracked addons/ tree so Playbot's
+# new addon shows as ?? addons/playbot/ (not the collapsed ?? addons/ parent
+# that git reports when addons/ itself is brand new).
+seed_godot_wt() {  # <dir>
+  local dir=$1
+  mkdir -p "$dir/addons/other"
+  git -C "$dir" init --quiet -b main
+  printf 'config_version=5\n' > "$dir/project.godot"
+  printf 'tracked\n' > "$dir/README.md"
+  printf 'other addon\n' > "$dir/addons/other/plugin.cfg"
+  git -C "$dir" add project.godot README.md addons/other/plugin.cfg
+  git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm initial
+}
+inject_playbot_addon() {  # <dir>
+  mkdir -p "$1/addons/playbot"
+  printf 'playbot addon\n' > "$1/addons/playbot/plugin.cfg"
+  printf 'config_version=5\n; playbot touched\n' > "$1/project.godot"
+}
+
+INJECT_WT="$TMP_ROOT/inject-wt"
+seed_godot_wt "$INJECT_WT"
+inject_playbot_addon "$INJECT_WT"
+# Confirm porcelain shape matches a real Godot project after Playbot injects.
+inject_status=$(git -C "$INJECT_WT" -c core.quotePath=false status --porcelain)
+printf '%s\n' "$inject_status" | grep -q 'project.godot' \
+  || fail "inject fixture must dirty project.godot, got: $inject_status"
+printf '%s\n' "$inject_status" | grep -Eq 'addons/playbot' \
+  || fail "inject fixture must dirty addons/playbot/, got: $inject_status"
+fm_backend_playbot_worktree_dirt_allows_launch "$INJECT_WT" \
+  || fail "injection-only dirt (addons/playbot/ + modified project.godot) must allow launch"
+# Empty status also allows launch.
+CLEAN_WT="$TMP_ROOT/clean-wt"
+seed_godot_wt "$CLEAN_WT"
+fm_backend_playbot_worktree_dirt_allows_launch "$CLEAN_WT" \
+  || fail "a clean Playbot worktree must allow launch"
+# Any non-injection dirty path must still refuse (and leave the tree untouched).
+DIRTY_WT="$TMP_ROOT/dirty-wt"
+seed_godot_wt "$DIRTY_WT"
+inject_playbot_addon "$DIRTY_WT"
+printf 'keep this local work\n' > "$DIRTY_WT/uncommitted.txt"
+before_head=$(git -C "$DIRTY_WT" rev-parse HEAD)
+if fm_backend_playbot_worktree_dirt_allows_launch "$DIRTY_WT" >/dev/null 2>"$TMP_ROOT/dirty.err"; then
+  fail "a Playbot worktree dirty outside injection paths must refuse launch"
+fi
+grep -q 'is not clean' "$TMP_ROOT/dirty.err" \
+  || fail "non-injection dirt refusal must say the worktree is not clean, got: $(cat "$TMP_ROOT/dirty.err")"
+[ "$(git -C "$DIRTY_WT" rev-parse HEAD)" = "$before_head" ] \
+  || fail "dirt refusal must not move HEAD on a Playbot worktree"
+assert_grep 'keep this local work' "$DIRTY_WT/uncommitted.txt" \
+  "dirt refusal must not discard unexpected uncommitted work"
+# Pure status classifier: injection-only vs mixed.
+fm_backend_playbot_status_is_injection_only "$(printf ' M project.godot\n?? addons/playbot/\n')" \
+  || fail "status_is_injection_only must accept project.godot + addons/playbot/"
+if fm_backend_playbot_status_is_injection_only "$(printf ' M project.godot\n?? uncommitted.txt\n')"; then
+  fail "status_is_injection_only must refuse when any non-injection path is dirty"
+fi
+if fm_backend_playbot_status_is_injection_only "$(printf ' M README.md\n')"; then
+  fail "status_is_injection_only must refuse a modified non-injection path"
+fi
+pass "Playbot spawn dirt gate allows injection-only dirt and refuses any other dirty path"
+
 printf 'fm-playbot-backend: all tests passed\n'
