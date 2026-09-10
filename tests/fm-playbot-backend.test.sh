@@ -587,7 +587,7 @@ make_playbot_spawn_lane() {  # <case-dir>
   lane="$case_dir/fake-playbot-lanes.mjs"
   cat > "$lane" <<'JS'
 #!/usr/bin/env node
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 
 const [command] = process.argv.slice(2);
 appendFileSync(process.env.FM_PLAYBOT_TEST_LOG, `${command}\n`);
@@ -598,7 +598,11 @@ switch (command) {
   case 'cleanup-state':
     break;
   case 'route-write':
-    appendFileSync(process.env.FM_PLAYBOT_TEST_ROUTE_PATH, 'attempted route\n');
+    if (process.env.FM_PLAYBOT_TEST_ROUTE_RC === '1') {
+      process.exitCode = 1;
+    } else {
+      writeFileSync(process.env.FM_PLAYBOT_TEST_ROUTE_PATH, 'attempted route\n');
+    }
     break;
   case 'binding-resolve':
     process.stdout.write(`${process.env.FM_PLAYBOT_TEST_BINDING ?? 'project-fixture\troot-fixture\t1'}\n`);
@@ -618,6 +622,18 @@ switch (command) {
 JS
   chmod +x "$lane"
   printf '%s\n' "$lane"
+}
+
+seed_playbot_recovery_wiring() {  # <home> <id>
+  printf 'original route\n' > "$1/state/$2.playbot-route.json"
+  printf 'original check\n' > "$1/state/$2.check.sh"
+  printf 'original trust\n' > "$1/state/$2.check-trust"
+}
+
+assert_playbot_recovery_wiring_preserved() {  # <home> <id> <label>
+  assert_grep 'original route' "$1/state/$2.playbot-route.json" "$3 removed the pre-existing route"
+  assert_grep 'original check' "$1/state/$2.check.sh" "$3 removed the pre-existing check"
+  assert_grep 'original trust' "$1/state/$2.check-trust" "$3 removed the pre-existing trust binding"
 }
 
 make_playbot_spawn_case() {  # <name> <id>
@@ -756,6 +772,8 @@ test_fresh_playbot_backlog_failure_retires_worker() {
   [ "$status" -ne 0 ] || fail "fresh Playbot spawn succeeded after its backlog commit failed"
   assert_contains "$out" "could not be moved to In flight" \
     "fresh Playbot spawn did not report its backlog commit failure"
+  assert_contains "$out" "no worker is left that the backlog does not own" \
+    "fresh Playbot spawn did not retain its destructive cleanup guidance"
   [ "$(playbot_backlog_state "$SPAWN_HOME" "$id")" = queued ] \
     || fail "failed fresh Playbot spawn changed its queued backlog row"
   [ "$(grep -c '^archive$' "$SPAWN_LOG" || true)" -eq 1 ] \
@@ -802,6 +820,10 @@ EOF
   [ "$status" -ne 0 ] || fail "worker-started re-entry succeeded after its backlog commit failed"
   assert_contains "$out" "could not be moved to In flight" \
     "worker-started re-entry did not report its backlog commit failure"
+  assert_contains "$out" "existing Playbot worker and transaction were preserved for another exact same-command recovery" \
+    "worker-started re-entry gave destructive guidance after preserving the worker"
+  assert_not_contains "$out" "close out endpoint" \
+    "worker-started re-entry reused the fresh-dispatch cleanup guidance"
   [ "$(playbot_backlog_state "$SPAWN_HOME" "$id")" = queued ] \
     || fail "failed worker-started re-entry changed its queued backlog row"
   [ "$(grep -Ec '^(archive|delete|cleanup-state)$' "$SPAWN_LOG" || true)" -eq 0 ] \
@@ -839,6 +861,7 @@ playbot_project_id=project-fixture
 playbot_project_root_id=root-fixture
 worktree=$SPAWN_WORKTREE
 EOF
+  seed_playbot_recovery_wiring "$SPAWN_HOME" "$id"
 
   out=$(FM_PLAYBOT_TEST_BINDING=$'project-other\troot-other\t2' run_playbot_spawn "$id") || status=$?
   [ "$status" -ne 0 ] || fail "worker-started re-entry adopted a mismatched project binding"
@@ -852,6 +875,8 @@ EOF
     "binding-mismatched re-entry removed the recovery transaction"
   assert_absent "$SPAWN_HOME/state/$id.meta" \
     "binding-mismatched re-entry published a task record"
+  assert_playbot_recovery_wiring_preserved "$SPAWN_HOME" "$id" \
+    "binding-mismatched re-entry"
   pass "worker-started re-entry refuses a changed project binding"
 }
 
@@ -873,6 +898,7 @@ playbot_project_id=project-fixture
 playbot_project_root_id=root-fixture
 worktree=$SPAWN_WORKTREE
 EOF
+  seed_playbot_recovery_wiring "$SPAWN_HOME" "$id"
 
   out=$(FM_PLAYBOT_TEST_ENDPOINT_RC=1 run_playbot_spawn "$id") || status=$?
   [ "$status" -ne 0 ] || fail "worker-started re-entry accepted a missing endpoint"
@@ -890,11 +916,68 @@ EOF
     "missing-endpoint re-entry retained its provisional task record"
   assert_absent "$SPAWN_HOME/state/$id.playbot-route.json" \
     "missing-endpoint re-entry retained its attempted route"
-  assert_absent "$SPAWN_HOME/state/$id.check.sh" \
-    "missing-endpoint re-entry registered a reconciliation check"
-  assert_absent "$SPAWN_HOME/state/$id.check-trust" \
-    "missing-endpoint re-entry registered reconciliation trust"
+  assert_grep 'original check' "$SPAWN_HOME/state/$id.check.sh" \
+    "missing-endpoint re-entry removed the pre-existing check"
+  assert_grep 'original trust' "$SPAWN_HOME/state/$id.check-trust" \
+    "missing-endpoint re-entry removed the pre-existing trust binding"
   pass "worker-started re-entry refuses a missing endpoint"
+}
+
+test_worker_started_reentry_preserves_wiring_before_replacement() {
+  local id rec out status
+
+  id=playbot-reentry-worktree-refusal-v2
+  rec=$(make_playbot_spawn_case reentry-worktree-refusal "$id")
+  read_playbot_spawn_case "$rec"
+  mkdir -p "$SPAWN_HOME/state/.playbot-dispatch"
+  cat > "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" <<EOF
+task_id=$id
+brief_digest=digest-fixture
+project_binding_gen=1
+requested_base=HEAD
+delivery_id=delivery-fixture
+state=worker-started
+workspace_id=workspace-fixture
+thread_id=thread-fixture
+playbot_project_id=project-fixture
+playbot_project_root_id=root-fixture
+worktree=$SPAWN_WORKTREE/missing
+EOF
+  seed_playbot_recovery_wiring "$SPAWN_HOME" "$id"
+  status=0
+  out=$(run_playbot_spawn "$id") || status=$?
+  [ "$status" -ne 0 ] || fail "worker-started re-entry accepted a missing worktree"
+  assert_contains "$out" "did not yield an isolated worktree" \
+    "worker-started re-entry did not explain the worktree refusal"
+  assert_playbot_recovery_wiring_preserved "$SPAWN_HOME" "$id" \
+    "worktree-refused re-entry"
+
+  id=playbot-reentry-route-refusal-v2
+  rec=$(make_playbot_spawn_case reentry-route-refusal "$id")
+  read_playbot_spawn_case "$rec"
+  mkdir -p "$SPAWN_HOME/state/.playbot-dispatch"
+  cat > "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" <<EOF
+task_id=$id
+brief_digest=digest-fixture
+project_binding_gen=1
+requested_base=HEAD
+delivery_id=delivery-fixture
+state=worker-started
+workspace_id=workspace-fixture
+thread_id=thread-fixture
+playbot_project_id=project-fixture
+playbot_project_root_id=root-fixture
+worktree=$SPAWN_WORKTREE
+EOF
+  seed_playbot_recovery_wiring "$SPAWN_HOME" "$id"
+  status=0
+  out=$(FM_PLAYBOT_TEST_ROUTE_RC=1 run_playbot_spawn "$id") || status=$?
+  [ "$status" -ne 0 ] || fail "worker-started re-entry accepted a failed route replacement"
+  assert_contains "$out" "route write failed" \
+    "worker-started re-entry did not explain the route refusal"
+  assert_playbot_recovery_wiring_preserved "$SPAWN_HOME" "$id" \
+    "route-refused re-entry"
+  pass "worker-started re-entry preserves wiring before replacement"
 }
 
 test_worker_started_reentry_refuses_posture_changes() {
@@ -919,6 +1002,7 @@ playbot_project_id=project-fixture
 playbot_project_root_id=root-fixture
 worktree=$SPAWN_WORKTREE
 EOF
+  seed_playbot_recovery_wiring "$SPAWN_HOME" "$id"
   status=0
   out=$(run_playbot_spawn "$id" local-only on) || status=$?
   [ "$status" -ne 0 ] || fail "worker-started re-entry escalated its recorded yolo posture"
@@ -928,6 +1012,8 @@ EOF
     "yolo-mismatched re-entry published a task record"
   [ "$(grep -Ec '^(create|open-thread|send|route-write|archive|delete|cleanup-state)$' "$SPAWN_LOG" || true)" -eq 0 ] \
     || fail "yolo-mismatched re-entry mutated the existing worker or recovery wiring"
+  assert_playbot_recovery_wiring_preserved "$SPAWN_HOME" "$id" \
+    "yolo-mismatched re-entry"
 
   id=playbot-reentry-mode-mismatch-v2
   rec=$(make_playbot_spawn_case reentry-mode-mismatch "$id")
@@ -993,6 +1079,7 @@ test_fresh_playbot_backlog_failure_retires_worker
 test_worker_started_reentry_backlog_failure_preserves_worker
 test_worker_started_reentry_refuses_changed_project_binding
 test_worker_started_reentry_refuses_missing_endpoint
+test_worker_started_reentry_preserves_wiring_before_replacement
 test_worker_started_reentry_refuses_posture_changes
 
 printf 'fm-playbot-backend: all tests passed\n'

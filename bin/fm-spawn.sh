@@ -874,7 +874,9 @@ PLAYBOT_TXN_STATE=
 PLAYBOT_TXN_MODE=
 PLAYBOT_TXN_YOLO=
 PLAYBOT_WORKER_STARTED_REENTRY=0
-PLAYBOT_RECOVERY_WIRING_CLEANUP=0
+PLAYBOT_RECOVERY_ROUTE_CLEANUP=0
+PLAYBOT_RECOVERY_CHECK_CLEANUP=0
+PLAYBOT_RECOVERY_TRUST_CLEANUP=0
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -990,7 +992,6 @@ playbot_dispatch_transaction() {
         # must preserve it for another same-id re-entry.
         PLAYBOT_ABORT_CLEANUP=0
         PLAYBOT_WORKER_STARTED_REENTRY=1
-        PLAYBOT_RECOVERY_WIRING_CLEANUP=1
         ;;
       *) echo "error: playbot txn $ID unknown state '$stage'" >&2; return 1 ;;
     esac
@@ -1076,6 +1077,7 @@ playbot_finish_dispatch() {
     "$PLAYBOT_WORKSPACE_ID" "$PLAYBOT_THREAD_ID" \
     "$PLAYBOT_DELIVERY_ID" "$WT" || {
     echo "error: playbot route write failed for $ID" >&2; return 1; }
+  [ "$PLAYBOT_WORKER_STARTED_REENTRY" != 1 ] || PLAYBOT_RECOVERY_ROUTE_CLEANUP=1
   if [ "$PLAYBOT_WORKER_STARTED_REENTRY" = 1 ] \
      && ! fm_backend_playbot_validate_endpoint "$STATE/$ID.meta"; then
     echo "error: playbot recovery endpoint validation failed for $ID" >&2
@@ -1089,9 +1091,11 @@ playbot_finish_dispatch() {
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
     node "$FM_ROOT/bin/fm-playbot-reconcile.mjs" write-check "$ID" >/dev/null || {
     echo "error: playbot reconciliation check write failed for $ID" >&2; return 1; }
+  [ "$PLAYBOT_WORKER_STARTED_REENTRY" != 1 ] || PLAYBOT_RECOVERY_CHECK_CLEANUP=1
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
     "$FM_ROOT/bin/fm-check-register.sh" "$ID" >/dev/null || {
     echo "error: playbot reconciliation check registration failed for $ID" >&2; return 1; }
+  [ "$PLAYBOT_WORKER_STARTED_REENTRY" != 1 ] || PLAYBOT_RECOVERY_TRUST_CLEANUP=1
   case "$stage" in
     meta-published|submitted)
       [ "$stage" = submitted ] || playbot_txn_write submitted || return 1
@@ -1151,12 +1155,17 @@ spawn_abort_cleanup() {
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
   fi
-  if [ "$PLAYBOT_RECOVERY_WIRING_CLEANUP" = 1 ]; then
-    PLAYBOT_RECOVERY_WIRING_CLEANUP=0
-    rm -f -- \
-      "$STATE/$ID.playbot-route.json" \
-      "$STATE/$ID.check.sh" \
-      "$STATE/$ID.check-trust"
+  if [ "$PLAYBOT_RECOVERY_ROUTE_CLEANUP" = 1 ]; then
+    PLAYBOT_RECOVERY_ROUTE_CLEANUP=0
+    rm -f -- "$STATE/$ID.playbot-route.json"
+  fi
+  if [ "$PLAYBOT_RECOVERY_CHECK_CLEANUP" = 1 ]; then
+    PLAYBOT_RECOVERY_CHECK_CLEANUP=0
+    rm -f -- "$STATE/$ID.check.sh"
+  fi
+  if [ "$PLAYBOT_RECOVERY_TRUST_CLEANUP" = 1 ]; then
+    PLAYBOT_RECOVERY_TRUST_CLEANUP=0
+    rm -f -- "$STATE/$ID.check-trust"
   fi
   if [ "$PLAYBOT_ABORT_CLEANUP" = 1 ]; then
     local playbot_cleanup_ok=1 playbot_txn
@@ -4358,11 +4367,19 @@ else
 fi
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -eq 0 ] && [ "$BACKEND" = playbot ]; then
   PLAYBOT_ABORT_CLEANUP=0
-  PLAYBOT_RECOVERY_WIRING_CLEANUP=0
+  PLAYBOT_RECOVERY_ROUTE_CLEANUP=0
+  PLAYBOT_RECOVERY_CHECK_CLEANUP=0
+  PLAYBOT_RECOVERY_TRUST_CLEANUP=0
 fi
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   if [ "$RELAUNCH" -eq 0 ]; then
-    if spawn_fresh_commit_rollback; then
+    if [ "$PLAYBOT_WORKER_STARTED_REENTRY" = 1 ]; then
+      if spawn_fresh_commit_rollback; then
+        echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); the existing Playbot worker and transaction were preserved for another exact same-command recovery" >&2
+      else
+        echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); the existing Playbot worker and transaction were preserved for another exact same-command recovery, but the provisional record may remain at $STATE/$ID.meta and must be removed before retrying" >&2
+      fi
+    elif spawn_fresh_commit_rollback; then
       echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); its record was removed so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
     else
       echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR), and failed-dispatch cleanup is incomplete; the provisional record may remain at $STATE/$ID.meta - close out endpoint $T and local copy $WT by hand, then remove the record and busy state before retrying" >&2
