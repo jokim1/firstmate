@@ -40,12 +40,12 @@
 # HEAD vs D when no pr= is recorded or the forge reports MERGED (squash), (M)
 # forge MERGED with current HEAD contained in the PR head, (P) the recorded pr=
 # reads live as MERGED and its final head equals current HEAD or the recorded
-# pr_head= while covering every local changed tree entry at the same path or as
-# an exact rename without hiding a later local descendant, or (E) at least one
-# task-changed path is byte-identical on D and every other path changed
-# from merge-base(HEAD,D) to HEAD is byte-equivalent on D except the explicit
-# repeatable --landed-except patterns. E is available only when the caller gives
-# an exception pattern, and a recorded pr= must read live as MERGED before E can
+# pr_head= while covering every local changed tree entry at the same path or in
+# the exact rename/renumber shape without hiding a later local descendant, or
+# (E) at least one task-changed path is identical on D and every other path
+# changed from merge-base(HEAD,D) to HEAD is identical on D except the explicit
+# repeatable --landed-except patterns. The exception allowlist cannot constitute
+# proof by itself, and a recorded pr= must read live as MERGED before E can
 # authorize cleanup. Live D is fetched from origin (else the sole remote); after
 # fetch the remote default branch name and OID must still match the fetched
 # snapshot (same-branch force-push drift refuses).
@@ -62,11 +62,10 @@
 # local-default carveout when there is no remote.
 # Squash merges collapse the branch's commits, so per-commit patch ids against main
 # no longer match, and a pipeline rebase can leave the local worktree diverged from
-# the PR head. A diverged copy is not treated as landed: path-set coverage, git
-# cherry, and merge-tree containment each fail to prove content landed without also
-# accepting unlanded edits to the same paths. Teardown still accepts a merged PR
-# whose head contains the current local work (ancestor or equivalent patch ids),
-# or a clean content-in-default tree match. Anything else refuses.
+# the PR head. Teardown accepts a diverged copy only through P's final-head-bound
+# rename/renumber proof or E's explicit-exception proof. The older path-set, git
+# cherry, and merge-tree signals still do not prove arbitrary divergent content
+# landed without also accepting unlanded edits to the same paths.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
@@ -138,9 +137,11 @@
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
-#   --landed-except allows a regenerated path to differ during the path-scoped
-#   content-equivalence proof. The flag is repeatable, does not relax the dirty
-#   worktree gate, and cannot override an open, closed, or unreadable recorded PR.
+#   --landed-except adds an explicit repo-relative glob to the repeatable
+#   path-scoped exception allowlist. At least one task-changed path must still be
+#   identical on the live default, so the allowlist can never prove landing by
+#   itself. It does not relax the dirty-worktree gate or override an open,
+#   closed, or unreadable recorded PR.
 #   --legacy-record accepts a task record that predates the spawn_gen field:
 #   teardown then proceeds only when the recorded endpoint is confirmed dead or
 #   agent-less (bin/fm-backend.sh's recovery-grade classifier), and without
