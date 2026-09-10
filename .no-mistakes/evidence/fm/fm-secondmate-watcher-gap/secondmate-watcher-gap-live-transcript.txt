@@ -1,0 +1,53 @@
+Secondmate watcher-gap live validation
+======================================
+
+Product surface driven
+----------------------
+The shipped executable hooks were run from isolated marked-secondmate checkouts.
+The advisory row was created through fm_wake_enqueue_refill. The target auto-arm
+used the real fm-watch-arm.sh and fm-watch.sh - no arm or watcher stub was used.
+
+Baseline: commit 31476d73253254db532d0b31150ac6a477e1405b
+------------------------------------------------------------------
+BASE_AUTOARM_EXIT=0 OUTPUT_BYTES=0 BEACON_PRESENT=no QUEUE_ROWS=1
+BASE_CLAUDE_GUARD_EXIT=0 OUTPUT_BYTES=0
+
+Observable result: the idle queue-only home reproduced the gap. Both Stop-owned
+paths silently allowed the turn to end, the queued refill remained, and no
+watcher beacon was published.
+
+Target: commit b71d69999f3a7da94f9dd0716582bfb0ea430c27
+----------------------------------------------------------------
+AUTOARM_EXIT=2
+firstmate watcher wake - one supervision event needs a handling turn now.
+check: rearm-resurface
+Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command. Until that post-handling acknowledgement, interruption leaves the wake durable for idempotent re-handling. This Stop hook owns watcher continuity: when the handling turn ends, the next needed cycle arms automatically - do NOT run bin/fm-watch-arm.sh after an ordinary wake.
+EPOCH=epoch=1 owner_pid=42286 outcome=rewake updated_at=1789016386
+QUEUE_ROWS=1
+BEACON_PRESENT=yes
+
+Real watcher lifecycle record:
+arm_pid=42542 watcher_pid=42964 origin=started started_at=1789016386 ended_at=1789016386 exit_code=0 signal=none reason=actionable-check beacon_age=0 lock_before=pid:none|identity:none lock_after=pid:none|identity:none successor=none
+
+Durable queue after rewake (intentionally not acknowledged during this check):
+1789016367  1  refill  refill  refill: re-evaluate ready work against free capacity
+
+Observable result: the real Stop-owned arm started a real watcher cycle, wrote a
+fresh beacon, preserved the durable advisory row for handling, committed a
+rewake epoch, emitted the handling instructions, and returned exit 2.
+
+Target synchronous guard and boundary matrix
+--------------------------------------------
+CLAUDE_QUEUE_GUARD_EXIT=2
+TURN WOULD END BLIND - SUPERVISION IS OFF
+The Stop-owned auto-arm did not claim this home either, so recovery is NOT already under way.
+watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+
+DEFAULT_QUEUE_GUARD_EXIT=0 OUTPUT_BYTES=0
+CURSOR_QUEUE_GUARD_EXIT=0 OUTPUT_BYTES=0
+CLAUDE_EMPTY_GUARD_EXIT=0 OUTPUT_BYTES=0
+CURSOR_AUTOARM_EXIT=0 OUTPUT_BYTES=0
+
+Observable result: queue-only holding is confined to the Claude path. The
+default cross-harness guard, Cursor guard, Cursor-delivered Claude compatibility
+auto-arm, and an empty-queue idle Claude home all remained silent.
