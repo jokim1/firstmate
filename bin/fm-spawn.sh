@@ -71,6 +71,10 @@
 #     bin/fm-spawn.sh <same-id> <same-project-dir> --mode local-only --yolo <on|off> --backend playbot --harness codex [--model <name>] [--effort <level>]
 #   Recovery republishes the transaction's existing endpoint without creating
 #   another workspace or thread and without resending the brief.
+#   The current project binding and recorded mode/yolo must match; a legacy
+#   transaction with neither posture field recovers only as local-only/yolo-off.
+#   Refusal preserves the existing worker and transaction, and failure removes
+#   only route/check wiring created by the recovery attempt.
 #   A herdr crewmate or scout is placed in the exact workspace of the firstmate
 #   or secondmate process launching it, resolved from that process's own herdr
 #   pane rather than from a workspace label (herdr enforces no label uniqueness,
