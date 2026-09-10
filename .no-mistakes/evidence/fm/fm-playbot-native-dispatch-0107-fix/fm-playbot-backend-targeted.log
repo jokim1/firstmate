@@ -1,0 +1,20 @@
+ok - target parsing accepts only exact playbot:<thread-id>
+ok - runtime check refuses spawn intake until evidence and runtime health pass
+ok - send_key rejects every named key, including Enter, Escape, and C-c
+ok - send_text_submit matches the fm-send empty-success contract: nonempty failure, nonzero exit, nothing sent
+ok - composer_state maps exact pending-queue evidence to empty/pending/unknown
+ok - busy/target-exists/agent-state honor the recovery-grade vocabulary with no invented dead
+ok - capture returns the bounded exact-thread rollout as data
+ok - interrupt reports success only after exact idle-state proof
+ok - lifecycle mutations refuse fail-closed before Phase 1 evidence; pre-seam create stays split
+ok - binding_resolve returns the exact bound triple and refuses unbound projects
+ok - endpoint validation enforces the exact playbot:<thread-id> window and the route_write-bound route
+ok - endpoint_confirmed_gone proves gone only from an authoritative inventory
+ok - abort cleanup confirmation requires thread, workspace, and worktree absence
+ok - teardown refuses live/mismatched endpoints and reports retained/retired for a confirmed-gone thread
+ok - teardown rechecks worktree safety after Playbot quiescence and before workspace deletion
+ok - confirmed-gone Playbot deletion also requires a passing worktree safety recheck
+ok - fused three-field create parse isolates the worktree path for the isolation check
+ok - workspace_create labels the fused thread with the task and delivery
+ok - send_initial maps effort with a medium floor and refuses low
+fm-playbot-backend: all tests passed
