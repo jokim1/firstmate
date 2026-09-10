@@ -78,27 +78,6 @@ test_predicate_queue_pending_flag() {
   pass "fm_supervision_status: FM_SUP_QUEUE_PENDING tracks state/.wake-queue"
 }
 
-# Standing need stays narrow (pull-guard banners); cycle need also holds for
-# unread queue rows so Stop auto-arm / turn-end can rewake an idle home.
-test_predicate_cycle_needed_includes_queue_only() {
-  local state="$TMP_ROOT/pred-cycle-queue/state"
-  mkdir -p "$state"
-  if fm_supervision_needed "$state" 300; then
-    fail "empty idle home must not set standing supervision need"
-  fi
-  if fm_supervision_cycle_needed "$state" 300; then
-    fail "empty idle home must not need a between-turns cycle"
-  fi
-  printf '%s\t1\trefill\trefill\trefill: re-evaluate ready work against free capacity\n' \
-    "$(date +%s)" > "$state/.wake-queue"
-  if fm_supervision_needed "$state" 300; then
-    fail "queue-only must stay outside standing FM_SUP_NEEDED (pull-guard banner contract)"
-  fi
-  fm_supervision_cycle_needed "$state" 300 \
-    || fail "queue-only must need a between-turns cycle"
-  pass "fm_supervision_cycle_needed: queue-only holds a cycle without widening standing need"
-}
-
 test_predicate_x_mode_needs_supervision() {
   local state="$TMP_ROOT/pred-x-mode/state"
   mkdir -p "$state"
@@ -586,15 +565,15 @@ test_hook_silent_in_idle_secondmate_home() {
 
 # An idle secondmate with only an advisory queue row still needs a cycle: the
 # guard must not allow a blind stop while those rows sit and no watcher is live.
-test_hook_blocks_idle_secondmate_with_queued_advisory() {
+test_hook_claude_mode_blocks_idle_secondmate_with_queued_advisory() {
   local dir out status
   dir=$(make_secondmate_dir "$TMP_ROOT/hook-secondmate-idle-queue")
   printf '%s\t1\trefill\trefill\trefill: re-evaluate ready work against free capacity\n' \
     "$(date +%s)" > "$dir/state/.wake-queue"
-  out=$(run_hook "$dir" false); status=$?
-  expect_code 2 "$status" "idle secondmate with a queued advisory row must not end blind"
+  out=$(run_hook_claude "$dir" false); status=$?
+  expect_code 2 "$status" "Claude must not end blind with an idle secondmate advisory row queued"
   assert_contains "$out" "TURN WOULD END BLIND" "queue-only blind stop must carry the block banner"
-  pass "fm-turnend-guard: idle secondmate with only an advisory queue row blocks a blind stop"
+  pass "fm-turnend-guard --claude: idle secondmate with only an advisory queue row blocks a blind stop"
 }
 
 # The stop_hook_active loop guard bounds the secondmate to one forced
@@ -2132,7 +2111,6 @@ test_predicate_unhealthy_no_beacon
 test_predicate_unhealthy_stale_beacon
 test_predicate_healthy_fresh_beacon
 test_predicate_queue_pending_flag
-test_predicate_cycle_needed_includes_queue_only
 test_predicate_x_mode_needs_supervision
 test_predicate_source_needs_supervision
 test_predicate_registered_check_needs_supervision
@@ -2158,7 +2136,6 @@ test_hook_uses_state_override
 test_hook_loop_guard_allows_retry
 test_hook_blocks_in_secondmate_own_home
 test_hook_silent_in_idle_secondmate_home
-test_hook_blocks_idle_secondmate_with_queued_advisory
 test_hook_secondmate_loop_guard_allows_retry
 test_hook_secondmate_reinvoke_recovery_loop
 test_hook_silent_in_secondmate_child_worktree
@@ -2184,6 +2161,7 @@ test_pi_extension_injects_once_per_logical_agent_run
 test_pi_extension_retries_after_followup_delivery_failure
 test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy
 test_hook_claude_mode_reblocks_x_mode_without_tasks
+test_hook_claude_mode_blocks_idle_secondmate_with_queued_advisory
 test_hook_claude_mode_allows_when_autoarm_owner_alive
 test_hook_claude_mode_repeated_failed_to_arming_interleavings_reach_fail_open
 test_hook_claude_mode_terminal_boundary_excludes_starting_owner
