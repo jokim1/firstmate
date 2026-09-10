@@ -1424,100 +1424,102 @@ playbot_owned_churn_path() {  # <repo-relative-path>
   esac
 }
 
-playbot_enabled_values_without_registration() {  # <enabled-line>
-  perl -e '
-    my $line = shift;
-    my $owned = 0;
-    $line =~ s/^enabled=PackedStringArray\(// or exit 1;
-    $line =~ s/\)$// or exit 1;
-    $line =~ s/^\s+//;
-    exit 3 if $line eq q{};
-    my $first = 1;
-    while (length $line) {
-      my $value;
-      if ($first) {
-        $line =~ s/^("(?:\\.|[^"\\])*")// or exit 1;
-        $value = $1;
-        $first = 0;
-      } else {
-        $line =~ s/^,\s*("(?:\\.|[^"\\])*")// or exit 1;
-        $value = $1;
-      }
-      if ($value =~ m{\A"(?:\*?res://)?addons/playbot/([^"\\]*)"\z}
-          && $1 !~ m{(?:\A|/)\.{1,2}(?:/|\z)}) {
-        $owned = 1;
-      } else {
-        print "$value\n";
-      }
-      $line =~ s/^\s+//;
-    }
-    exit($owned ? 0 : 3);
-  ' "${1-}"
-}
-
-playbot_registration_value_is_owned() {  # <quoted-project.godot-value>
-  local value=${1-} path
-  case "$value" in
-    '"res://addons/playbot/'*'"') path=${value#\"res://addons/playbot/} ;;
-    '"*res://addons/playbot/'*'"') path=${value#\"\*res://addons/playbot/} ;;
-    '"addons/playbot/'*'"') path=${value#\"addons/playbot/} ;;
-    *) return 1 ;;
-  esac
-  path=${path%\"}
-  case "/$path/" in */./*|*/../*) return 1 ;; esac
-}
-
-playbot_autoload_registration_line_is_owned() {  # <project.godot-line>
-  local line=${1-} key value
-  key=${line%%=*}
-  [ "$line" != "$key" ] || return 1
-  case "$key" in ''|*[!A-Za-z0-9_]*) return 1 ;; esac
-  value=${line#*=}
-  playbot_registration_value_is_owned "$value"
-}
-
 playbot_project_registration_only() {
-  local diff summary line content normalized normalize_rc old_enabled= new_enabled= saw_playbot=0
+  local old_file summary rc=0
   summary=$(git -C "$WT" --no-pager diff --no-ext-diff --summary HEAD -- project.godot 2>/dev/null) \
     || return 1
   [ -z "$summary" ] || return 1
-  diff=$(git -C "$WT" --no-pager diff --no-ext-diff --unified=0 HEAD -- project.godot 2>/dev/null) \
-    || return 1
-  [ -n "$diff" ] || return 1
-  while IFS= read -r line; do
-    case "$line" in
-      '+++ '*|'--- '*|'@@ '*) continue ;;
-      +*|-*)
-        content=${line#?}
-        case "$content" in
-          enabled=*)
-            normalize_rc=0
-            normalized=$(playbot_enabled_values_without_registration "$content") || normalize_rc=$?
-            case "$normalize_rc" in
-              0) saw_playbot=1 ;;
-              3) ;;
-              *) return 1 ;;
-            esac
-            case "$line" in
-              +*) [ -z "$normalized" ] || new_enabled="${new_enabled}${normalized}"$'\n' ;;
-              -*) [ -z "$normalized" ] || old_enabled="${old_enabled}${normalized}"$'\n' ;;
-            esac
-            ;;
-          ''|'[editor_plugins]'|'[autoload]') ;;
-          *)
-            if playbot_autoload_registration_line_is_owned "$content"; then
-              saw_playbot=1
-            else
-              return 1
-            fi
-            ;;
-        esac
-        ;;
-    esac
-  done <<EOF
-$diff
-EOF
-  [ "$saw_playbot" -eq 1 ] && [ "$old_enabled" = "$new_enabled" ]
+  old_file=$(mktemp "${TMPDIR:-/tmp}/fm-playbot-project.XXXXXX") || return 1
+  if ! git -C "$WT" show HEAD:project.godot > "$old_file" 2>/dev/null; then
+    rm -f -- "$old_file"
+    return 1
+  fi
+  perl -e '
+    sub owned_path {
+      my ($value) = @_;
+      return unless $value =~ m{\A"(?:\*?res://)?addons/playbot/([^"\\]*)"\z};
+      return $1 !~ m{(?:\A|/)\.{1,2}(?:/|\z)};
+    }
+    sub enabled_values {
+      my ($line) = @_;
+      return unless $line =~ s/^enabled=PackedStringArray\(//;
+      return unless $line =~ s/\)$//;
+      $line =~ s/^\s+//;
+      return [] if $line eq q{};
+      my @values;
+      my $first = 1;
+      while (length $line) {
+        my $value;
+        if ($first) {
+          return unless $line =~ s/^("(?:\\.|[^"\\])*")//;
+          $value = $1;
+          $first = 0;
+        } else {
+          return unless $line =~ s/^,\s*("(?:\\.|[^"\\])*")//;
+          $value = $1;
+        }
+        push @values, $value;
+        $line =~ s/^\s+//;
+      }
+      return \@values;
+    }
+    sub normalize {
+      my ($path) = @_;
+      open my $fh, q{<}, $path or return;
+      local $/;
+      my $raw = <$fh>;
+      close $fh or return;
+      my (@out, @body, @owned);
+      my $section;
+      my $flush = sub {
+        if (defined $section) {
+          push @out, $section, @body
+            unless (($section eq q{[editor_plugins]} || $section eq q{[autoload]}) && !@body);
+        } else {
+          push @out, @body;
+        }
+        @body = ();
+      };
+      for my $line (split /\n/, $raw, -1) {
+        $line =~ s/\r\z//;
+        next if $line =~ /^\s*$/;
+        if ($line =~ /^\[[^]]+\]$/) {
+          $flush->();
+          $section = $line;
+          next;
+        }
+        if (defined $section && $section eq q{[editor_plugins]} && $line =~ /^enabled=/) {
+          my $values = enabled_values($line);
+          return unless defined $values;
+          my @kept;
+          for my $value (@$values) {
+            if (owned_path($value)) {
+              push @owned, "enabled:$value";
+            } else {
+              push @kept, $value;
+            }
+          }
+          push @body, q{enabled=PackedStringArray(} . join(q{, }, @kept) . q{)} if @kept;
+          next;
+        }
+        if (defined $section && $section eq q{[autoload]}
+            && $line =~ /^([A-Za-z0-9_]+)=(.+)$/ && owned_path($2)) {
+          push @owned, "autoload:$1=$2";
+          next;
+        }
+        push @body, $line;
+      }
+      $flush->();
+      return (join("\n", @out), join("\n", @owned));
+    }
+    my ($old_normalized, $old_owned) = normalize($ARGV[0]);
+    defined $old_normalized or exit 1;
+    my ($new_normalized, $new_owned) = normalize($ARGV[1]);
+    defined $new_normalized or exit 1;
+    exit(($old_normalized eq $new_normalized && $old_owned ne $new_owned) ? 0 : 1);
+  ' "$old_file" "$WT/project.godot" || rc=$?
+  rm -f -- "$old_file"
+  return "$rc"
 }
 
 playbot_first_unignored_dirty_path() {

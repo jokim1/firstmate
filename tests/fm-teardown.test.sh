@@ -3357,6 +3357,32 @@ test_playbot_autoload_rejects_dot_segment_path() {
   pass "Playbot autoload registration rejects dot-segment paths"
 }
 
+test_playbot_registration_does_not_hide_section_header_removal() {
+  local case_dir rc
+  case_dir=$(make_case playbot-section-header-removal-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  printf '%s\n' '' '[autoload]' 'Other="*res://addons/other/autoload.gd"' \
+    >> "$case_dir/wt/project.godot"
+  git -C "$case_dir/wt" add project.godot
+  wt_commit "$case_dir" "seed autoload section"
+  git -C "$case_dir/project" merge -q --ff-only fm/task-x1
+  git -C "$case_dir/project" push -q origin main
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  perl -i.bak -pe 'if (!$removed && /^\[autoload\]$/) { $removed=1; $_=q{} }' \
+    "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-section-header-removal-refuses: section removal must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-section-header-removal-refuses: refusal did not name project.godot"
+  pass "Playbot registration cannot hide a section header removal"
+}
+
 test_playbot_stray_fm_file_refuses() {
   local case_dir rc
   case_dir=$(make_case playbot-stray-fm-refuses)
@@ -4860,6 +4886,7 @@ test_playbot_registration_does_not_hide_project_mode_change
 test_playbot_path_boundary_preserves_similarly_named_plugin
 test_playbot_registration_rejects_dot_segment_path
 test_playbot_autoload_rejects_dot_segment_path
+test_playbot_registration_does_not_hide_section_header_removal
 test_playbot_stray_fm_file_refuses
 test_non_playbot_owned_churn_paths_still_refuse
 test_playbot_workspace_record_gone_fallback_removes_worktree_without_receipt
