@@ -155,6 +155,7 @@ function appendApprovalJournal(stateDir, taskId, threadId, decision) {
     requestSha256: decision.requestSha256,
     requestText: decision.requestText,
     requestTextTruncated: decision.requestTextTruncated,
+    blockedReference: decision.blockedReference ?? null,
     responseChannel: decision.channel ?? null,
     response: decision.response ?? null
   };
@@ -169,9 +170,12 @@ function appendPolicyBlockStatus(stateDir, taskId, decision) {
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('task status is not a regular file');
   }
   const requestId = String(decision.requestId).replace(/[\r\n]/g, ' ').slice(0, 128);
+  const blockedReference = decision.blockedReference === undefined
+    ? ''
+    : ` reference=${JSON.stringify(String(decision.blockedReference).slice(0, 256))}`;
   appendFileSync(
     statusPath,
-    `blocked: Playbot approval request ${requestId} left pending by ${decision.ruleId}; see state/${taskId}.playbot-approvals.jsonl\n`,
+    `blocked: Playbot approval request ${requestId} left pending by ${decision.ruleId}${blockedReference}; see state/${taskId}.playbot-approvals.jsonl\n`,
     { encoding: 'utf8', mode: 0o600 }
   );
 }

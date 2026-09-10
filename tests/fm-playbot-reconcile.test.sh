@@ -298,15 +298,39 @@ run_fixture_reconcile rc-idempotent 1 >/dev/null || fail "repeat idempotence rec
 [ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an unchanged command request must never receive an IPC response"
 pass "repeat reconciliation journals an unchanged command request only once"
 
+mkdir -p "$PENDING_WORKTREE/assets"
+printf 'linked fixture\n' > "$PENDING_WORKTREE/assets/source.png"
 cat > "$APPROVAL_STATE" <<EOF
-{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-elicitation","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png"}]}]}],"agentStatus":"pending_input"},"responses":[]}
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-elicitation","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["assets/source.png"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
 EOF
 write_task_fixture rc-asset thread-pending workspace-pending worktrees/pending ship
 run_fixture_reconcile rc-asset 0 >/dev/null || fail "asset elicitation reconcile failed"
 [ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "known-safe asset elicitation must receive one IPC response"
 [ "$(approval_state_field 'state.responses[0].channel')" = "threads:respondToMcpElicitation" ] || fail "asset elicitation must use respondToMcpElicitation"
 [ "$(approval_state_field 'state.responses[0].request.response._meta.persist')" = session ] || fail "asset elicitation must be allowed for the session"
-pass "known-safe in-worktree asset elicitation passes through the MCP response IPC"
+pass "in-root target and linked asset pass through the MCP response IPC"
+
+OUTSIDE_ASSET="$TMP_ROOT/private.png"
+printf 'private fixture\n' > "$OUTSIDE_ASSET"
+OUTSIDE_ASSET_URL=$(node -e 'console.log(require("url").pathToFileURL(process.argv[1]).href)' "$OUTSIDE_ASSET")
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-external-file","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["$OUTSIDE_ASSET_URL"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-asset-external thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset-external 0 >/dev/null || fail "external linked asset reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an out-of-root file URL must stay pending without an IPC response"
+grep -Fq "reference=\"$OUTSIDE_ASSET_URL\"" "$STATE/rc-asset-external.status" || fail "the out-of-root linked asset block must name the reference"
+pass "out-of-root file linked asset stays pending and names the reference"
+
+REMOTE_ASSET_URL=https://unknown.example/private.png
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-remote-url","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["$REMOTE_ASSET_URL"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-asset-remote thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset-remote 0 >/dev/null || fail "remote linked asset reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a remote linked asset URL must stay pending without an IPC response"
+grep -Fq "reference=\"$REMOTE_ASSET_URL\"" "$STATE/rc-asset-remote.status" || fail "the remote linked asset block must name the reference"
+pass "remote linked asset stays pending and names the reference"
 
 kill "$APPROVAL_CDP_PID" 2>/dev/null
 wait "$APPROVAL_CDP_PID" 2>/dev/null

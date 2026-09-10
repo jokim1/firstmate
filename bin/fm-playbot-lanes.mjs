@@ -1677,8 +1677,9 @@ function proposedFileChangePaths(snapshot, itemId) {
   return paths;
 }
 
-function assetTargetsStayInWorktree(request, worktree) {
+function assetTargetsStayInWorktree(request, worktree, env, policy) {
   const targets = [];
+  const linkedAssets = [];
   const visit = (value, key = '') => {
     if (Array.isArray(value)) {
       for (const item of value) visit(item, key);
@@ -1687,13 +1688,44 @@ function assetTargetsStayInWorktree(request, worktree) {
     if (!isPlainObject(value)) return;
     for (const [childKey, childValue] of Object.entries(value)) {
       if (childKey === 'targetPath' && typeof childValue === 'string') targets.push(childValue);
+      else if (childKey === 'linkedAssets') linkedAssets.push(childValue);
       else visit(childValue, childKey);
     }
   };
   visit(request.toolParams);
-  if (targets.length === 0) return false;
+  if (targets.length === 0) return { allowed: false, blockedReference: null };
   const root = canonicalPolicyPath(worktree);
-  return targets.every((target) => policyPathWithin(root, canonicalPolicyPath(resolve(root, target))));
+  if (!targets.every((target) => policyPathWithin(root, canonicalPolicyPath(resolve(root, target))))) {
+    return { allowed: false, blockedReference: null };
+  }
+  const roots = approvalFilesystemRoots(worktree, env, policy);
+  for (const entries of linkedAssets) {
+    if (!Array.isArray(entries)) {
+      return { allowed: false, blockedReference: JSON.stringify(entries) };
+    }
+    for (const reference of entries) {
+      if (typeof reference !== 'string' || !reference || reference.startsWith('//')) {
+        return { allowed: false, blockedReference: JSON.stringify(reference) };
+      }
+      let candidate;
+      if (reference.startsWith('file:')) {
+        try {
+          candidate = fileURLToPath(reference);
+        } catch {
+          return { allowed: false, blockedReference: reference };
+        }
+      } else if (/^[A-Za-z][A-Za-z\d+.-]*:/.test(reference)) {
+        return { allowed: false, blockedReference: reference };
+      } else {
+        candidate = resolve(root, reference);
+      }
+      const canonical = canonicalPolicyPath(candidate);
+      if (!roots.some((allowedRoot) => policyPathWithin(allowedRoot, canonical))) {
+        return { allowed: false, blockedReference: reference };
+      }
+    }
+  }
+  return { allowed: true, blockedReference: null };
 }
 
 function boundedRequestText(request, maxBytes) {
@@ -1760,7 +1792,11 @@ export function decidePlaybotPendingRequest(kind, request, snapshot, options = {
       && typeof request.message === 'string'
       && request.message.startsWith(confirmation.messagePrefix)
     ));
-    if (!safe || !assetTargetsStayInWorktree(request, worktree)) {
+    const assetPaths = safe ? assetTargetsStayInWorktree(request, worktree, env, policy) : { allowed: false, blockedReference: null };
+    if (!safe || !assetPaths.allowed) {
+      if (assetPaths.blockedReference !== null) {
+        return { ...leavePending('deny-asset-reference-outside-approved-roots'), blockedReference: assetPaths.blockedReference };
+      }
       return leavePending('deny-unknown-mcp-elicitation');
     }
     return respond('allow-playbot-asset-generation-session', 'threads:respondToMcpElicitation', {

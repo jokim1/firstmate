@@ -56,7 +56,8 @@ Operator contract: write denial must be explicitly proved; read allowance does n
 
 Build threads keep Playbot's `default` approval posture and the Codex sandbox.
 When reconciliation observes `pending_input`, it reads that exact thread's snapshot and applies the data policy exported as `PLAYBOT_APPROVAL_POLICY`.
-The policy session-allows filesystem grants confined to the worktree, the platform Godot user directory, or the uv cache, accepts each validated in-worktree file-change proposal for that request only, and session-allows Playbot asset-generation confirmations whose targets remain in the worktree.
+The policy session-allows filesystem grants confined to the worktree, the platform Godot user directory, or the uv cache, accepts each validated in-worktree file-change proposal for that request only, and session-allows Playbot asset-generation confirmations whose targets remain in the worktree and whose local linked assets stay within those three roots.
+Remote, malformed, and out-of-root linked asset references remain pending because they would introduce unknown network access or disclose an external local file to the asset service.
 Command escalations are never auto-approved because Playbot runs an approved command outside the Codex sandbox, where Firstmate cannot bound the command or its child effects to the confinement roots.
 Command requests, out-of-worktree paths, network approvals, unknown approval methods, arbitrary user input, and unknown MCP elicitations remain pending and append a `blocked:` status for firstmate.
 Each new decision is recorded with the bounded request text in the mode-0600 `state/<id>.playbot-approvals.jsonl` journal.
