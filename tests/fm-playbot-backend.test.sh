@@ -593,13 +593,18 @@ const [command] = process.argv.slice(2);
 appendFileSync(process.env.FM_PLAYBOT_TEST_LOG, `${command}\n`);
 switch (command) {
   case 'ready':
-  case 'route-write':
   case 'archive':
   case 'delete':
   case 'cleanup-state':
     break;
+  case 'route-write':
+    appendFileSync(process.env.FM_PLAYBOT_TEST_ROUTE_PATH, 'attempted route\n');
+    break;
   case 'binding-resolve':
-    process.stdout.write('project-fixture\troot-fixture\t1\n');
+    process.stdout.write(`${process.env.FM_PLAYBOT_TEST_BINDING ?? 'project-fixture\troot-fixture\t1'}\n`);
+    break;
+  case 'validate-endpoint':
+    if (process.env.FM_PLAYBOT_TEST_ENDPOINT_RC === '1') process.exitCode = 1;
     break;
   case 'create':
     process.stdout.write(`workspace-fixture\t${process.env.FM_PLAYBOT_TEST_WORKTREE}\tthread-fixture\n`);
@@ -648,6 +653,7 @@ run_playbot_spawn() {  # <id>
   FM_PLAYBOT_LANES_OVERRIDE="$SPAWN_LANE" \
     FM_PLAYBOT_TEST_LOG="$SPAWN_LOG" \
     FM_PLAYBOT_TEST_WORKTREE="$SPAWN_WORKTREE" \
+    FM_PLAYBOT_TEST_ROUTE_PATH="$SPAWN_HOME/state/$1.playbot-route.json" \
     fm_test_run_spawn "$SPAWN_HOME" "$SPAWN_WORKTREE" "$SPAWN_FAKEBIN" \
       "$1" "$SPAWN_PROJECT" --mode local-only --yolo off \
       --backend playbot --harness codex --effort xhigh
@@ -801,12 +807,96 @@ EOF
     "failed worker-started re-entry changed the recoverable transaction state"
   assert_absent "$SPAWN_HOME/state/$id.meta" \
     "failed worker-started re-entry retained its provisional task record"
+  assert_absent "$SPAWN_HOME/state/$id.playbot-route.json" \
+    "failed worker-started re-entry retained its attempted route"
+  assert_absent "$SPAWN_HOME/state/$id.check.sh" \
+    "failed worker-started re-entry retained its reconciliation check"
+  assert_absent "$SPAWN_HOME/state/$id.check-trust" \
+    "failed worker-started re-entry retained its reconciliation registration"
   pass "worker-started backlog failure preserves the existing worker"
+}
+
+test_worker_started_reentry_refuses_changed_project_binding() {
+  local id=playbot-reentry-binding-mismatch-v2 rec out status=0
+  rec=$(make_playbot_spawn_case reentry-binding-mismatch "$id")
+  read_playbot_spawn_case "$rec"
+  mkdir -p "$SPAWN_HOME/state/.playbot-dispatch"
+  cat > "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" <<EOF
+task_id=$id
+brief_digest=digest-fixture
+project_binding_gen=1
+requested_base=HEAD
+delivery_id=delivery-fixture
+state=worker-started
+workspace_id=workspace-fixture
+thread_id=thread-fixture
+playbot_project_id=project-fixture
+playbot_project_root_id=root-fixture
+worktree=$SPAWN_WORKTREE
+EOF
+
+  out=$(FM_PLAYBOT_TEST_BINDING=$'project-other\troot-other\t2' run_playbot_spawn "$id") || status=$?
+  [ "$status" -ne 0 ] || fail "worker-started re-entry adopted a mismatched project binding"
+  assert_contains "$out" "project binding does not match" \
+    "worker-started re-entry did not explain the project-binding mismatch"
+  [ "$(playbot_backlog_state "$SPAWN_HOME" "$id")" = queued ] \
+    || fail "binding-mismatched re-entry changed its queued backlog row"
+  [ "$(grep -Ec '^(create|open-thread|send|route-write|archive|delete|cleanup-state)$' "$SPAWN_LOG" || true)" -eq 0 ] \
+    || fail "binding-mismatched re-entry mutated the existing worker or recovery wiring"
+  assert_present "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" \
+    "binding-mismatched re-entry removed the recovery transaction"
+  assert_absent "$SPAWN_HOME/state/$id.meta" \
+    "binding-mismatched re-entry published a task record"
+  pass "worker-started re-entry refuses a changed project binding"
+}
+
+test_worker_started_reentry_refuses_missing_endpoint() {
+  local id=playbot-reentry-missing-endpoint-v2 rec out status=0
+  rec=$(make_playbot_spawn_case reentry-missing-endpoint "$id")
+  read_playbot_spawn_case "$rec"
+  mkdir -p "$SPAWN_HOME/state/.playbot-dispatch"
+  cat > "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" <<EOF
+task_id=$id
+brief_digest=digest-fixture
+project_binding_gen=1
+requested_base=HEAD
+delivery_id=delivery-fixture
+state=worker-started
+workspace_id=workspace-fixture
+thread_id=thread-fixture
+playbot_project_id=project-fixture
+playbot_project_root_id=root-fixture
+worktree=$SPAWN_WORKTREE
+EOF
+
+  out=$(FM_PLAYBOT_TEST_ENDPOINT_RC=1 run_playbot_spawn "$id") || status=$?
+  [ "$status" -ne 0 ] || fail "worker-started re-entry accepted a missing endpoint"
+  assert_contains "$out" "recovery endpoint validation failed" \
+    "worker-started re-entry did not explain the endpoint-validation failure"
+  [ "$(playbot_backlog_state "$SPAWN_HOME" "$id")" = queued ] \
+    || fail "missing-endpoint re-entry changed its queued backlog row"
+  [ "$(grep -c '^validate-endpoint$' "$SPAWN_LOG" || true)" -eq 1 ] \
+    || fail "missing-endpoint re-entry did not validate its recorded endpoint exactly once"
+  [ "$(grep -Ec '^(create|open-thread|send|archive|delete)$' "$SPAWN_LOG" || true)" -eq 0 ] \
+    || fail "missing-endpoint re-entry recreated or retired Playbot resources"
+  assert_present "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" \
+    "missing-endpoint re-entry removed the recovery transaction"
+  assert_absent "$SPAWN_HOME/state/$id.meta" \
+    "missing-endpoint re-entry retained its provisional task record"
+  assert_absent "$SPAWN_HOME/state/$id.playbot-route.json" \
+    "missing-endpoint re-entry retained its attempted route"
+  assert_absent "$SPAWN_HOME/state/$id.check.sh" \
+    "missing-endpoint re-entry registered a reconciliation check"
+  assert_absent "$SPAWN_HOME/state/$id.check-trust" \
+    "missing-endpoint re-entry registered reconciliation trust"
+  pass "worker-started re-entry refuses a missing endpoint"
 }
 
 test_fresh_playbot_spawn_commits_record_and_backlog
 test_worker_started_reentry_commits_without_redispatch
 test_fresh_playbot_backlog_failure_retires_worker
 test_worker_started_reentry_backlog_failure_preserves_worker
+test_worker_started_reentry_refuses_changed_project_binding
+test_worker_started_reentry_refuses_missing_endpoint
 
 printf 'fm-playbot-backend: all tests passed\n'

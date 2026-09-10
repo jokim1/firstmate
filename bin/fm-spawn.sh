@@ -872,6 +872,7 @@ PLAYBOT_BINDING_GEN=
 PLAYBOT_BRIEF_DIGEST=
 PLAYBOT_TXN_STATE=
 PLAYBOT_WORKER_STARTED_REENTRY=0
+PLAYBOT_RECOVERY_WIRING_CLEANUP=0
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -971,7 +972,7 @@ playbot_brief_digest() {
   else echo "error: need shasum or sha256sum for Playbot brief digest" >&2; return 1; fi
 }
 playbot_dispatch_transaction() {
-  local slug binding_raw create_raw stage rest
+  local slug binding_raw create_raw stage rest active_project_id active_root_id active_binding_gen
   PLAYBOT_ABORT_CLEANUP=1
   if playbot_txn_load_existing; then
     stage=$PLAYBOT_TXN_STATE
@@ -984,22 +985,32 @@ playbot_dispatch_transaction() {
         # must preserve it for another same-id re-entry.
         PLAYBOT_ABORT_CLEANUP=0
         PLAYBOT_WORKER_STARTED_REENTRY=1
+        PLAYBOT_RECOVERY_WIRING_CLEANUP=1
         ;;
       *) echo "error: playbot txn $ID unknown state '$stage'" >&2; return 1 ;;
     esac
   else stage=new; fi
+  binding_raw=$(fm_backend_playbot_binding_resolve "$PROJ_ABS") || {
+    echo "error: playbot project binding missing/mismatched for $PROJ_ABS" >&2; return 1; }
+  active_project_id=${binding_raw%%$'\t'*}; rest=${binding_raw#*$'\t'}
+  active_root_id=${rest%%$'\t'*}; active_binding_gen=${rest#*$'\t'}
+  [ -n "$active_project_id" ] && [ -n "$active_root_id" ] && [ -n "$active_binding_gen" ] || {
+    echo "error: playbot binding_resolve malformed for $PROJ_ABS" >&2; return 1; }
   if [ "$stage" = new ]; then
     PLAYBOT_BRIEF_DIGEST=$(playbot_brief_digest "$BRIEF") || return 1
     PLAYBOT_DELIVERY_ID=$(uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]' \
       || printf 'd%s.%s.%s' "$(date +%s)" "${BASHPID:-$$}" "$RANDOM")
     PLAYBOT_REQUESTED_BASE=${PLAYBOT_REQUESTED_BASE:-HEAD}
-    binding_raw=$(fm_backend_playbot_binding_resolve "$PROJ_ABS") || {
-      echo "error: playbot project binding missing/mismatched for $PROJ_ABS" >&2; return 1; }
-    PLAYBOT_PROJECT_ID=${binding_raw%%$'\t'*}; rest=${binding_raw#*$'\t'}
-    PLAYBOT_PROJECT_ROOT_ID=${rest%%$'\t'*}; PLAYBOT_BINDING_GEN=${rest#*$'\t'}
-    [ -n "$PLAYBOT_PROJECT_ID" ] && [ -n "$PLAYBOT_PROJECT_ROOT_ID" ] && [ -n "$PLAYBOT_BINDING_GEN" ] || {
-      echo "error: playbot binding_resolve malformed for $PROJ_ABS" >&2; return 1; }
+    PLAYBOT_PROJECT_ID=$active_project_id
+    PLAYBOT_PROJECT_ROOT_ID=$active_root_id
+    PLAYBOT_BINDING_GEN=$active_binding_gen
     playbot_txn_write prepared || return 1; stage=prepared
+  elif [ "$PLAYBOT_PROJECT_ID" != "$active_project_id" ] \
+       || [ "$PLAYBOT_PROJECT_ROOT_ID" != "$active_root_id" ] \
+       || [ "$PLAYBOT_BINDING_GEN" != "$active_binding_gen" ]; then
+    PLAYBOT_ABORT_CLEANUP=0
+    echo "error: playbot txn $ID project binding does not match $PROJ_ABS; refuse recovery" >&2
+    return 1
   fi
   slug="fm-${ID}"
   if [ "$stage" = prepared ]; then
@@ -1043,6 +1054,11 @@ playbot_finish_dispatch() {
     "$PLAYBOT_WORKSPACE_ID" "$PLAYBOT_THREAD_ID" \
     "$PLAYBOT_DELIVERY_ID" "$WT" || {
     echo "error: playbot route write failed for $ID" >&2; return 1; }
+  if [ "$PLAYBOT_WORKER_STARTED_REENTRY" = 1 ] \
+     && ! fm_backend_playbot_validate_endpoint "$STATE/$ID.meta"; then
+    echo "error: playbot recovery endpoint validation failed for $ID" >&2
+    return 1
+  fi
   case "$stage" in
     meta-published|submitted|accepted|worker-started) ;;
     *)
@@ -1112,6 +1128,13 @@ spawn_abort_cleanup() {
   if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
+  fi
+  if [ "$PLAYBOT_RECOVERY_WIRING_CLEANUP" = 1 ]; then
+    PLAYBOT_RECOVERY_WIRING_CLEANUP=0
+    rm -f -- \
+      "$STATE/$ID.playbot-route.json" \
+      "$STATE/$ID.check.sh" \
+      "$STATE/$ID.check-trust"
   fi
   if [ "$PLAYBOT_ABORT_CLEANUP" = 1 ]; then
     local playbot_cleanup_ok=1 playbot_txn
@@ -4313,6 +4336,7 @@ else
 fi
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -eq 0 ] && [ "$BACKEND" = playbot ]; then
   PLAYBOT_ABORT_CLEANUP=0
+  PLAYBOT_RECOVERY_WIRING_CLEANUP=0
 fi
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   if [ "$RELAUNCH" -eq 0 ]; then
