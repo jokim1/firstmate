@@ -111,12 +111,12 @@ fm_backend_playbot_binding_resolve() {  # <canonical-project-path> -> <project-i
 }
 
 # fm_backend_playbot_parse_workspace_create: split the lanes create non-JSON
-# record into workspace id, worktree path, and optional fused thread id.
+# record into workspace id, worktree path, and fused thread id.
 # Since 0.94.0 create is fused with the first thread's launch and prints
-# "workspace_id<TAB>worktree[<TAB>fused_thread_id]". A naive split that takes
+# "workspace_id<TAB>worktree<TAB>fused_thread_id". A naive split that takes
 # everything after the first tab as the worktree path tangles the thread id
-# into the isolation check. Refuses empty fields and more than three fields.
-fm_backend_playbot_parse_workspace_create() {  # <raw> -> <workspace-id>\t<worktree>[\t<thread-id>]
+# into the isolation check. Refuses anything but three non-empty fields.
+fm_backend_playbot_parse_workspace_create() {  # <raw> -> <workspace-id>\t<worktree>\t<thread-id>
   local raw=${1-} ws rest wt thread
   raw=${raw%$'\n'}
   [ -n "$raw" ] || {
@@ -130,37 +130,35 @@ fm_backend_playbot_parse_workspace_create() {  # <raw> -> <workspace-id>\t<workt
   fi
   rest=${raw#*$'\t'}
   wt=${rest%%$'\t'*}
-  if [ "$rest" = "$wt" ]; then
-    thread=
-  else
-    thread=${rest#*$'\t'}
-    case "$thread" in
-      *$'\t'*)
-        echo "error: playbot workspace:create record has more than three fields" >&2
-        return 1
-        ;;
-    esac
-  fi
-  [ -n "$ws" ] && [ -n "$wt" ] || {
-    echo "error: playbot workspace:create record has an empty workspace id or worktree" >&2
+  [ "$rest" != "$wt" ] || {
+    echo "error: playbot workspace:create record missing fused thread field" >&2
     return 1
   }
-  printf '%s\t%s' "$ws" "$wt"
-  [ -z "$thread" ] || printf '\t%s' "$thread"
-  printf '\n'
+  thread=${rest#*$'\t'}
+  case "$thread" in
+    ''|*$'\t'*)
+      echo "error: playbot workspace:create record must contain exactly three non-empty fields" >&2
+      return 1
+      ;;
+  esac
+  [ -n "$ws" ] && [ -n "$wt" ] || {
+    echo "error: playbot workspace:create record must contain exactly three non-empty fields" >&2
+    return 1
+  }
+  printf '%s\t%s\t%s\n' "$ws" "$wt" "$thread"
 }
 
 # fm_backend_playbot_workspace_create: native workspace:create minting one
 # task-owned workspace whose slug embeds the task id (plan section 3.4 step 4).
-# On success it prints "workspace_id<TAB>canonical_worktree_path" and, on fused
-# releases (0.94.0+), a third field with the fused first-thread id. Parse that
+# On success it prints "workspace_id<TAB>canonical_worktree_path<TAB>thread_id"
+# on fused releases (0.94.0+). Parse that
 # record with fm_backend_playbot_parse_workspace_create before isolation checks.
 # The lanes CLI enforces the per-release evidence gate before IPC.
-fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id> -> <workspace-id>\t<worktree>[\t<thread-id>]
-  local project_path=${1:-} slug=${2:-} base=${3:-} task_id=${4:-}
+fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id> <thread-title> -> <workspace-id>\t<worktree>\t<thread-id>
+  local project_path=${1:-} slug=${2:-} base=${3:-} task_id=${4:-} thread_title=${5:-}
   local project_id root_id binding_gen expected commit_out binding
-  [ -n "$project_path" ] && [ -n "$slug" ] && [ -n "$base" ] && [ -n "$task_id" ] || {
-    echo "error: playbot workspace_create needs <project-path> <slug> <base> <task-id>" >&2
+  [ -n "$project_path" ] && [ -n "$slug" ] && [ -n "$base" ] && [ -n "$task_id" ] && [ -n "$thread_title" ] || {
+    echo "error: playbot workspace_create needs <project-path> <slug> <base> <task-id> <thread-title>" >&2
     return 1
   }
   case "$slug" in
@@ -187,7 +185,8 @@ fm_backend_playbot_workspace_create() {  # <project-path> <slug> <base> <task-id
     --project-root-id "$root_id" \
     --branch "$slug" \
     --base-ref "$base" \
-    --expected-commit "$expected"
+    --expected-commit "$expected" \
+    --title "$thread_title"
 }
 
 # fm_backend_playbot_thread_create: mint one least-privileged worker thread in

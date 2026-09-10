@@ -386,11 +386,12 @@ case "$FUSED_PATH" in *$'\t'*) fail "parsed worktree must not contain a tab" ;; 
 [ -d "$FUSED_PATH" ] || fail "isolation check must see the parsed path as a directory"
 NAIVE_WT=${FUSED_RAW#*$'\t'}
 [ ! -d "$NAIVE_WT" ] || fail "naive remainder-after-first-tab must not be a directory"
-LEGACY_RAW=$(printf 'ws_legacy\t%s' "$FUSED_WT_ABS")
-LEGACY_PARSED=$(fm_backend_playbot_parse_workspace_create "$LEGACY_RAW") \
-  || fail "two-field create record must still parse"
-LEGACY_REST=${LEGACY_PARSED#*$'\t'}
-[ "$LEGACY_REST" = "$FUSED_WT_ABS" ] || fail "two-field parse must return only the worktree path"
+if fm_backend_playbot_parse_workspace_create "$(printf 'ws_legacy\t%s' "$FUSED_WT_ABS")" >/dev/null 2>&1; then
+  fail "two-field create record must be refused"
+fi
+if fm_backend_playbot_parse_workspace_create "$(printf 'ws\t%s\t' "$FUSED_WT_ABS")" >/dev/null 2>&1; then
+  fail "create record with an empty fused thread id must be refused"
+fi
 if fm_backend_playbot_parse_workspace_create "$(printf 'ws\t%s\tchat\textra' "$FUSED_WT_ABS")" >/dev/null 2>&1; then
   fail "four-field create record must be refused"
 fi
@@ -398,6 +399,24 @@ if fm_backend_playbot_parse_workspace_create "ws-only" >/dev/null 2>&1; then
   fail "single-field create record must be refused"
 fi
 pass "fused three-field create parse isolates the worktree path for the isolation check"
+
+: > "$TMP_ROOT/create-title.args"
+CREATE_TITLE_OUT=$(
+  fm_backend_playbot_tool_check() { return 0; }
+  fm_backend_playbot_binding_resolve() { printf 'project-title\troot-title\t1\n'; }
+  git() { printf '0123456789012345678901234567890123456789\n'; }
+  fm_backend_playbot_lane() {
+    printf '%s\n' "$*" > "$TMP_ROOT/create-title.args"
+    printf 'ws-title\t%s\tthread-title\n' "$FUSED_WT_ABS"
+  }
+  fm_backend_playbot_workspace_create "$FIX/projects/alpha" fm-title-task HEAD \
+    title-task firstmate:title-task:delivery-title
+) || fail "workspace_create with a task-specific fused thread title must succeed under a mocked lane"
+[ "$CREATE_TITLE_OUT" = "$(printf 'ws-title\t%s\tthread-title' "$FUSED_WT_ABS")" ] \
+  || fail "workspace_create must return the lane's fused create record unchanged"
+grep -Fq -- '--title firstmate:title-task:delivery-title' "$TMP_ROOT/create-title.args" \
+  || fail "workspace_create must pass the task-specific fused thread title to lanes create"
+pass "workspace_create labels the fused thread with the task and delivery"
 
 # --- send_initial effort mapping (medium floor; never low) ---------------------
 # Without --effort, lanes mutationSend defaults every order to low. Captain
