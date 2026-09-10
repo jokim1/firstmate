@@ -1067,7 +1067,6 @@ playbot_finish_dispatch() {
       esac ;;
   esac
   [ "$stage" != accepted ] || playbot_txn_write worker-started || return 1
-  PLAYBOT_ABORT_CLEANUP=0
 }
 
 spawn_abort_cleanup() {
@@ -4311,6 +4310,9 @@ else
     SPAWN_BACKLOG_COMMIT_STATUS=0
     SPAWN_FRESH_COMMIT_PENDING=0
   fi
+fi
+if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -eq 0 ] && [ "$BACKEND" = playbot ]; then
+  PLAYBOT_ABORT_CLEANUP=0
 fi
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   if [ "$RELAUNCH" -eq 0 ]; then

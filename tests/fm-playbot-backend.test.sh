@@ -594,6 +594,9 @@ appendFileSync(process.env.FM_PLAYBOT_TEST_LOG, `${command}\n`);
 switch (command) {
   case 'ready':
   case 'route-write':
+  case 'archive':
+  case 'delete':
+  case 'cleanup-state':
     break;
   case 'binding-resolve':
     process.stdout.write('project-fixture\troot-fixture\t1\n');
@@ -648,6 +651,20 @@ run_playbot_spawn() {  # <id>
     fm_test_run_spawn "$SPAWN_HOME" "$SPAWN_WORKTREE" "$SPAWN_FAKEBIN" \
       "$1" "$SPAWN_PROJECT" --mode local-only --yolo off \
       --backend playbot --harness codex --effort xhigh
+}
+
+fail_playbot_backlog_start() {  # <fakebin>
+  local fakebin=$1 real
+  real=$(command -v tasks-axi)
+  cat > "$fakebin/tasks-axi" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = start ]; then
+  echo 'error: "backlog is unwritable"' >&2
+  exit 1
+fi
+exec "$real" "\$@"
+SH
+  chmod +x "$fakebin/tasks-axi"
 }
 
 playbot_backlog_state() {  # <home> <id>
@@ -718,7 +735,78 @@ EOF
   pass "worker-started Playbot re-entry republishes and commits without redispatch"
 }
 
+test_fresh_playbot_backlog_failure_retires_worker() {
+  local id=playbot-fresh-backlog-fails-v2 rec out status=0
+  rec=$(make_playbot_spawn_case fresh-backlog-fails "$id")
+  read_playbot_spawn_case "$rec"
+  fail_playbot_backlog_start "$SPAWN_FAKEBIN"
+
+  out=$(run_playbot_spawn "$id") || status=$?
+  [ "$status" -ne 0 ] || fail "fresh Playbot spawn succeeded after its backlog commit failed"
+  assert_contains "$out" "could not be moved to In flight" \
+    "fresh Playbot spawn did not report its backlog commit failure"
+  [ "$(playbot_backlog_state "$SPAWN_HOME" "$id")" = queued ] \
+    || fail "failed fresh Playbot spawn changed its queued backlog row"
+  [ "$(grep -c '^archive$' "$SPAWN_LOG" || true)" -eq 1 ] \
+    || fail "failed fresh Playbot spawn did not retire its thread exactly once"
+  [ "$(grep -c '^delete$' "$SPAWN_LOG" || true)" -eq 1 ] \
+    || fail "failed fresh Playbot spawn did not retire its workspace exactly once"
+  [ "$(grep -c '^cleanup-state$' "$SPAWN_LOG" || true)" -eq 1 ] \
+    || fail "failed fresh Playbot spawn did not confirm cleanup exactly once"
+  assert_absent "$SPAWN_HOME/state/$id.meta" \
+    "failed fresh Playbot spawn retained its provisional task record"
+  assert_absent "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" \
+    "failed fresh Playbot spawn retained its cleaned transaction"
+  assert_absent "$SPAWN_HOME/state/$id.playbot-route.json" \
+    "failed fresh Playbot spawn retained its cleaned route"
+  assert_absent "$SPAWN_HOME/state/$id.check.sh" \
+    "failed fresh Playbot spawn retained its reconciliation check"
+  assert_absent "$SPAWN_HOME/state/$id.check-trust" \
+    "failed fresh Playbot spawn retained its reconciliation registration"
+  pass "fresh Playbot backlog failure retires the uncommitted worker"
+}
+
+test_worker_started_reentry_backlog_failure_preserves_worker() {
+  local id=playbot-reentry-backlog-fails-v2 rec out status=0
+  rec=$(make_playbot_spawn_case reentry-backlog-fails "$id")
+  read_playbot_spawn_case "$rec"
+  mkdir -p "$SPAWN_HOME/state/.playbot-dispatch"
+  cat > "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" <<EOF
+task_id=$id
+brief_digest=digest-fixture
+project_binding_gen=1
+requested_base=HEAD
+delivery_id=delivery-fixture
+state=worker-started
+workspace_id=workspace-fixture
+thread_id=thread-fixture
+playbot_project_id=project-fixture
+playbot_project_root_id=root-fixture
+worktree=$SPAWN_WORKTREE
+EOF
+  printf 'worker-owned change\n' > "$SPAWN_WORKTREE/worker-change.txt"
+  fail_playbot_backlog_start "$SPAWN_FAKEBIN"
+
+  out=$(run_playbot_spawn "$id") || status=$?
+  [ "$status" -ne 0 ] || fail "worker-started re-entry succeeded after its backlog commit failed"
+  assert_contains "$out" "could not be moved to In flight" \
+    "worker-started re-entry did not report its backlog commit failure"
+  [ "$(playbot_backlog_state "$SPAWN_HOME" "$id")" = queued ] \
+    || fail "failed worker-started re-entry changed its queued backlog row"
+  [ "$(grep -Ec '^(archive|delete|cleanup-state)$' "$SPAWN_LOG" || true)" -eq 0 ] \
+    || fail "failed worker-started re-entry retired the existing worker"
+  assert_present "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" \
+    "failed worker-started re-entry removed the recovery transaction"
+  assert_grep 'state=worker-started' "$SPAWN_HOME/state/.playbot-dispatch/$id.txn" \
+    "failed worker-started re-entry changed the recoverable transaction state"
+  assert_absent "$SPAWN_HOME/state/$id.meta" \
+    "failed worker-started re-entry retained its provisional task record"
+  pass "worker-started backlog failure preserves the existing worker"
+}
+
 test_fresh_playbot_spawn_commits_record_and_backlog
 test_worker_started_reentry_commits_without_redispatch
+test_fresh_playbot_backlog_failure_retires_worker
+test_worker_started_reentry_backlog_failure_preserves_worker
 
 printf 'fm-playbot-backend: all tests passed\n'

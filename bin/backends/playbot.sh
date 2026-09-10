@@ -17,6 +17,7 @@
 # refuses with PHASE1-EVIDENCE-REQUIRED until the Phase 1 disposable smoke has
 # recorded per-operation evidence for the live Playbot release. Read-only
 # functions and the home-local route-record write work without that evidence.
+# Captain's standing 2026-08-15 B build-thread ruling in .agents/skills/playbot-operating/SKILL.md authorizes full-access for local-only build threads in disposable workspaces; MERGE-class threads remain out of scope.
 
 FM_PLAYBOT_BACKEND_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 FM_PLAYBOT_LANES="${FM_PLAYBOT_LANES_OVERRIDE:-$FM_PLAYBOT_BACKEND_DIR/../fm-playbot-lanes.mjs}"
