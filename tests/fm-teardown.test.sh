@@ -3162,13 +3162,13 @@ clear_playbot_lane_fixture_env() {
 }
 
 seed_playbot_project() {  # <case-dir>
-  local case_dir=$1
+  local case_dir=$1 plugin_path=${2:-addons/other}
   printf '%s\n' \
     'config_version=5' \
     '[application]' \
     'config/name="Fixture"' \
     '[editor_plugins]' \
-    'enabled=PackedStringArray("res://addons/other/plugin.cfg")' \
+    "enabled=PackedStringArray(\"res://$plugin_path/plugin.cfg\")" \
     > "$case_dir/wt/project.godot"
   git -C "$case_dir/wt" add project.godot
   wt_commit "$case_dir" "seed Godot project"
@@ -3181,9 +3181,11 @@ add_playbot_owned_churn() {  # <case-dir>
   mkdir -p "$case_dir/wt/addons/playbot/bin" "$case_dir/wt/.fm"
   printf '%s\n' plugin > "$case_dir/wt/addons/playbot/plugin.gd"
   printf '%s\n' native > "$case_dir/wt/addons/playbot/bin/native.dylib"
-  sed -i.bak 's#addons/other/plugin.cfg")#addons/other/plugin.cfg", "res://addons/playbot/plugin.cfg")#' \
+  sed -i.bak 's#")$#", "res://addons/playbot/plugin.cfg")#' \
     "$case_dir/wt/project.godot"
   rm -f "$case_dir/wt/project.godot.bak"
+  printf '%s\n' '' '[autoload]' 'Playbot="*res://addons/playbot/autoload.gd"' \
+    >> "$case_dir/wt/project.godot"
   printf '%s\n' 'done: complete' > "$case_dir/wt/.fm/status.log"
 }
 
@@ -3269,6 +3271,43 @@ test_playbot_registration_does_not_hide_enabled_plugin_removal() {
   assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
     "playbot-enabled-plugin-removal-refuses: refusal did not name project.godot"
   pass "Playbot registration cannot hide another enabled plugin removal"
+}
+
+test_playbot_registration_does_not_hide_project_mode_change() {
+  local case_dir rc
+  case_dir=$(make_case playbot-project-mode-change-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  chmod +x "$case_dir/wt/project.godot"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-project-mode-change-refuses: mode change must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-project-mode-change-refuses: refusal did not name project.godot"
+  pass "Playbot registration cannot hide a project.godot mode change"
+}
+
+test_playbot_path_boundary_preserves_similarly_named_plugin() {
+  local case_dir rc
+  case_dir=$(make_case playbot-helper-plugin-removal-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir" addons/playbot-helper
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak 's#"res://addons/playbot-helper/plugin.cfg", ##' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-helper-plugin-removal-refuses: similarly named plugin removal must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-helper-plugin-removal-refuses: refusal did not name project.godot"
+  pass "Playbot ownership excludes similarly named addon paths"
 }
 
 test_playbot_stray_fm_file_refuses() {
@@ -4770,6 +4809,8 @@ test_playbot_owned_churn_only_does_not_block_landed_teardown
 test_playbot_owned_churn_plus_real_edit_refuses
 test_playbot_project_registration_plus_real_edit_refuses
 test_playbot_registration_does_not_hide_enabled_plugin_removal
+test_playbot_registration_does_not_hide_project_mode_change
+test_playbot_path_boundary_preserves_similarly_named_plugin
 test_playbot_stray_fm_file_refuses
 test_non_playbot_owned_churn_paths_still_refuse
 test_playbot_workspace_record_gone_fallback_removes_worktree_without_receipt

@@ -1442,14 +1442,36 @@ playbot_enabled_values_without_registration() {  # <enabled-line>
         $line =~ s/^,\s*("(?:\\.|[^"\\])*")// or exit 1;
         $value = $1;
       }
-      print "$value\n" unless $value =~ m{addons/playbot};
+      print "$value\n" unless $value =~ m{\A"(?:\*?res://)?addons/playbot/};
       $line =~ s/^\s+//;
     }
   ' "${1-}"
 }
 
+playbot_registration_line_has_owned_path() {  # <project.godot-line>
+  case "${1-}" in
+    *'"res://addons/playbot/'*|*'"*res://addons/playbot/'*|*'"addons/playbot/'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+playbot_autoload_registration_line_is_owned() {  # <project.godot-line>
+  local line=${1-} key value
+  key=${line%%=*}
+  [ "$line" != "$key" ] || return 1
+  case "$key" in ''|*[!A-Za-z0-9_]*) return 1 ;; esac
+  value=${line#*=}
+  case "$value" in
+    '"res://addons/playbot/'*|'"*res://addons/playbot/'*|'"addons/playbot/'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 playbot_project_registration_only() {
-  local diff line content normalized old_enabled= new_enabled= saw_playbot=0
+  local diff summary line content normalized old_enabled= new_enabled= saw_playbot=0
+  summary=$(git -C "$WT" --no-pager diff --no-ext-diff --summary HEAD -- project.godot 2>/dev/null) \
+    || return 1
+  [ -z "$summary" ] || return 1
   diff=$(git -C "$WT" --no-pager diff --no-ext-diff --unified=0 HEAD -- project.godot 2>/dev/null) \
     || return 1
   [ -n "$diff" ] || return 1
@@ -1465,11 +1487,18 @@ playbot_project_registration_only() {
               +*) [ -z "$normalized" ] || new_enabled="${new_enabled}${normalized}"$'\n' ;;
               -*) [ -z "$normalized" ] || old_enabled="${old_enabled}${normalized}"$'\n' ;;
             esac
-            case "$content" in *addons/playbot*) saw_playbot=1 ;; esac
+            if playbot_registration_line_has_owned_path "$content"; then
+              saw_playbot=1
+            fi
             ;;
-          *addons/playbot*) saw_playbot=1 ;;
           ''|'[editor_plugins]'|'[autoload]') ;;
-          *) return 1 ;;
+          *)
+            if playbot_autoload_registration_line_is_owned "$content"; then
+              saw_playbot=1
+            else
+              return 1
+            fi
+            ;;
         esac
         ;;
     esac
