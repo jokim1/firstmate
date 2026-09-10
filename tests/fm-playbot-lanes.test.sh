@@ -525,8 +525,8 @@ const permissionDecision = decidePlaybotPendingRequest('approval', {
     }
   }
 }, { proposedFileChanges: [] }, { worktree: policyWorktree, env: policyEnv });
-if (permissionDecision.disposition !== 'respond' || permissionDecision.response.scope !== 'session') {
-  throw new Error('Godot user-dir and uv-cache grants must match the session filesystem rule');
+if (permissionDecision.disposition !== 'respond' || permissionDecision.response.scope !== 'turn') {
+  throw new Error('Godot user-dir and uv-cache grants must match the turn filesystem rule');
 }
 const commandDecision = decidePlaybotPendingRequest('approval', {
   id: 'command-pending',

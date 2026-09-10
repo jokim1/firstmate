@@ -113,7 +113,7 @@ export const PLAYBOT_APPROVAL_POLICY = Object.freeze({
     Object.freeze({
       serverName: 'playbot',
       responseMode: 'approval_action',
-      messagePrefix: 'Generate game assets (images, video, sound effects, music, 3D models) using AI.'
+      message: 'Generate game assets (images, video, sound effects, music, 3D models) using AI.'
     })
   ])
 });
@@ -1764,9 +1764,9 @@ export function decidePlaybotPendingRequest(kind, request, snapshot, options = {
       if (!permissionPathsAllowed(params.permissions, worktree, env, policy)) {
         return leavePending('deny-permissions-outside-approved-roots');
       }
-      return respond('allow-approved-filesystem-session', 'threads:respondToApproval', {
+      return respond('allow-approved-filesystem-turn', 'threads:respondToApproval', {
         permissions: params.permissions,
-        scope: 'session'
+        scope: 'turn'
       });
     }
     if (request.method === policy.approvalMethods.fileChange) {
@@ -1789,8 +1789,7 @@ export function decidePlaybotPendingRequest(kind, request, snapshot, options = {
     const safe = policy.safeMcpElicitations.find((confirmation) => (
       request.serverName === confirmation.serverName
       && request.responseMode === confirmation.responseMode
-      && typeof request.message === 'string'
-      && request.message.startsWith(confirmation.messagePrefix)
+      && request.message === confirmation.message
     ));
     const assetPaths = safe ? assetTargetsStayInWorktree(request, worktree, env, policy) : { allowed: false, blockedReference: null };
     if (!safe || !assetPaths.allowed) {
@@ -1799,10 +1798,10 @@ export function decidePlaybotPendingRequest(kind, request, snapshot, options = {
       }
       return leavePending('deny-unknown-mcp-elicitation');
     }
-    return respond('allow-playbot-asset-generation-session', 'threads:respondToMcpElicitation', {
+    return respond('allow-playbot-asset-generation', 'threads:respondToMcpElicitation', {
       action: 'accept',
       content: null,
-      _meta: { persist: 'session' }
+      _meta: null
     });
   }
   return leavePending('deny-unknown-request-kind');

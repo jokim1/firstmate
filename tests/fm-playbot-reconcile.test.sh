@@ -250,8 +250,8 @@ EOF
 write_task_fixture rc-allow-grant thread-pending workspace-pending worktrees/pending ship
 run_fixture_reconcile rc-allow-grant 0 >/dev/null || fail "in-root structured grant reconcile failed"
 [ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an in-root structured grant must receive one IPC response"
-[ "$(approval_state_field 'state.responses[0].request.response.scope')" = session ] || fail "an in-root structured grant must be approved for the session"
-pass "in-root structured filesystem grant is session-approved"
+[ "$(approval_state_field 'state.responses[0].request.response.scope')" = turn ] || fail "an in-root structured grant must be approved only for the current turn"
+pass "in-root structured filesystem grant is turn-scoped"
 
 cat > "$APPROVAL_STATE" <<EOF
 {"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-grant","method":"item/permissions/requestApproval","params":{"permissions":{"fileSystem":{"write":["/tmp/playbot-escape"]}}}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
@@ -307,8 +307,18 @@ write_task_fixture rc-asset thread-pending workspace-pending worktrees/pending s
 run_fixture_reconcile rc-asset 0 >/dev/null || fail "asset elicitation reconcile failed"
 [ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "known-safe asset elicitation must receive one IPC response"
 [ "$(approval_state_field 'state.responses[0].channel')" = "threads:respondToMcpElicitation" ] || fail "asset elicitation must use respondToMcpElicitation"
-[ "$(approval_state_field 'state.responses[0].request.response._meta.persist')" = session ] || fail "asset elicitation must be allowed for the session"
-pass "in-root target and linked asset pass through the MCP response IPC"
+[ "$(approval_state_field 'state.responses[0].request.response._meta')" = null ] || fail "asset elicitation must be accepted for one request only"
+pass "in-root target and linked asset receive one-request MCP acceptance"
+
+REMOTE_ASSET_URL=https://unknown.example/private.png
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-remote-after-accepted","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["$REMOTE_ASSET_URL"]}]}]}],"agentStatus":"pending_input"},"responses":[{"channel":"threads:respondToMcpElicitation","request":{"threadId":"thread-pending","requestId":"asset-elicitation","response":{"action":"accept","content":null,"_meta":null}}}]}
+EOF
+run_fixture_reconcile rc-asset 0 >/dev/null || fail "second asset elicitation reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "a remote second asset request must stay pending without another IPC response"
+grep -Fq "reference=\"$REMOTE_ASSET_URL\"" "$STATE/rc-asset.status" || fail "the independently validated second asset request must name its blocked reference"
+[ "$(wc -l < "$STATE/rc-asset.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "each asset request must be validated and journaled independently"
+pass "a second asset request is independently validated after acceptance"
 
 OUTSIDE_ASSET="$TMP_ROOT/private.png"
 printf 'private fixture\n' > "$OUTSIDE_ASSET"
@@ -322,15 +332,14 @@ run_fixture_reconcile rc-asset-external 0 >/dev/null || fail "external linked as
 grep -Fq "reference=\"$OUTSIDE_ASSET_URL\"" "$STATE/rc-asset-external.status" || fail "the out-of-root linked asset block must name the reference"
 pass "out-of-root file linked asset stays pending and names the reference"
 
-REMOTE_ASSET_URL=https://unknown.example/private.png
 cat > "$APPROVAL_STATE" <<EOF
-{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-remote-url","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["$REMOTE_ASSET_URL"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-message-suffix","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI. Additional request.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["assets/source.png"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
 EOF
-write_task_fixture rc-asset-remote thread-pending workspace-pending worktrees/pending ship
-run_fixture_reconcile rc-asset-remote 0 >/dev/null || fail "remote linked asset reconcile failed"
-[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a remote linked asset URL must stay pending without an IPC response"
-grep -Fq "reference=\"$REMOTE_ASSET_URL\"" "$STATE/rc-asset-remote.status" || fail "the remote linked asset block must name the reference"
-pass "remote linked asset stays pending and names the reference"
+write_task_fixture rc-asset-message thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset-message 0 >/dev/null || fail "non-exact asset message reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a non-exact asset confirmation message must stay pending"
+grep -Fq 'deny-unknown-mcp-elicitation' "$STATE/rc-asset-message.status" || fail "a non-exact asset confirmation must append a policy-specific blocked status"
+pass "asset confirmation matching requires the exact message"
 
 kill "$APPROVAL_CDP_PID" 2>/dev/null
 wait "$APPROVAL_CDP_PID" 2>/dev/null
