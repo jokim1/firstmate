@@ -1402,6 +1402,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
     if [ "$KIND" = ship ] && [ "$MODE" != local-only ]; then
       echo "error: backend=playbot refuses ship mode '$MODE' (v1: local-only only)" >&2; exit 1
     fi
+    fm_backend_playbot_map_send_effort "$EFFORT" >/dev/null || exit 1
     fm_backend_playbot_runtime_check || exit 1
   fi
 fi
