@@ -1427,10 +1427,11 @@ playbot_owned_churn_path() {  # <repo-relative-path>
 playbot_enabled_values_without_registration() {  # <enabled-line>
   perl -e '
     my $line = shift;
+    my $owned = 0;
     $line =~ s/^enabled=PackedStringArray\(// or exit 1;
     $line =~ s/\)$// or exit 1;
     $line =~ s/^\s+//;
-    exit 0 if $line eq q{};
+    exit 3 if $line eq q{};
     my $first = 1;
     while (length $line) {
       my $value;
@@ -1442,17 +1443,28 @@ playbot_enabled_values_without_registration() {  # <enabled-line>
         $line =~ s/^,\s*("(?:\\.|[^"\\])*")// or exit 1;
         $value = $1;
       }
-      print "$value\n" unless $value =~ m{\A"(?:\*?res://)?addons/playbot/};
+      if ($value =~ m{\A"(?:\*?res://)?addons/playbot/([^"\\]*)"\z}
+          && $1 !~ m{(?:\A|/)\.{1,2}(?:/|\z)}) {
+        $owned = 1;
+      } else {
+        print "$value\n";
+      }
       $line =~ s/^\s+//;
     }
+    exit($owned ? 0 : 3);
   ' "${1-}"
 }
 
-playbot_registration_line_has_owned_path() {  # <project.godot-line>
-  case "${1-}" in
-    *'"res://addons/playbot/'*|*'"*res://addons/playbot/'*|*'"addons/playbot/'*) return 0 ;;
+playbot_registration_value_is_owned() {  # <quoted-project.godot-value>
+  local value=${1-} path
+  case "$value" in
+    '"res://addons/playbot/'*'"') path=${value#\"res://addons/playbot/} ;;
+    '"*res://addons/playbot/'*'"') path=${value#\"\*res://addons/playbot/} ;;
+    '"addons/playbot/'*'"') path=${value#\"addons/playbot/} ;;
     *) return 1 ;;
   esac
+  path=${path%\"}
+  case "/$path/" in */./*|*/../*) return 1 ;; esac
 }
 
 playbot_autoload_registration_line_is_owned() {  # <project.godot-line>
@@ -1461,14 +1473,11 @@ playbot_autoload_registration_line_is_owned() {  # <project.godot-line>
   [ "$line" != "$key" ] || return 1
   case "$key" in ''|*[!A-Za-z0-9_]*) return 1 ;; esac
   value=${line#*=}
-  case "$value" in
-    '"res://addons/playbot/'*|'"*res://addons/playbot/'*|'"addons/playbot/'*) return 0 ;;
-    *) return 1 ;;
-  esac
+  playbot_registration_value_is_owned "$value"
 }
 
 playbot_project_registration_only() {
-  local diff summary line content normalized old_enabled= new_enabled= saw_playbot=0
+  local diff summary line content normalized normalize_rc old_enabled= new_enabled= saw_playbot=0
   summary=$(git -C "$WT" --no-pager diff --no-ext-diff --summary HEAD -- project.godot 2>/dev/null) \
     || return 1
   [ -z "$summary" ] || return 1
@@ -1482,14 +1491,17 @@ playbot_project_registration_only() {
         content=${line#?}
         case "$content" in
           enabled=*)
-            normalized=$(playbot_enabled_values_without_registration "$content") || return 1
+            normalize_rc=0
+            normalized=$(playbot_enabled_values_without_registration "$content") || normalize_rc=$?
+            case "$normalize_rc" in
+              0) saw_playbot=1 ;;
+              3) ;;
+              *) return 1 ;;
+            esac
             case "$line" in
               +*) [ -z "$normalized" ] || new_enabled="${new_enabled}${normalized}"$'\n' ;;
               -*) [ -z "$normalized" ] || old_enabled="${old_enabled}${normalized}"$'\n' ;;
             esac
-            if playbot_registration_line_has_owned_path "$content"; then
-              saw_playbot=1
-            fi
             ;;
           ''|'[editor_plugins]'|'[autoload]') ;;
           *)
@@ -1508,28 +1520,26 @@ EOF
   [ "$saw_playbot" -eq 1 ] && [ "$old_enabled" = "$new_enabled" ]
 }
 
-dirty_status_path() {  # <git-status-porcelain-line>
-  local line=${1:-} path
-  path=${line#???}
-  case "$line" in
-    R*|C*)
-      case "$path" in
-        *" -> "*) path=${path##* -> } ;;
-      esac
-      ;;
-  esac
-  printf '%s\n' "$path"
-}
-
-playbot_first_unignored_dirty_path() {  # <porcelain-status>
-  local line path first=
+playbot_first_unignored_dirty_path() {
+  local status_file record status path renamed_from first=
   fm_backend_source playbot || true
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    path=$(dirty_status_path "$line")
-    case "$line" in
-      '?? .claude/'*|'?? .fm-grok-turnend'|'?? .fm-kimi-turnend') continue ;;
+  status_file=$(mktemp "${TMPDIR:-/tmp}/fm-playbot-status.XXXXXX") || return 2
+  if ! git -C "$WT" status --porcelain=v1 -z -uall > "$status_file" 2>/dev/null; then
+    rm -f -- "$status_file"
+    return 2
+  fi
+  while IFS= read -r -d '' -u 3 record; do
+    status=${record:0:2}
+    path=${record:3}
+    case "$status" in
+      R*|C*|*R|*C)
+        IFS= read -r -d '' -u 3 renamed_from || { rm -f -- "$status_file"; return 2; }
+        [ -n "$renamed_from" ] || { rm -f -- "$status_file"; return 2; }
+        ;;
     esac
+    if [ "$status" = '??' ]; then
+      case "$path" in .claude/*|.fm-grok-turnend|.fm-kimi-turnend) continue ;; esac
+    fi
     if playbot_owned_churn_path "$path" \
        || { [ "$path" = project.godot ] && playbot_project_registration_only; } \
        || { [ -n "${FM_PLAYBOT_COURIER_MARKER_PATH:-}" ] \
@@ -1537,11 +1547,10 @@ playbot_first_unignored_dirty_path() {  # <porcelain-status>
       printf 'playbot-owned churn ignored: %s\n' "$path" >&2
       continue
     fi
-    first=$line
+    first=$path
     break
-  done <<EOF
-$1
-EOF
+  done 3< "$status_file"
+  rm -f -- "$status_file"
   printf '%s\n' "$first"
 }
 
@@ -2624,7 +2633,7 @@ validate_worktree_teardown_safety() {
   fi
 
   if [ "$BACKEND" = playbot ]; then
-    dirty_raw=$(git -C "$WT" status --porcelain -uall 2>/dev/null) || dirty_raw_rc=$?
+    dirty=$(playbot_first_unignored_dirty_path) || dirty_raw_rc=$?
   else
     dirty_raw=$(git -C "$WT" status --porcelain 2>/dev/null) || dirty_raw_rc=$?
   fi
@@ -2637,9 +2646,7 @@ validate_worktree_teardown_safety() {
     echo "Restore the git index state, or get the captain's explicit OK to discard, then --force." >&2
     return 1
   fi
-  if [ "$BACKEND" = playbot ]; then
-    dirty=$(playbot_first_unignored_dirty_path "$dirty_raw")
-  else
+  if [ "$BACKEND" != playbot ]; then
     dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-(grok|kimi)-turnend$)' | head -1 || true)
   fi
 
@@ -2691,7 +2698,7 @@ validate_worktree_teardown_safety() {
     echo "REFUSED: worktree $WT has uncommitted changes." >&2
     echo "uncommitted changes present" >&2
     if [ "$BACKEND" = playbot ]; then
-      printf 'first non-Playbot-owned uncommitted path: %s\n' "$(dirty_status_path "$dirty")" >&2
+      printf 'first non-Playbot-owned uncommitted path: %s\n' "$dirty" >&2
     fi
     echo "Commit them (or get the captain's explicit OK to discard, then --force)." >&2
     return 1

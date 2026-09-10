@@ -3181,6 +3181,7 @@ add_playbot_owned_churn() {  # <case-dir>
   mkdir -p "$case_dir/wt/addons/playbot/bin" "$case_dir/wt/.fm"
   printf '%s\n' plugin > "$case_dir/wt/addons/playbot/plugin.gd"
   printf '%s\n' native > "$case_dir/wt/addons/playbot/bin/native.dylib"
+  printf '%s\n' notices > "$case_dir/wt/addons/playbot/Third Party Notices.txt"
   sed -i.bak 's#")$#", "res://addons/playbot/plugin.cfg")#' \
     "$case_dir/wt/project.godot"
   rm -f "$case_dir/wt/project.godot.bak"
@@ -3205,6 +3206,8 @@ test_playbot_owned_churn_only_does_not_block_landed_teardown() {
   expect_code 0 "$rc" "playbot-owned-churn-allow: Playbot-owned churn should not block landed teardown"
   assert_grep "playbot-owned churn ignored: addons/playbot/bin/native.dylib" "$case_dir/stderr" \
     "playbot-owned-churn-allow: ignored addon churn was not printed"
+  assert_grep "playbot-owned churn ignored: addons/playbot/Third Party Notices.txt" "$case_dir/stderr" \
+    "playbot-owned-churn-allow: whitespace-bearing addon churn was not accepted unquoted"
   assert_grep "playbot-owned churn ignored: project.godot" "$case_dir/stderr" \
     "playbot-owned-churn-allow: ignored project.godot churn was not printed"
   assert_grep "playbot-owned churn ignored: .fm/status.log" "$case_dir/stderr" \
@@ -3308,6 +3311,50 @@ test_playbot_path_boundary_preserves_similarly_named_plugin() {
   assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
     "playbot-helper-plugin-removal-refuses: refusal did not name project.godot"
   pass "Playbot ownership excludes similarly named addon paths"
+}
+
+test_playbot_registration_rejects_dot_segment_path() {
+  local case_dir rc
+  case_dir=$(make_case playbot-dot-segment-plugin-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir" addons/playbot/../other
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak 's#"res://addons/playbot/../other/plugin.cfg", ##' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-dot-segment-plugin-refuses: noncanonical plugin removal must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-dot-segment-plugin-refuses: refusal did not name project.godot"
+  pass "Playbot registration rejects dot-segment paths"
+}
+
+test_playbot_autoload_rejects_dot_segment_path() {
+  local case_dir rc
+  case_dir=$(make_case playbot-dot-segment-autoload-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  printf '%s\n' '' '[autoload]' 'Other="*res://addons/playbot/../other/autoload.gd"' \
+    >> "$case_dir/wt/project.godot"
+  git -C "$case_dir/wt" add project.godot
+  wt_commit "$case_dir" "seed autoload"
+  git -C "$case_dir/project" merge -q --ff-only fm/task-x1
+  git -C "$case_dir/project" push -q origin main
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak '/^Other=/d' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-dot-segment-autoload-refuses: noncanonical autoload removal must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-dot-segment-autoload-refuses: refusal did not name project.godot"
+  pass "Playbot autoload registration rejects dot-segment paths"
 }
 
 test_playbot_stray_fm_file_refuses() {
@@ -4811,6 +4858,8 @@ test_playbot_project_registration_plus_real_edit_refuses
 test_playbot_registration_does_not_hide_enabled_plugin_removal
 test_playbot_registration_does_not_hide_project_mode_change
 test_playbot_path_boundary_preserves_similarly_named_plugin
+test_playbot_registration_rejects_dot_segment_path
+test_playbot_autoload_rejects_dot_segment_path
 test_playbot_stray_fm_file_refuses
 test_non_playbot_owned_churn_paths_still_refuse
 test_playbot_workspace_record_gone_fallback_removes_worktree_without_receipt
