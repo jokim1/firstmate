@@ -993,7 +993,16 @@ playbot_dispatch_transaction() {
     create_raw=$(fm_backend_playbot_workspace_create "$PROJ_ABS" "$slug" \
       "${PLAYBOT_REQUESTED_BASE:-HEAD}" "$ID") || {
       echo "error: playbot workspace:create failed for $slug (txn=prepared)" >&2; return 1; }
-    PLAYBOT_WORKSPACE_ID=${create_raw%%$'\t'*}; WT=${create_raw#*$'\t'}
+    # Fused releases (0.94.0+) append the first-thread id as a third field.
+    # Parse through the adapter so isolation sees the worktree path alone.
+    create_raw=$(fm_backend_playbot_parse_workspace_create "$create_raw") || {
+      echo "error: playbot workspace:create malformed record" >&2; return 1; }
+    PLAYBOT_WORKSPACE_ID=${create_raw%%$'\t'*}
+    rest=${create_raw#*$'\t'}
+    WT=${rest%%$'\t'*}
+    if [ "$rest" != "$WT" ]; then
+      PLAYBOT_THREAD_ID=${rest#*$'\t'}
+    fi
     [ -n "$PLAYBOT_WORKSPACE_ID" ] && [ -n "$WT" ] && [ "$WT" != "$PLAYBOT_WORKSPACE_ID" ] || {
       echo "error: playbot workspace:create malformed record" >&2; return 1; }
     validate_spawn_worktree "playbot workspace create" "$slug" || return 1
@@ -1002,9 +1011,13 @@ playbot_dispatch_transaction() {
   if [ "$stage" = created ]; then
     [ -n "$PLAYBOT_WORKSPACE_ID" ] || {
       echo "error: playbot txn created without workspace_id" >&2; return 1; }
-    PLAYBOT_THREAD_ID=$(fm_backend_playbot_thread_create \
-      "$PLAYBOT_WORKSPACE_ID" "$ID" "$PLAYBOT_DELIVERY_ID") || {
-      echo "error: playbot thread create failed for $ID (txn=created)" >&2; return 1; }
+    # Fused create already opened the first thread; reuse that id instead of
+    # minting a second worker thread via open-thread/threads:launch.
+    if [ -z "${PLAYBOT_THREAD_ID:-}" ]; then
+      PLAYBOT_THREAD_ID=$(fm_backend_playbot_thread_create \
+        "$PLAYBOT_WORKSPACE_ID" "$ID" "$PLAYBOT_DELIVERY_ID") || {
+        echo "error: playbot thread create failed for $ID (txn=created)" >&2; return 1; }
+    fi
     [ -n "$PLAYBOT_THREAD_ID" ] || {
       echo "error: playbot thread create returned empty id" >&2; return 1; }
     playbot_txn_write thread-created || return 1; stage=thread-created
@@ -1030,7 +1043,8 @@ playbot_finish_dispatch() {
     meta-published|submitted)
       [ "$stage" = submitted ] || playbot_txn_write submitted || return 1
       send_verdict=$(fm_backend_playbot_send_initial \
-        "playbot:$PLAYBOT_THREAD_ID" "$BRIEF" "$PLAYBOT_DELIVERY_ID" "$PLAYBOT_BRIEF_DIGEST") || {
+        "playbot:$PLAYBOT_THREAD_ID" "$BRIEF" "$PLAYBOT_DELIVERY_ID" "$PLAYBOT_BRIEF_DIGEST" \
+        "${EFFORT:-medium}") || {
         echo "error: playbot initial brief failed for $ID (txn=submitted)" >&2; return 1; }
       case "$send_verdict" in
         accepted|empty) playbot_txn_write accepted || return 1; stage=accepted ;;

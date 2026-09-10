@@ -363,4 +363,73 @@ grep -qxF delete "$PLAYBOT_TEARDOWN_LOG" \
   || fail "safe confirmed-gone teardown did not reach workspace deletion"
 pass "confirmed-gone Playbot deletion also requires a passing worktree safety recheck"
 
+# --- fused create record parse (0.94.0+ three-field workspace:create) ----------
+# Live 0.107.0 create prints workspace_id<TAB>worktree<TAB>fused_thread_id.
+# The spawn isolation check must see the worktree path alone; the pre-fix
+# remainder-after-first-tab parse left the thread id fused into WT so the path
+# was not a directory.
+
+FUSED_WT="$FIX/worktrees/fused-create"
+mkdir -p "$FUSED_WT"
+FUSED_WT_ABS=$(cd "$FUSED_WT" && pwd -P)
+FUSED_RAW=$(printf 'ws_fused_test\t%s\tchat-fused-abc' "$FUSED_WT_ABS")
+FUSED_PARSED=$(fm_backend_playbot_parse_workspace_create "$FUSED_RAW") \
+  || fail "three-field create record must parse"
+FUSED_WS=${FUSED_PARSED%%$'\t'*}
+FUSED_REST=${FUSED_PARSED#*$'\t'}
+FUSED_PATH=${FUSED_REST%%$'\t'*}
+FUSED_THREAD=${FUSED_REST#*$'\t'}
+[ "$FUSED_WS" = ws_fused_test ] || fail "parse must keep the workspace id"
+[ "$FUSED_PATH" = "$FUSED_WT_ABS" ] || fail "parse must yield the worktree path alone, got '$FUSED_PATH'"
+[ "$FUSED_THREAD" = chat-fused-abc ] || fail "parse must surface the fused thread id"
+case "$FUSED_PATH" in *$'\t'*) fail "parsed worktree must not contain a tab" ;; esac
+[ -d "$FUSED_PATH" ] || fail "isolation check must see the parsed path as a directory"
+NAIVE_WT=${FUSED_RAW#*$'\t'}
+[ ! -d "$NAIVE_WT" ] || fail "naive remainder-after-first-tab must not be a directory"
+LEGACY_RAW=$(printf 'ws_legacy\t%s' "$FUSED_WT_ABS")
+LEGACY_PARSED=$(fm_backend_playbot_parse_workspace_create "$LEGACY_RAW") \
+  || fail "two-field create record must still parse"
+LEGACY_REST=${LEGACY_PARSED#*$'\t'}
+[ "$LEGACY_REST" = "$FUSED_WT_ABS" ] || fail "two-field parse must return only the worktree path"
+if fm_backend_playbot_parse_workspace_create "$(printf 'ws\t%s\tchat\textra' "$FUSED_WT_ABS")" >/dev/null 2>&1; then
+  fail "four-field create record must be refused"
+fi
+if fm_backend_playbot_parse_workspace_create "ws-only" >/dev/null 2>&1; then
+  fail "single-field create record must be refused"
+fi
+pass "fused three-field create parse isolates the worktree path for the isolation check"
+
+# --- send_initial threads recorded effort (default medium) ---------------------
+# Without --effort, lanes mutationSend defaults every order to low. The captain
+# standing Playbot-order default is medium; spawn must pass the task effort.
+
+echo 'brief body' > "$TMP_ROOT/brief-effort.md"
+: > "$TMP_ROOT/send-effort.args"
+SEND_EFFORT_OUT=$(
+  fm_backend_playbot_tool_check() { return 0; }
+  fm_backend_playbot_lane() {
+    printf '%s\n' "$*" > "$TMP_ROOT/send-effort.args"
+    return 0
+  }
+  fm_backend_playbot_send_initial playbot:thread-complete "$TMP_ROOT/brief-effort.md" \
+    delivery-effort digest-effort high
+) || fail "send_initial with explicit effort must succeed under a mocked lane"
+[ "$SEND_EFFORT_OUT" = accepted ] || fail "send_initial must print accepted on mocked success"
+grep -Fq -- '--effort high' "$TMP_ROOT/send-effort.args" \
+  || fail "send_initial must pass the caller effort through to lanes send, got: $(cat "$TMP_ROOT/send-effort.args")"
+: > "$TMP_ROOT/send-effort.args"
+SEND_DEFAULT_OUT=$(
+  fm_backend_playbot_tool_check() { return 0; }
+  fm_backend_playbot_lane() {
+    printf '%s\n' "$*" > "$TMP_ROOT/send-effort.args"
+    return 0
+  }
+  fm_backend_playbot_send_initial playbot:thread-complete "$TMP_ROOT/brief-effort.md" \
+    delivery-effort digest-effort
+) || fail "send_initial without effort must succeed under a mocked lane"
+[ "$SEND_DEFAULT_OUT" = accepted ] || fail "default-effort send_initial must print accepted"
+grep -Fq -- '--effort medium' "$TMP_ROOT/send-effort.args" \
+  || fail "send_initial must default --effort to medium when omitted, got: $(cat "$TMP_ROOT/send-effort.args")"
+pass "send_initial threads recorded effort and defaults to medium"
+
 printf 'fm-playbot-backend: all tests passed\n'
