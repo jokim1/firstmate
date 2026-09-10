@@ -178,8 +178,10 @@ budget_reset() {
 
 fm_supervision_status "$STATE" "$GRACE"
 if [ "$FM_SUP_NEEDED" = false ]; then
-  [ -e "$FAILURE_NOTICE" ] || budget_reset
-  exit 0
+  if [ "$CLAUDE_MODE" -eq 0 ] || [ "$FM_SUP_QUEUE_PENDING" = false ]; then
+    [ -e "$FAILURE_NOTICE" ] || budget_reset
+    exit 0
+  fi
 fi
 # One owner of the "supervision is on, let this turn end" exit contract, shared
 # by every proof of supervision below.

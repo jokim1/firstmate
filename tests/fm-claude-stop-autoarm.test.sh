@@ -696,6 +696,24 @@ test_arms_for_registered_custom_check_without_inflight() {
   pass "auto-arm: a registered custom check arms the cycle even with no tasks in flight"
 }
 
+# Idle-home gap: a secondmate with zero tasks in flight but an unread advisory
+# queue row (refill / focus-switch) must still hold one Stop-owned cycle so the
+# row can rewake the mate. Before the fix the hook exited inert, the beacon
+# aged out, and the parent stall predicate alarmed on that same advisory row.
+test_arms_for_queued_advisory_wake_in_idle_secondmate() {
+  local dir out status
+  dir=$(make_secondmate_dir "$TMP_ROOT/idle-queue-advisory")
+  printf '%s\t1\trefill\trefill\trefill: re-evaluate ready work against free capacity\n' \
+    "$(date +%s)" > "$dir/state/.wake-queue"
+  write_arm_fixture "$dir" actionable
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an idle secondmate with only an advisory queue row must rewake, not exit inert"
+  [ -e "$dir/state/arm-ran" ] || fail "hook did not arm for a queued advisory wake in an idle secondmate"
+  assert_contains "$out" "firstmate watcher wake" "queue-only cycle must carry the rewake banner"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "queue-only cycle must record outcome=rewake"
+  pass "auto-arm: idle secondmate with only an advisory queue row holds one Stop-owned cycle"
+}
+
 test_single_flight_admits_exactly_one_owner() {
   local dir rc1 rc2 count
   dir=$(make_primary_dir "$TMP_ROOT/single-flight")
@@ -1255,6 +1273,7 @@ test_positive_recovery_budget_contention_preserves_episode
 test_owner_mutex_contention_preserves_failure_episode_reset
 test_arms_for_x_mode_poll_need_without_inflight
 test_arms_for_registered_custom_check_without_inflight
+test_arms_for_queued_advisory_wake_in_idle_secondmate
 test_single_flight_admits_exactly_one_owner
 test_abandoned_owner_claim_is_reclaimed_and_rearms
 test_arming_claim_with_fresh_beacon_is_never_reclaimed

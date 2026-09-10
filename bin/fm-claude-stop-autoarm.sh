@@ -18,8 +18,8 @@
 #   - AFK: while state/.afk exists the away daemon owns the watcher and triage;
 #     this hook exits 0 and NEVER rewakes the primary (checked again at
 #     translation time so a mid-cycle AFK transition is honored).
-#   - Need: arms only while the home needs supervision, as
-#     bin/fm-supervision-lib.sh defines it; an idle home exits 0.
+#   - Need: arms while the home has standing supervision need OR any unread
+#     wake-queue row; a fully idle empty-queue home exits 0.
 #   - Single-flight: Claude does not dedupe async hooks, so exactly one
 #     GENERATION owner arms per event epoch: the epoch ledger's monotonic
 #     sequence is the claim generation, every firing defers (exit 0) to a live
@@ -136,9 +136,13 @@ fi
 # --- AFK: the away daemon owns the watcher and triage; never rewake ----------
 [ -e "$STATE/.afk" ] && exit 0
 
-# --- need: whatever bin/fm-supervision-lib.sh counts as supervision need ------
+# --- need: standing supervision need OR any unread wake-queue row ------------
+# Queue-only must still hold one Stop-owned cycle so advisory rows (refill /
+# focus-switch) rewake an idle home instead of leaving the beacon to age out
+# while the parent stall predicate alarms on those same rows.
 need_supervision() {
-  fm_supervision_needed "$STATE" "$GRACE"
+  fm_supervision_status "$STATE" "$GRACE"
+  [ "$FM_SUP_NEEDED" = true ] || [ "$FM_SUP_QUEUE_PENDING" = true ]
 }
 need_supervision || exit 0
 

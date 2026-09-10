@@ -563,6 +563,19 @@ test_hook_silent_in_idle_secondmate_home() {
   pass "fm-turnend-guard: idle-by-default - silent in a secondmate home with nothing in flight"
 }
 
+# An idle secondmate with only an advisory queue row still needs a cycle: the
+# guard must not allow a blind stop while those rows sit and no watcher is live.
+test_hook_claude_mode_blocks_idle_secondmate_with_queued_advisory() {
+  local dir out status
+  dir=$(make_secondmate_dir "$TMP_ROOT/hook-secondmate-idle-queue")
+  printf '%s\t1\trefill\trefill\trefill: re-evaluate ready work against free capacity\n' \
+    "$(date +%s)" > "$dir/state/.wake-queue"
+  out=$(run_hook_claude "$dir" false); status=$?
+  expect_code 2 "$status" "Claude must not end blind with an idle secondmate advisory row queued"
+  assert_contains "$out" "TURN WOULD END BLIND" "queue-only blind stop must carry the block banner"
+  pass "fm-turnend-guard --claude: idle secondmate with only an advisory queue row blocks a blind stop"
+}
+
 # The stop_hook_active loop guard bounds the secondmate to one forced
 # continuation per turn, exactly as it does for the main primary - no wedged,
 # un-endable session.
@@ -2148,6 +2161,7 @@ test_pi_extension_injects_once_per_logical_agent_run
 test_pi_extension_retries_after_followup_delivery_failure
 test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy
 test_hook_claude_mode_reblocks_x_mode_without_tasks
+test_hook_claude_mode_blocks_idle_secondmate_with_queued_advisory
 test_hook_claude_mode_allows_when_autoarm_owner_alive
 test_hook_claude_mode_repeated_failed_to_arming_interleavings_reach_fail_open
 test_hook_claude_mode_terminal_boundary_excludes_starting_owner
