@@ -29,7 +29,8 @@ It also requires `AGENTS.md`, `bin/`, and the effective state directory.
 
 For an in-scope primary, the guard counts in-flight work from `state/*.meta`.
 Registered `state/procevent/*.source` records also require supervision even though they have no task metadata.
-An unread record in `state/.wake-queue` also requires supervision even when no task, process-event source, or Relay poll remains.
+An unread record in `state/.wake-queue` also requires a between-turns supervision cycle even when no task, process-event source, or Relay poll remains (`fm_supervision_cycle_needed` in `bin/fm-supervision-lib.sh`).
+Standing watcher-need (`fm_supervision_needed` / `FM_SUP_NEEDED`) stays narrower so the pull guard's watcher-down banner does not treat queue-only mid-drain hand-offs as a stale watcher.
 The default cross-harness mode exits silently with no supervision need.
 Every mode treats `state/x-watch.check.sh` as supervision need, so Relay polling remains guarded without an in-flight task.
 A custom check registered with `bin/fm-check-register.sh` counts the same way, so an operator's home-level poll keeps running after the last task is torn down.

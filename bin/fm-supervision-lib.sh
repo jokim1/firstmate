@@ -98,10 +98,27 @@ fm_supervision_status() {
 }
 
 # fm_supervision_needed <state-dir> [grace-seconds]
-# Exit 0 (true) exactly when the home needs a watcher.
+# Exit 0 (true) exactly when the home needs a standing watcher for in-flight
+# work, Relay, a registered source, or a registered custom check.
+# Unread wake-queue rows alone are NOT this predicate: the pull guard
+# (bin/fm-guard.sh) uses it for the watcher-down banner, and treating
+# queue-only as needed re-alarms mid-drain when the watcher is briefly down
+# between a wake and the next Stop-owned cycle.
 fm_supervision_needed() {
   fm_supervision_status "$@"
   [ "$FM_SUP_NEEDED" = true ]
+}
+
+# fm_supervision_cycle_needed <state-dir> [grace-seconds]
+# Exit 0 (true) when a between-turns supervision cycle must be held: ordinary
+# fm_supervision_needed OR any unread state/.wake-queue row.
+# Stop-owned auto-arm and the turn-end guard use this so an idle home with
+# only advisory queue rows (refill / focus-switch) still arms one cycle and
+# can rewake, instead of exiting inert while the beacon ages and the parent
+# stall predicate alarms on those same rows.
+fm_supervision_cycle_needed() {
+  fm_supervision_status "$@"
+  [ "$FM_SUP_NEEDED" = true ] || [ "$FM_SUP_QUEUE_PENDING" = true ]
 }
 
 # fm_supervision_unhealthy <state-dir> [grace-seconds]

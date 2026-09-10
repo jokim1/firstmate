@@ -176,8 +176,11 @@ budget_reset() {
   fm_lock_release "$BUDGET_LOCK"
 }
 
+# Hold the turn boundary for standing need OR any unread wake-queue row.
+# Queue-only stays out of FM_SUP_NEEDED so the pull guard does not treat a
+# mid-drain watcher hand-off as a stale-watcher alarm.
 fm_supervision_status "$STATE" "$GRACE"
-if [ "$FM_SUP_NEEDED" = false ]; then
+if [ "$FM_SUP_NEEDED" = false ] && [ "$FM_SUP_QUEUE_PENDING" = false ]; then
   [ -e "$FAILURE_NOTICE" ] || budget_reset
   exit 0
 fi
