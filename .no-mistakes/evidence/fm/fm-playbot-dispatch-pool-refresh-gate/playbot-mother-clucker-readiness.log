@@ -1,0 +1,19 @@
+$ bin/fm-playbot-lanes.mjs ready --json --capability native
+{
+  "capability": "native",
+  "ready": true,
+  "operatingState": "native-enabled",
+  "mutationsEnabled": true,
+  "reason": null
+}
+
+$ bin/fm-playbot-lanes.mjs binding-resolve --project-path /Users/josephkim/dev/firstmate/projects/mother-clucker
+fm-playbot-lanes: no playbot project binding for /Users/josephkim/dev/mother-clucker
+
+$ git -C /Users/josephkim/dev/firstmate/projects/mother-clucker status --short
+
+$ test -f /Users/josephkim/dev/firstmate/projects/mother-clucker/project.godot
+project.godot present, exit=0
+$ FM_HOME=/Users/josephkim/dev/firstmate bin/fm-playbot-lanes.mjs binding-resolve --project-path /Users/josephkim/dev/firstmate/projects/mother-clucker
+project_4f801e0874cd	root_7fb0445f7dca	1
+exit=0
