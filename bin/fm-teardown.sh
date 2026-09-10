@@ -1523,7 +1523,7 @@ playbot_project_registration_only() {
 }
 
 playbot_first_unignored_dirty_path() {
-  local status_file record status path renamed_from first=
+  local status_file record status path renamed_from first='' malformed=0
   fm_backend_source playbot || true
   status_file=$(mktemp "${TMPDIR:-/tmp}/fm-playbot-status.XXXXXX") || return 2
   if ! git -C "$WT" status --porcelain=v1 -z -uall > "$status_file" 2>/dev/null; then
@@ -1535,8 +1535,8 @@ playbot_first_unignored_dirty_path() {
     path=${record:3}
     case "$status" in
       R*|C*|*R|*C)
-        IFS= read -r -d '' -u 3 renamed_from || { rm -f -- "$status_file"; return 2; }
-        [ -n "$renamed_from" ] || { rm -f -- "$status_file"; return 2; }
+        IFS= read -r -d '' -u 3 renamed_from || { malformed=1; break; }
+        [ -n "$renamed_from" ] || { malformed=1; break; }
         ;;
     esac
     if [ "$status" = '??' ]; then
@@ -1553,6 +1553,7 @@ playbot_first_unignored_dirty_path() {
     break
   done 3< "$status_file"
   rm -f -- "$status_file"
+  [ "$malformed" -eq 0 ] || return 2
   printf '%s\n' "$first"
 }
 
