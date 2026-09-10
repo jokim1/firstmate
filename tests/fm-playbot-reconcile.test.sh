@@ -263,6 +263,23 @@ grep -Fq 'deny-permissions-outside-approved-roots' "$STATE/rc-deny-grant.status"
 pass "out-of-root structured filesystem grant is refused and left pending"
 
 cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[{"itemId":"change-in-root","files":[{"path":"assets/hero.png"}]}],"approvalRequests":[{"id":"file-change-in-root","method":"item/fileChange/requestApproval","params":{"itemId":"change-in-root"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-file-change thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-file-change 0 >/dev/null || fail "in-root file-change reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an in-root file-change proposal must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].request.response.decision')" = accept ] || fail "an in-root file-change proposal must be accepted for one request only"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[{"itemId":"change-outside-root","files":[{"path":"/tmp/playbot-escape"}]}],"approvalRequests":[{"id":"file-change-outside-root","method":"item/fileChange/requestApproval","params":{"itemId":"change-outside-root"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[{"channel":"threads:respondToApproval","request":{"threadId":"thread-pending","requestId":"file-change-in-root","response":{"decision":"accept"}}}]}
+EOF
+run_fixture_reconcile rc-file-change 0 >/dev/null || fail "second file-change reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an out-of-root second proposal must stay pending without another IPC response"
+grep -Fq 'blocked: Playbot approval request file-change-outside-root left pending by deny-file-change-outside-worktree' "$STATE/rc-file-change.status" || fail "the out-of-root second proposal must append a request-specific blocked status"
+[ "$(wc -l < "$STATE/rc-file-change.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "each file-change proposal must be validated and journaled independently"
+pass "file-change proposals are accepted once and independently revalidated"
+
+cat > "$APPROVAL_STATE" <<EOF
 {"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[{"id":"unknown-question","method":"item/tool/requestUserInput","params":{"questions":[{"header":"Choice","question":"Which direction?"}]}}],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
 EOF
 write_task_fixture rc-user-input thread-pending workspace-pending worktrees/pending ship

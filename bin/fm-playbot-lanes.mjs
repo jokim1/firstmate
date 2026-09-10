@@ -1742,8 +1742,8 @@ export function decidePlaybotPendingRequest(kind, request, snapshot, options = {
       if (!paths || !paths.every((item) => policyPathWithin(worktree, canonicalPolicyPath(resolve(worktree, item))))) {
         return leavePending('deny-file-change-outside-worktree');
       }
-      return respond('allow-in-worktree-file-change-session', 'threads:respondToApproval', {
-        decision: 'acceptForSession'
+      return respond('allow-in-worktree-file-change', 'threads:respondToApproval', {
+        decision: 'accept'
       });
     }
     return leavePending('deny-unknown-approval-method');

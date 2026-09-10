@@ -32,6 +32,7 @@ Covered guarantees:
 - a worker result over 32 KiB is copied with `truncated=true` plus the full-source hash; a scout report over 1 MiB produces a static failure event with no truncated copy (amendment 4A).
 - the CDP transport rejects every pending request on close, error, and timeout, skips dead targets, and serializes channel/payload only as JSON inside the fixed invoke bridge.
 - a fake Playbot snapshot/response IPC server proves an in-root structured filesystem grant is session-approved, while every command request and an out-of-root structured grant stay pending with one journal record and one `blocked:` status.
+- an in-root file-change proposal receives only the single-request `accept` decision, then a second out-of-root proposal is independently validated, journaled, and left pending.
 - repeat reconciliation journals one unchanged command request only once without answering it, and a known-safe Playbot asset-generation elicitation passes through `threads:respondToMcpElicitation` with session persistence.
 - the approval responder processes at most four new requests per poll, denies unknown user-input and MCP requests by default, and exposes only the two required response operations.
 - the MCP server exposes `health` only until per-thread caller identity is proven, denies task-data tools with the phase marker, and exposes no mutation tools.
