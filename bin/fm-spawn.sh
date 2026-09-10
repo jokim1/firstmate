@@ -937,8 +937,9 @@ parse_orca_worktree_result() {
 }
 
 # Playbot 7-state dispatch (plan v3 §3.4): prepared->created->thread-created->
-# meta-published->submitted->accepted->worker-started. Same-id re-enters pre-meta
-# txn under spawn locks (V2SIM-4); slug embeds task id (V2SIM-5).
+# meta-published->submitted->accepted->worker-started. Same-id re-enters an
+# incomplete transaction under spawn locks, including worker-started when its
+# task record is missing (V2SIM-4); slug embeds task id (V2SIM-5).
 playbot_txn_path() { printf '%s/.playbot-dispatch/%s.txn' "$STATE" "$1"; }
 playbot_txn_get() { grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2-; }
 playbot_txn_write() {  # <state>
@@ -3147,7 +3148,8 @@ EOF
     ;;
   playbot)
     # Playbot owns workspace + thread; treehouse is never invoked (plan v3 §3.4).
-    # Re-entry: same-id spawn resumes an orphaned pre-meta txn (V2SIM-4).
+    # Re-entry: same-id spawn resumes an incomplete transaction, including a
+    # worker-started transaction whose task record is missing (V2SIM-4).
     playbot_dispatch_transaction || exit 1
     ;;
 esac
