@@ -56,12 +56,12 @@ Operator contract: write denial must be explicitly proved; read allowance does n
 
 Build threads keep Playbot's `default` approval posture and the Codex sandbox.
 When reconciliation observes `pending_input`, it reads that exact thread's snapshot and applies the data policy exported as `PLAYBOT_APPROVAL_POLICY`.
-The policy session-allows commands whose working directory and referenced paths remain in the task worktree, filesystem grants confined to the worktree, the platform Godot user directory, or the uv cache, and Playbot asset-generation confirmations whose targets remain in the worktree.
-Out-of-worktree paths, network approvals, commands with recognized network clients, unknown approval methods, arbitrary user input, and unknown MCP elicitations remain pending and append a `blocked:` status for firstmate.
+The policy session-allows only Godot commands and offline uv commands whose executable resolves outside the worktree and whose working directory and arguments remain within the authorized roots, filesystem grants confined to the worktree, the platform Godot user directory, or the uv cache, and Playbot asset-generation confirmations whose targets remain in the worktree.
+Shell interpreters, code-evaluation forms, worktree scripts, out-of-worktree paths, network approvals, unknown approval methods, arbitrary user input, and unknown MCP elicitations remain pending and append a `blocked:` status for firstmate.
 Each new decision is recorded with the bounded request text in the mode-0600 `state/<id>.playbot-approvals.jsonl` journal.
 The outbox retains a bounded fingerprint cursor, so an unchanged request is neither answered nor reported twice.
-Each poll examines at most four new requests and uses only `threads:respondToApproval`, `threads:respondToUserInput`, and `threads:respondToMcpElicitation` to answer them.
-Those three response operations deliberately do not have separate per-operation mutation-evidence entries.
+Each poll examines at most four new requests and uses only `threads:respondToApproval` and `threads:respondToMcpElicitation` to answer them.
+Those two response operations deliberately do not have separate per-operation mutation-evidence entries.
 Before reading or answering a pending request, the responder requires the release's verified `threads:send` evidence and confinement write-denial proof; an uncertified release still refuses with `PHASE1-EVIDENCE-REQUIRED`.
 The response calls are limited to request IDs returned by that exact existing thread's snapshot, cannot create or retarget a workspace, and do not change the thread's sandbox posture, so the certified native-thread and confinement gates remain the fail-closed boundary.
 This native responder replaces the prior computer-use approval loop without changing launch posture or relaxing gate 8.

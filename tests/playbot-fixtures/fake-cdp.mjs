@@ -171,11 +171,9 @@ if (scenario === 'ws-approvals') {
       if (state.consumeResponses !== false) {
         const field = channel === 'threads:respondToApproval'
           ? 'approvalRequests'
-          : channel === 'threads:respondToUserInput'
-            ? 'userInputRequests'
-            : channel === 'threads:respondToMcpElicitation'
-              ? 'mcpElicitationRequests'
-              : null;
+          : channel === 'threads:respondToMcpElicitation'
+            ? 'mcpElicitationRequests'
+            : null;
         if (field) {
           state.snapshot[field] = state.snapshot[field].filter((item) => item.id !== request?.requestId);
           const remaining = state.snapshot.approvalRequests.length

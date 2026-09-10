@@ -202,7 +202,6 @@ writeFileSync(resolve(target, 'fixture-app.asar'), [
   'workspace:delete',
   'threads:getSnapshot',
   'threads:respondToApproval',
-  'threads:respondToUserInput',
   'threads:respondToMcpElicitation',
   'electronAPI',
   'ipcRenderer.invoke'

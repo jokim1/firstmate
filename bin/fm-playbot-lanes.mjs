@@ -90,7 +90,6 @@ export const MUTATION_OPERATIONS = Object.freeze([
 
 export const APPROVAL_RESPONSE_OPERATIONS = Object.freeze([
   'threads:respondToApproval',
-  'threads:respondToUserInput',
   'threads:respondToMcpElicitation'
 ]);
 
@@ -110,12 +109,30 @@ export const PLAYBOT_APPROVAL_POLICY = Object.freeze({
     permissions: 'item/permissions/requestApproval'
   }),
   allowedFilesystemRoots: Object.freeze(['worktree', 'godot-user-dir', 'uv-cache']),
-  allowedExecutableRoots: Object.freeze(['/bin', '/usr/bin', '/usr/local/bin', '/opt/homebrew/bin']),
-  allowedSpecialPaths: Object.freeze(['/dev/null']),
-  deniedNetworkCommands: Object.freeze([
-    'curl', 'wget', 'nc', 'netcat', 'ssh', 'scp', 'sftp', 'ftp', 'telnet'
+  allowedExecutables: Object.freeze({
+    godot: Object.freeze({
+      paths: Object.freeze([
+        '/Applications/Godot.app/Contents/MacOS/Godot',
+        '/opt/homebrew/bin/godot',
+        '/usr/local/bin/godot',
+        '/usr/bin/godot'
+      ]),
+      requiredFlags: Object.freeze([])
+    }),
+    uv: Object.freeze({
+      paths: Object.freeze([
+        '$HOME/.local/bin/uv',
+        '/opt/homebrew/bin/uv',
+        '/usr/local/bin/uv',
+        '/usr/bin/uv'
+      ]),
+      requiredFlags: Object.freeze(['--offline'])
+    })
+  }),
+  forbiddenCommandNames: Object.freeze([
+    'sh', 'bash', 'zsh', 'dash', 'eval', 'exec', 'source', 'xargs', 'env', 'nohup'
   ]),
-  safeUserInputConfirmations: Object.freeze([]),
+  forbiddenCommandTokens: Object.freeze(['-c', '-e']),
   safeMcpElicitations: Object.freeze([
     Object.freeze({
       serverName: 'playbot',
@@ -294,7 +311,7 @@ export const COMPATIBILITY_MANIFEST_SEED = {
     }),
     // 0.104.0 keeps the 0.94.0/0.101.0 native-lane contract. Direct app.asar
     // inspection (SHA-256 3facfec8...) confirmed the same seven lifecycle
-    // channels plus snapshot and three approval-response channels; legacy
+    // channels plus snapshot and two approval-response channels; legacy
     // workspace:create / threads:openThread / db:workspaceThreads:open remain
     // absent. Additive multi-agent surfaces
     // (threads:fetchSubAgentThread, multi_agent flags) do not replace a lane
@@ -323,7 +340,7 @@ export const COMPATIBILITY_MANIFEST_SEED = {
     }),
     // 0.106.0 keeps the 0.94.0/0.101.0/0.104.0 native-lane contract. Direct
     // app.asar inspection (SHA-256 28498b58...) confirmed the same seven
-    // lifecycle channels plus snapshot and three approval-response channels;
+    // lifecycle channels plus snapshot and two approval-response channels;
     // legacy workspace:create / threads:openThread /
     // db:workspaceThreads:open remain absent. Additive
     // multi-agent surfaces do not replace a lane dependency. Release 0.105.0
@@ -351,7 +368,7 @@ export const COMPATIBILITY_MANIFEST_SEED = {
     }),
     // 0.107.0 keeps the 0.94.0/0.101.0/0.104.0/0.106.0 native-lane contract.
     // Direct app.asar inspection (SHA-256 73e16bfe...) confirmed the same seven
-    // lifecycle channels plus snapshot and three approval-response channels;
+    // lifecycle channels plus snapshot and two approval-response channels;
     // legacy workspace:create / threads:openThread /
     // db:workspaceThreads:open remain absent. 0.107.0 adds
     // the GPT 6 Astra execution model (gpt-6-astra) as the default and carries
@@ -1648,25 +1665,6 @@ function approvalFilesystemRoots(worktree, env = process.env, policy = PLAYBOT_A
   return policy.allowedFilesystemRoots.flatMap((kind) => rootsByKind[kind] ?? []).map(canonicalPolicyPath);
 }
 
-function expandKnownCommandPaths(text, env = process.env) {
-  const home = env.HOME ?? homedir();
-  let expanded = String(text)
-    .replaceAll('${HOME}', home)
-    .replaceAll('$HOME', home)
-    .replace(/(^|[\s=])~(?=$|[\s/])/g, `$1${home}`);
-  if (env.UV_CACHE_DIR) {
-    expanded = expanded
-      .replaceAll('${UV_CACHE_DIR}', env.UV_CACHE_DIR)
-      .replaceAll('$UV_CACHE_DIR', env.UV_CACHE_DIR);
-  }
-  if (env.GODOT_USER_HOME) {
-    expanded = expanded
-      .replaceAll('${GODOT_USER_HOME}', env.GODOT_USER_HOME)
-      .replaceAll('$GODOT_USER_HOME', env.GODOT_USER_HOME);
-  }
-  return expanded;
-}
-
 function commandWords(command) {
   if (Array.isArray(command)) {
     return command.every((part) => typeof part === 'string') ? command : null;
@@ -1716,73 +1714,54 @@ function commandText(command) {
   return null;
 }
 
-function commandHasUnknownNetwork(command, policy = PLAYBOT_APPROVAL_POLICY) {
+function commandHasUnknownNetwork(command) {
   const text = commandText(command);
-  const words = commandWords(command);
-  if (!text || !words) return true;
-  if (/(?:https?|ftp|ssh):\/\//i.test(text)) return true;
-  const names = words.map((word) => basename(word).toLowerCase());
-  if (names.some((name) => policy.deniedNetworkCommands.includes(name))) return true;
-  for (let index = 0; index < names.length; index += 1) {
-    const name = names[index];
-    const next = names[index + 1] ?? '';
-    if (name === 'git' && ['clone', 'fetch', 'pull', 'push', 'ls-remote'].includes(next)) return true;
-    if (['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3'].includes(name)
-        && ['add', 'install', 'publish', 'update', 'upgrade'].includes(next)) return true;
-    if (name === 'uv' && ['add', 'publish', 'sync'].includes(next) && !names.includes('--offline')) return true;
-    if (name === 'uv' && next === 'pip' && names.includes('install') && !names.includes('--offline')) return true;
-  }
-  return false;
+  return !text || /(?:https?|ftp|ssh):\/\//i.test(text);
 }
 
-function replaceAllowedPath(text, allowed, replacement) {
-  let cursor = 0;
-  let result = '';
-  while (cursor < text.length) {
-    const index = text.indexOf(allowed, cursor);
-    if (index < 0) return result + text.slice(cursor);
-    const next = text[index + allowed.length];
-    if (next === undefined || /[/\\\s'"`;|&<>(){},]/.test(next)) {
-      result += text.slice(cursor, index) + replacement;
-      cursor = index + allowed.length;
-      if (next === '/' || next === '\\') {
-        while (cursor < text.length && !/[\s'"`;|&<>(){},]/.test(text[cursor])) cursor += 1;
-      }
-    } else {
-      result += text.slice(cursor, index + allowed.length);
-      cursor = index + allowed.length;
-    }
+function resolveCommandExecutable(executable, cwd, env = process.env) {
+  const candidates = isAbsolute(executable) || executable.includes('/') || executable.includes('\\')
+    ? [resolve(cwd, executable)]
+    : String(env.PATH ?? '').split(delimiter).filter(Boolean).map((directory) => resolve(directory, executable));
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      return canonicalPolicyPath(candidate);
+    } catch {}
   }
-  return result;
+  return null;
 }
 
-function commandPathsAllowed(command, cwd, worktree, env = process.env, policy = PLAYBOT_APPROVAL_POLICY) {
+function allowedExecutablePaths(executablePolicy, env = process.env) {
+  const home = env.HOME ?? homedir();
+  return executablePolicy.paths.map((candidate) => (
+    canonicalPolicyPath(candidate === '$HOME' || candidate.startsWith('$HOME/')
+      ? resolve(home, candidate.slice('$HOME/'.length))
+      : candidate)
+  ));
+}
+
+function commandAllowed(command, cwd, worktree, env = process.env, policy = PLAYBOT_APPROVAL_POLICY) {
   const raw = commandText(command);
   const words = commandWords(command);
   if (!raw || !words || /[\r\n\0]/.test(raw)) return false;
-  let text = expandKnownCommandPaths(raw, env);
-  if (/\$|`|\.\.(?:[/\\]|$)/.test(text)) return false;
-  const roots = approvalFilesystemRoots(worktree, env, policy);
-  const replacements = [...roots, ...policy.allowedSpecialPaths]
-    .flatMap((root) => [root, root.replaceAll(' ', '\\ ')])
-    .sort((left, right) => right.length - left.length);
-  for (const allowed of replacements) {
-    text = replaceAllowedPath(text, allowed, '__FIRSTMATE_ALLOWED_PATH__');
-  }
+  if (/[`|&;<>()]/.test(raw) || /(^|[^\\])[<>]/.test(raw) || /\$/.test(raw)) return false;
+  const names = words.map((word) => basename(word).toLowerCase());
+  if (names.some((name) => policy.forbiddenCommandNames.includes(name))) return false;
+  if (words.some((word) => policy.forbiddenCommandTokens.includes(word))) return false;
 
-  const executableIndex = words.findIndex((word) => word && ![';', '|', '&', '<', '>'].includes(word));
-  const executable = words[executableIndex];
-  if (executable && isAbsolute(executable)) {
-    const resolvedExecutable = canonicalPolicyPath(executable);
-    if (policy.allowedExecutableRoots.some((root) => policyPathWithin(root, resolvedExecutable))) {
-      text = text.replace(executable, '__FIRSTMATE_ALLOWED_EXECUTABLE__');
-    }
-  }
-  const absolutePaths = text.match(/\/(?:[^\s'"`;|&<>(){},]|\\ )+/g) ?? [];
-  if (absolutePaths.length > 0) return false;
-  return words.every((word, index) => {
-    if (index === executableIndex || !word || word.startsWith('-') || [';', '|', '&', '<', '>'].includes(word)) return true;
-    const candidate = resolve(cwd, word);
+  const executable = resolveCommandExecutable(words[0], cwd, env);
+  if (!executable || policyPathWithin(worktree, executable)) return false;
+  const executableName = basename(executable).toLowerCase();
+  const executablePolicy = policy.allowedExecutables[executableName];
+  if (!executablePolicy || !allowedExecutablePaths(executablePolicy, env).includes(executable)) return false;
+  if (executablePolicy.requiredFlags.some((flag) => !words.includes(flag))) return false;
+
+  const roots = approvalFilesystemRoots(worktree, env, policy);
+  return words.slice(1).every((word) => {
+    const value = word.startsWith('-') && word.includes('=') ? word.slice(word.indexOf('=') + 1) : word;
+    if (!value || value.startsWith('-')) return true;
+    const candidate = resolve(cwd, value);
     const canonical = canonicalPolicyPath(candidate);
     return roots.some((root) => policyPathWithin(root, canonical));
   });
@@ -1873,14 +1852,14 @@ export function decidePlaybotPendingRequest(kind, request, snapshot, options = {
   if (kind === 'approval') {
     const params = isPlainObject(request.params) ? request.params : {};
     if (request.method === policy.approvalMethods.command) {
-      if (params.networkApprovalContext || params.additionalPermissions || commandHasUnknownNetwork(params.command, policy)) {
+      if (params.networkApprovalContext || params.additionalPermissions || commandHasUnknownNetwork(params.command)) {
         return leavePending('deny-unknown-network');
       }
       if (typeof params.cwd !== 'string' || !policyPathWithin(worktree, canonicalPolicyPath(params.cwd))) {
         return leavePending('deny-command-cwd-outside-worktree');
       }
-      if (!commandPathsAllowed(params.command, params.cwd, worktree, env, policy)) {
-        return leavePending('deny-command-path-outside-approved-roots');
+      if (!commandAllowed(params.command, params.cwd, worktree, env, policy)) {
+        return leavePending('deny-command-outside-approved-boundary');
       }
       return respond('allow-in-worktree-command-session', 'threads:respondToApproval', { decision: 'acceptForSession' });
     }
@@ -1906,9 +1885,7 @@ export function decidePlaybotPendingRequest(kind, request, snapshot, options = {
   }
 
   if (kind === 'user-input') {
-    const safe = policy.safeUserInputConfirmations.find((confirmation) => confirmation.requestText === base.requestText);
-    if (!safe) return leavePending('deny-unknown-user-input');
-    return respond(safe.ruleId, 'threads:respondToUserInput', safe.response);
+    return leavePending('deny-unknown-user-input');
   }
 
   if (kind === 'mcp-elicitation') {

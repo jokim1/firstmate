@@ -103,12 +103,20 @@ console.log(eval(process.argv[2]));
 }
 
 run_fixture_reconcile() {
-  node --input-type=module - "$RECONCILE" "$1" "$2" <<'NODE'
+  node --input-type=module - "$RECONCILE" "$LANES" "$1" "$2" <<'NODE'
 import { pathToFileURL } from 'node:url';
 const reconcile = await import(pathToFileURL(process.argv[2]).href);
-const result = await reconcile.reconcileCheck(process.argv[3], {
-  checkKeyQueued: process.argv[4] === '1',
-  approvalOptions: { forSmoke: true }
+const lanes = await import(pathToFileURL(process.argv[3]).href);
+const policy = {
+  ...lanes.PLAYBOT_APPROVAL_POLICY,
+  allowedExecutables: {
+    godot: { paths: [`${process.env.APPROVAL_BIN}/godot`], requiredFlags: [] },
+    uv: { paths: [`${process.env.APPROVAL_BIN}/uv`], requiredFlags: ['--offline'] }
+  }
+};
+const result = await reconcile.reconcileCheck(process.argv[4], {
+  checkKeyQueued: process.argv[5] === '1',
+  approvalOptions: { forSmoke: true, policy }
 });
 for (const line of result.printed) process.stdout.write(`${line}\n`);
 process.exitCode = result.exitCode;
@@ -232,9 +240,15 @@ APPROVAL_CDP_PORT=$(cat "$TMP_ROOT/approval-cdp-port")
 [ -n "$APPROVAL_CDP_PORT" ] || fail "approval fake CDP server did not bind"
 printf '%s\n' "$APPROVAL_CDP_PORT" > "$FIX/DevToolsActivePort"
 PENDING_WORKTREE=$(cd "$FIX/worktrees/pending" && pwd -P)
+APPROVAL_BIN="$TMP_ROOT/approval-bin"
+mkdir -p "$APPROVAL_BIN"
+printf '#!/bin/sh\nexit 0\n' > "$APPROVAL_BIN/godot"
+printf '#!/bin/sh\nexit 0\n' > "$APPROVAL_BIN/uv"
+chmod 0700 "$APPROVAL_BIN/godot" "$APPROVAL_BIN/uv"
+export APPROVAL_BIN PATH="$APPROVAL_BIN:$PATH"
 
 cat > "$APPROVAL_STATE" <<EOF
-{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-command","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"touch generated.txt"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-command","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"godot --path $PENDING_WORKTREE"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
 EOF
 write_task_fixture rc-allow thread-pending workspace-pending worktrees/pending ship
 run_fixture_reconcile rc-allow 0 >/dev/null || fail "allow-listed command reconcile failed"
@@ -242,8 +256,8 @@ run_fixture_reconcile rc-allow 0 >/dev/null || fail "allow-listed command reconc
 [ "$(approval_state_field 'state.responses[0].channel')" = "threads:respondToApproval" ] || fail "the command must use respondToApproval"
 [ "$(approval_state_field 'state.responses[0].request.response.decision')" = "acceptForSession" ] || fail "the command must be session-approved"
 [ "$(outbox_field rc-allow 'o.events.length')" = 0 ] || fail "an answered command must not emit an input-request event"
-grep -Fq 'touch generated.txt' "$STATE/rc-allow.playbot-approvals.jsonl" || fail "the approval journal must retain the answered request text"
-pass "allow-listed in-worktree command is session-approved over Playbot IPC and journaled"
+grep -Fq 'godot --path' "$STATE/rc-allow.playbot-approvals.jsonl" || fail "the approval journal must retain the answered request text"
+pass "allow-listed Godot command is session-approved over Playbot IPC and journaled"
 
 cat > "$APPROVAL_STATE" <<EOF
 {"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-write","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"touch /tmp/playbot-escape"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
@@ -266,6 +280,53 @@ grep -Fq 'deny-unknown-network' "$STATE/rc-deny-network.status" || fail "unknown
 pass "unknown network access is refused and left pending"
 
 cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-shell-write","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"sh -c 'cd /; touch tmp/playbot-escape'"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-deny-shell-write thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-deny-shell-write 0 >/dev/null || fail "nested-shell write refusal reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a nested-shell out-of-worktree write must stay pending"
+grep -Fq 'deny-command-outside-approved-boundary' "$STATE/rc-deny-shell-write.status" || fail "the nested-shell write must append a policy-specific blocked status"
+pass "nested-shell out-of-worktree write bypass is refused and left pending"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-shell-network","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"sh -c 'curl unknown.example'"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-deny-shell-network thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-deny-shell-network 0 >/dev/null || fail "nested-shell network refusal reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a nested-shell unknown network request must stay pending"
+grep -Fq 'deny-command-outside-approved-boundary' "$STATE/rc-deny-shell-network.status" || fail "the nested-shell network request must append a policy-specific blocked status"
+pass "nested-shell unknown network bypass is refused and left pending"
+
+printf '#!/bin/sh\nexit 0\n' > "$PENDING_WORKTREE/godot"
+chmod 0700 "$PENDING_WORKTREE/godot"
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-worktree-script","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"$PENDING_WORKTREE/godot --path $PENDING_WORKTREE"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-deny-worktree-script thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-deny-worktree-script 0 >/dev/null || fail "worktree-script refusal reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a script inside the worktree must stay pending"
+grep -Fq 'deny-command-outside-approved-boundary' "$STATE/rc-deny-worktree-script.status" || fail "a worktree script must append a policy-specific blocked status"
+pass "scripts inside the worktree are refused as approval executables"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-grant","method":"item/permissions/requestApproval","params":{"permissions":{"fileSystem":{"read":["$PENDING_WORKTREE"],"write":["$PENDING_WORKTREE/assets"]}}}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-allow-grant thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-allow-grant 0 >/dev/null || fail "in-root structured grant reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an in-root structured grant must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].request.response.scope')" = session ] || fail "an in-root structured grant must be approved for the session"
+pass "in-root structured filesystem grant is session-approved"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-grant","method":"item/permissions/requestApproval","params":{"permissions":{"fileSystem":{"write":["/tmp/playbot-escape"]}}}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-deny-grant thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-deny-grant 0 >/dev/null || fail "out-of-root structured grant reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an out-of-root structured grant must stay pending"
+grep -Fq 'deny-permissions-outside-approved-roots' "$STATE/rc-deny-grant.status" || fail "an out-of-root structured grant must append a policy-specific blocked status"
+pass "out-of-root structured filesystem grant is refused and left pending"
+
+cat > "$APPROVAL_STATE" <<EOF
 {"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[{"id":"unknown-question","method":"item/tool/requestUserInput","params":{"questions":[{"header":"Choice","question":"Which direction?"}]}}],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
 EOF
 write_task_fixture rc-user-input thread-pending workspace-pending worktrees/pending ship
@@ -275,7 +336,7 @@ grep -Fq 'deny-unknown-user-input' "$STATE/rc-user-input.status" || fail "unknow
 pass "unknown user input is never guessed and stays pending for firstmate"
 
 cat > "$APPROVAL_STATE" <<EOF
-{"consumeResponses":false,"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-once","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"pwd"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+{"consumeResponses":false,"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-once","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"uv --offline run tool.py"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
 EOF
 write_task_fixture rc-idempotent thread-pending workspace-pending worktrees/pending ship
 run_fixture_reconcile rc-idempotent 1 >/dev/null || fail "first idempotence reconcile failed"
