@@ -376,9 +376,18 @@ export async function reconcileCheck(taskId, options = {}) {
 
   // Stage 4: dedupe against the outbox, then atomically record new pending
   // events before any output.
+  const newlyUnhandledFingerprints = approvalResult.decisions
+    .filter((decision) => decision.disposition === 'leave-pending')
+    .map((decision) => decision.fingerprint);
+  const unexplainedPendingTransition = approvalResult.unhandledPending
+    && newlyUnhandledFingerprints.length === 0
+    && outbox.lastObservedStatus !== pendingInputSpec;
+  const inputRequestFingerprints = unexplainedPendingTransition
+    ? [...newlyUnhandledFingerprints, null]
+    : newlyUnhandledFingerprints;
   let lockPid = null;
   let lockIdentity = null;
-  if (newTurns.length > 0 || (approvalResult.unhandledPending && outbox.lastObservedStatus !== pendingInputSpec)) {
+  if (newTurns.length > 0 || inputRequestFingerprints.length > 0) {
     try {
       lockPid = readFileSync(resolve(stateDir, '.lock'), 'utf8').trim();
       lockIdentity = capturePidIdentity(lockPid, env);
@@ -416,15 +425,17 @@ export async function reconcileCheck(taskId, options = {}) {
     outbox.knownTurnIds.push(turn.turnId);
   }
 
-  if (approvalResult.unhandledPending && outbox.lastObservedStatus !== pendingInputSpec) {
+  for (const requestFingerprint of inputRequestFingerprints) {
     const basisTurn = mapped.rollout.latestCompletion?.turnId ?? 'none';
     const kind = 'input-request';
-    const id = eventKey({ taskId, spawnGen, workerThreadId: threadId, turnId: basisTurn, kind });
+    const eventBasis = requestFingerprint ?? basisTurn;
+    const id = eventKey({ taskId, spawnGen, workerThreadId: threadId, turnId: eventBasis, kind });
     if (!outbox.events.some((event) => event.id === id)) {
       newEvents.push({
         id,
         kind,
         turnId: basisTurn,
+        approvalRequestFingerprint: requestFingerprint,
         workerThreadId: threadId,
         state: 'pending',
         createdAt: new Date().toISOString(),

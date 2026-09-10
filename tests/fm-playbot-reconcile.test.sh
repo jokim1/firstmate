@@ -254,6 +254,20 @@ run_fixture_reconcile rc-allow-grant 0 >/dev/null || fail "in-root structured gr
 pass "in-root structured filesystem grant is turn-scoped"
 
 cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"command-after-grant","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"uv --offline run tool.py"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[{"channel":"threads:respondToApproval","request":{"threadId":"thread-pending","requestId":"allow-grant","response":{"permissions":{"fileSystem":{"read":["$PENDING_WORKTREE"],"write":["$PENDING_WORKTREE/assets"]}},"scope":"turn"}}}]}
+EOF
+OUT=$(run_fixture_reconcile rc-allow-grant 0) || fail "new command after safe grant reconcile failed"
+[ "$(outbox_field rc-allow-grant 'o.events.length')" = 1 ] || fail "a new blocked request must create an input-request event without a status transition"
+[ "$(outbox_field rc-allow-grant 'o.events[0].kind')" = input-request ] || fail "the new blocked request must create an input-request event"
+REQUEST_FP=$(outbox_field rc-allow-grant 'o.events[0].approvalRequestFingerprint')
+[ "${#REQUEST_FP}" = 64 ] || fail "the input-request event must retain its blocked request fingerprint"
+[ "$(printf '%s\n' "$OUT" | grep -c '^playbot-event ')" = 1 ] || fail "the new blocked request must print one static wake pointer"
+run_fixture_reconcile rc-allow-grant 1 >/dev/null || fail "repeat new command reconcile failed"
+[ "$(outbox_field rc-allow-grant 'o.events.length')" = 1 ] || fail "a repeat poll of the same blocked request must not duplicate its event"
+[ "$(wc -l < "$STATE/rc-allow-grant.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "the safe grant and later blocked command must each be journaled once"
+pass "new blocked fingerprints wake once while status remains pending"
+
+cat > "$APPROVAL_STATE" <<EOF
 {"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-grant","method":"item/permissions/requestApproval","params":{"permissions":{"fileSystem":{"write":["/tmp/playbot-escape"]}}}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
 EOF
 write_task_fixture rc-deny-grant thread-pending workspace-pending worktrees/pending ship
