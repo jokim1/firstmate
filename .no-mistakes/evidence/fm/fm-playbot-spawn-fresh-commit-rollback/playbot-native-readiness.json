@@ -1,0 +1,7 @@
+{
+  "capability": "native",
+  "ready": false,
+  "operatingState": "phase1-evidence-required",
+  "mutationsEnabled": false,
+  "reason": "PHASE1-EVIDENCE-REQUIRED: native dispatch awaits evidence for workspace:create, threads:openThread, threads:send, threads:stop, threads:archiveThread, workspace:delete"
+}

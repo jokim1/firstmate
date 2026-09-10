@@ -1,0 +1,28 @@
+ok - doctor is read-only green on the compatible 0.90 fixture with mutations disabled
+ok - unknown Playbot release fails closed
+ok - malformed application schema fails closed
+ok - exact resolution works and multi-root ambiguity refuses
+ok - strict JSONL parsing accepts a real completion and rejects the forged worker-text fixture
+ok - composer/busy/agent-state vocabularies hold, with Playbot absence never guessed dead
+ok - ready/mutation gates refuse with PHASE1-EVIDENCE-REQUIRED and conservative defaults
+ok - well-formed meta + bound route + live DB conjunction validates
+ok - tampered generation and wrong-mode route records fail closed
+ok - bind-project binds exactly once and refuses duplicates
+ok - bind-controller mints generation-bound mode-0600 leases and refuses without the lock
+ok - MCP serves health only, denies task-data tools without proven identity, and exposes no mutation surface
+ok - connect refusal reports not-ok with an error
+ok - malformed version response rejected
+ok - missing websocket identity rejected
+ok - malformed target enumeration rejected
+ok - dead target skipped, live second target selected
+ok - bounded Runtime.evaluate round trip returns the renderer value
+ok - socket close after open rejects the pending command
+ok - stalled socket is bounded by its own command timer
+ok - stall rejected fast, not at the 5s default
+ok - invoke bridge JSON-serializes hostile payload bytes into inert data
+ok - malformed IPC channel refused before evaluation
+cdp-transport: all scenarios passed
+ok - CDP transport rejects on close/timeout, skips dead targets, and serializes payloads safely
+ok - mutation evidence records, hash integrity, shape parsers, and write-denial confinement gate hold offline
+ok - fused threads:launch releases certify 0.104.0, preserve full-access approval, reject caller thread ids, and require a provisioned worktree path
+fm-playbot-lanes: all tests passed
