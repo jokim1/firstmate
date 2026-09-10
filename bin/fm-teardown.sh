@@ -57,10 +57,11 @@
 # before every ordinary destructive worktree return or removal: each Treehouse
 # return attempt (including lock retries) and Playbot workspace deletion after
 # endpoint archival or confirmed absence. For backend=playbot only, Playbot-owned
-# app churn under addons/playbot/**, project.godot, and .fm/** is printed and
-# ignored by the uncommitted-change gate; every other uncommitted path still
-# refuses. Other backends keep the ordinary dirty-worktree rule. Uncommitted
-# changes are never landed.
+# app churn under addons/playbot/**, registration-only project.godot changes,
+# and the adapter's exact courier marker is printed and ignored by the
+# uncommitted-change gate; every other uncommitted path still refuses. Other
+# backends keep the ordinary dirty-worktree rule. Uncommitted changes are never
+# landed.
 # A missing pr= still discovers a merged PR by branch when possible so
 # yolo/no-CI merges are not false-refused. local-only keeps the existing merge-to-
 # local-default carveout when there is no remote.
@@ -1418,9 +1419,32 @@ playbot_retire_retention_receipt() {
 
 playbot_owned_churn_path() {  # <repo-relative-path>
   case "${1:-}" in
-    addons/playbot|addons/playbot/*|project.godot|.fm|.fm/*) return 0 ;;
+    addons/playbot|addons/playbot/*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+playbot_project_registration_only() {
+  local diff line content saw_playbot=0
+  diff=$(git -C "$WT" --no-pager diff --no-ext-diff --unified=0 HEAD -- project.godot 2>/dev/null) \
+    || return 1
+  [ -n "$diff" ] || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      '+++ '*|'--- '*|'@@ '*) continue ;;
+      +*|-*)
+        content=${line#?}
+        case "$content" in
+          *addons/playbot*) saw_playbot=1 ;;
+          ''|'[editor_plugins]'|'[autoload]'|enabled=*) ;;
+          *) return 1 ;;
+        esac
+        ;;
+    esac
+  done <<EOF
+$diff
+EOF
+  [ "$saw_playbot" -eq 1 ]
 }
 
 dirty_status_path() {  # <git-status-porcelain-line>
@@ -1438,13 +1462,17 @@ dirty_status_path() {  # <git-status-porcelain-line>
 
 playbot_first_unignored_dirty_path() {  # <porcelain-status>
   local line path first=
+  fm_backend_source playbot || true
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     path=$(dirty_status_path "$line")
     case "$line" in
       '?? .claude/'*|'?? .fm-grok-turnend'|'?? .fm-kimi-turnend') continue ;;
     esac
-    if playbot_owned_churn_path "$path"; then
+    if playbot_owned_churn_path "$path" \
+       || { [ "$path" = project.godot ] && playbot_project_registration_only; } \
+       || { [ -n "${FM_PLAYBOT_COURIER_MARKER_PATH:-}" ] \
+            && [ "$path" = "$FM_PLAYBOT_COURIER_MARKER_PATH" ]; }; then
       printf 'playbot-owned churn ignored: %s\n' "$path" >&2
       continue
     fi

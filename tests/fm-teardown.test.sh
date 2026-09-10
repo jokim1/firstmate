@@ -3161,19 +3161,37 @@ clear_playbot_lane_fixture_env() {
     FM_PLAYBOT_TEST_AGENT_STATE FM_PLAYBOT_TEST_DELETE_MODE
 }
 
+seed_playbot_project() {  # <case-dir>
+  local case_dir=$1
+  printf '%s\n' \
+    'config_version=5' \
+    '[application]' \
+    'config/name="Fixture"' \
+    '[editor_plugins]' \
+    'enabled=PackedStringArray("res://addons/other/plugin.cfg")' \
+    > "$case_dir/wt/project.godot"
+  git -C "$case_dir/wt" add project.godot
+  wt_commit "$case_dir" "seed Godot project"
+  git -C "$case_dir/project" merge -q --ff-only fm/task-x1
+  git -C "$case_dir/project" push -q origin main
+}
+
 add_playbot_owned_churn() {  # <case-dir>
   local case_dir=$1
   mkdir -p "$case_dir/wt/addons/playbot/bin" "$case_dir/wt/.fm"
   printf '%s\n' plugin > "$case_dir/wt/addons/playbot/plugin.gd"
   printf '%s\n' native > "$case_dir/wt/addons/playbot/bin/native.dylib"
-  printf '%s\n' enabled > "$case_dir/wt/project.godot"
-  printf '%s\n' courier > "$case_dir/wt/.fm/courier-marker"
+  sed -i.bak 's#addons/other/plugin.cfg")#addons/other/plugin.cfg", "res://addons/playbot/plugin.cfg")#' \
+    "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+  printf '%s\n' 'done: complete' > "$case_dir/wt/.fm/status.log"
 }
 
 test_playbot_owned_churn_only_does_not_block_landed_teardown() {
   local case_dir rc
   case_dir=$(make_case playbot-owned-churn-allow)
   write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
   land_shippable_commit "$case_dir"
   add_playbot_owned_churn "$case_dir"
   write_playbot_lane_fixture "$case_dir" missing ok
@@ -3187,7 +3205,7 @@ test_playbot_owned_churn_only_does_not_block_landed_teardown() {
     "playbot-owned-churn-allow: ignored addon churn was not printed"
   assert_grep "playbot-owned churn ignored: project.godot" "$case_dir/stderr" \
     "playbot-owned-churn-allow: ignored project.godot churn was not printed"
-  assert_grep "playbot-owned churn ignored: .fm/courier-marker" "$case_dir/stderr" \
+  assert_grep "playbot-owned churn ignored: .fm/status.log" "$case_dir/stderr" \
     "playbot-owned-churn-allow: ignored courier churn was not printed"
   ! grep -q REFUSED "$case_dir/stderr" \
     || fail "playbot-owned-churn-allow: teardown refused Playbot-owned churn"
@@ -3198,6 +3216,7 @@ test_playbot_owned_churn_plus_real_edit_refuses() {
   local case_dir rc
   case_dir=$(make_case playbot-owned-churn-plus-real-edit)
   write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
   land_shippable_commit "$case_dir"
   add_playbot_owned_churn "$case_dir"
   mkdir -p "$case_dir/wt/src"
@@ -3214,10 +3233,48 @@ test_playbot_owned_churn_plus_real_edit_refuses() {
   pass "backend=playbot still refuses uncommitted paths outside Playbot-owned churn"
 }
 
+test_playbot_project_registration_plus_real_edit_refuses() {
+  local case_dir rc
+  case_dir=$(make_case playbot-project-real-edit-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak 's/config\/name="Fixture"/config\/name="Worker edit"/' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-project-real-edit-refuses: unrelated project setting must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-project-real-edit-refuses: refusal did not name project.godot"
+  pass "backend=playbot refuses project.godot changes beyond plugin registration"
+}
+
+test_playbot_stray_fm_file_refuses() {
+  local case_dir rc
+  case_dir=$(make_case playbot-stray-fm-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  printf '%s\n' worker > "$case_dir/wt/.fm/worker-notes.txt"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-stray-fm-refuses: stray .fm file must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: .fm/worker-notes.txt" "$case_dir/stderr" \
+    "playbot-stray-fm-refuses: refusal did not name the stray .fm file"
+  pass "backend=playbot refuses worker-owned files under .fm"
+}
+
 test_non_playbot_owned_churn_paths_still_refuse() {
   local case_dir rc
   case_dir=$(make_case non-playbot-owned-churn-refuses)
   write_meta "$case_dir" local-only ship
+  seed_playbot_project "$case_dir"
   land_shippable_commit "$case_dir"
   add_playbot_owned_churn "$case_dir"
 
@@ -4692,6 +4749,8 @@ test_empty_retry_wait_uses_default_without_aborting
 test_fractional_legacy_retry_wait_refuses_without_arithmetic_error
 test_playbot_owned_churn_only_does_not_block_landed_teardown
 test_playbot_owned_churn_plus_real_edit_refuses
+test_playbot_project_registration_plus_real_edit_refuses
+test_playbot_stray_fm_file_refuses
 test_non_playbot_owned_churn_paths_still_refuse
 test_playbot_workspace_record_gone_fallback_removes_worktree_without_receipt
 test_playbot_workspace_record_gone_fallback_failure_writes_receipt
