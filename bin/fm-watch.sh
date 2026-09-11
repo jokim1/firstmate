@@ -1863,7 +1863,66 @@ retire_merged_pr_poll() {  # <id>
   fi
 }
 
+refill_batch_endpoint_captured() {  # <file> <endpoints>
+  local wanted=$1 endpoints=$2 f surface_end surface_ident
+  while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+    [ -n "$f" ] || continue
+    [ "$f" = "$wanted" ] && return 0
+  done <<EOF
+$endpoints
+EOF
+  return 1
+}
+
+filter_refill_retry_pending() {  # <pending>
+  local batch=$1 sf sig f
+  while IFS=$(printf '\t') read -r sf sig f; do
+    [ -n "$sf" ] || continue
+    if [ -n "${REFILL_RETRY_ENDPOINTS:-}" ] \
+      && refill_batch_endpoint_captured "$f" "$REFILL_RETRY_ENDPOINTS"; then
+      continue
+    fi
+    printf '%s\t%s\t%s\n' "$sf" "$sig" "$f"
+  done <<EOF
+$batch
+EOF
+}
+
+finish_refill_batch() {  # <endpoints> <pending> <should-surface> <reason>
+  local endpoints=$1 batch=$2 should_surface=$3 batch_reason=$4
+  local sf sig f surface_end surface_ident
+  while IFS=$(printf '\t') read -r sf sig f; do
+    [ -n "$sf" ] || continue
+    case "$f" in
+      *.status)
+        if ! refill_batch_endpoint_captured "$f" "$endpoints"; then
+          fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
+        fi
+        if [ "$should_surface" -eq 1 ]; then
+          mark_surface_reported "$f" "$sig" || true
+        fi
+        ;;
+      *) printf '%s' "$sig" > "$sf" ;;
+    esac
+  done <<EOF
+$batch
+EOF
+  if [ "$should_surface" -eq 1 ]; then
+    while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+      [ -n "$f" ] || continue
+      mark_surfaced "$f" "$surface_end" "$surface_ident"
+    done <<EOF
+$endpoints
+EOF
+    wake "$batch_reason"
+  fi
+  wake "$FM_WAKE_REFILL_PAYLOAD"
+}
+
 resurface_after_downtime() {
+  if [ -n "${REFILL_RETRY_ENDPOINTS:-}" ]; then
+    return 0
+  fi
   # Handling successors already have a predecessor-delivered wake on the way.
   # Re-announcing from this cycle is what turned a lost handshake into an
   # unbounded recovery loop; stay in the poll loop and supervise instead.
@@ -1909,6 +1968,30 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   watcher_beat || true
+
+  if [ -n "${REFILL_RETRY_ENDPOINTS:-}" ]; then
+    refill_failed_endpoints=''
+    refill_stale_endpoint=0
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+    while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+      [ -n "$f" ] || continue
+      current_ident=$(_fm_open_decisions_file_ident "$f") || current_ident=''
+      if [ -z "$current_ident" ] || [ "$current_ident" != "$surface_ident" ]; then
+        refill_stale_endpoint=1
+      elif ! fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident"; then
+        refill_failed_endpoints="${refill_failed_endpoints}${f}"$'\t'"${surface_end}"$'\t'"${surface_ident}"$'\n'
+      fi
+    done <<EOF
+$REFILL_RETRY_ENDPOINTS
+EOF
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+    [ "$refill_stale_endpoint" -eq 0 ] || exit 1
+    REFILL_RETRY_ENDPOINTS=$refill_failed_endpoints
+    if [ -z "$REFILL_RETRY_ENDPOINTS" ]; then
+      finish_refill_batch "$REFILL_BATCH_ENDPOINTS" "$REFILL_RETRY_PENDING" \
+        "$REFILL_RETRY_SIGNAL_SHOULD_SURFACE" "$REFILL_RETRY_REASON"
+    fi
+  fi
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
@@ -2051,10 +2134,10 @@ while :; do
   # hook land seconds apart, and reporting them as separate actionable wakes
   # costs a full firstmate turn each. The re-scan also picks up a newer
   # signature for an already-pending file (last write wins below).
-  pending=$(scan_signals)
+  pending=$(filter_refill_retry_pending "$(scan_signals)")
   if [ -n "$pending" ]; then
     sleep "$SIGNAL_GRACE"
-    pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
+    pending=$(filter_refill_retry_pending "$(printf '%s\n%s' "$pending" "$(scan_signals)")")
     # The final coalesced signal set is the watcher-carried status-change
     # trigger for this home's published summary. Start it before either
     # surfacing or absorbing the signal, but never wait on it: see
@@ -2069,24 +2152,6 @@ while :; do
 $pending
 EOF
     reason="signal:$files"
-    # Capacity-freeing status transitions enqueue ONE advisory refill wake
-    # (deduped by kind at drain). Paused and resolved free capacity without
-    # being captain-relevant, so detect them here before the absorb decision.
-    # Working notes never free capacity and never enqueue refill.
-    need_refill=0
-    while IFS=$(printf '\t') read -r sf sig f; do
-      [ -n "$sf" ] || continue
-      case "$f" in *.status) ;; *) continue ;; esac
-      if status_frees_capacity "$(last_status_line "$f")"; then
-        need_refill=1
-        break
-      fi
-    done <<EOF
-$pending
-EOF
-    if [ "$need_refill" -eq 1 ]; then
-      fm_wake_enqueue_refill || exit 1
-    fi
     # Triage: a signal is ACTIONABLE when any of these holds (cheapest first):
     #   - the away-mode daemon owns triage (afk) and wants every wake;
     #   - any status file gained a captain-relevant event since it was last
@@ -2110,14 +2175,93 @@ EOF
     # checks are costly (a bounded no-mistakes call, then a pane capture), so the ||
     # ordering evaluates them ONLY for a non-afk signal with no captain-relevant
     # status span, and the capture only once the authoritative verdict comes up short.
-    # A refill-only signal (a capacity-freeing resolved:/paused: while the crew is
-    # still working) already enqueued its advisory refill wake above; it advances
-    # markers here without being treated as a spawn recommendation.
     FM_SIGNAL_SURFACE_ENDPOINTS=''
     FM_SIGNAL_NEEDS_DECISION_FILES=''
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
     signal_files_actionable $files
     signal_actionable=$?
+    # Evaluate AFTER classification so the refill predicate covers the same span
+    # whose endpoint later commits advance; classification does not move the seen
+    # offset. Paused and resolved free capacity without being captain-relevant.
+    # Working notes never free capacity. A refill-only signal (resolved:/paused:
+    # while the crew is still working) enqueues here, then advances markers below
+    # without being treated as a spawn recommendation.
+    need_refill=0
+    refill_classification_error=0
+    while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+      [ -n "$f" ] || continue
+      status_span_frees_capacity "$f" "$(fm_wake_signal_seen_size "$STATE" "$f")" \
+        "$surface_end" "$surface_ident"
+      refill_rc=$?
+      [ "$refill_rc" -eq 0 ] && need_refill=1
+      [ "$refill_rc" -eq 2 ] && refill_classification_error=1
+    done <<EOF
+$FM_SIGNAL_SURFACE_ENDPOINTS
+EOF
+    [ "$refill_classification_error" -eq 0 ] || continue
+    signal_should_surface=0
+    # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
+    if afk_present || [ "$signal_actionable" -eq 0 ] \
+      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
+      signal_should_surface=1
+    fi
+    if [ "$need_refill" -eq 1 ]; then
+      signal_publish_error=0
+      signal_failed_endpoints=''
+      signal_stale_endpoint=0
+      fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+      if [ "$signal_should_surface" -eq 1 ]; then
+        while IFS=$(printf '\t') read -r sf sig f; do
+          [ -n "$sf" ] || continue
+          file_reason="$reason"
+          case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
+          fm_wake_append_locked signal "$(basename "$f")" "$file_reason" \
+            || signal_publish_error=1
+        done <<EOF
+$pending
+EOF
+      fi
+      if [ "$signal_publish_error" -eq 0 ]; then
+        fm_wake_append_locked refill refill "$FM_WAKE_REFILL_PAYLOAD" \
+          || signal_publish_error=1
+      fi
+      # A capacity-freeing transition enqueues a refill when newly classified; a
+      # later turn-end or working: append never re-enqueues from a stale tail. In
+      # rare failure paths - a crash inside this publication window, or repeated
+      # marker-commit failure interrupted by an unrelated supervision wake - at
+      # most one duplicate ADVISORY refill can be published. Duplicates are
+      # deduped by kind at drain and are harmless; guaranteeing exactly-once
+      # would require durable transactional state at the shared queue boundary,
+      # which is deliberately out of scope.
+      if [ "$signal_publish_error" -eq 0 ]; then
+        while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+          [ -n "$f" ] || continue
+          current_ident=$(_fm_open_decisions_file_ident "$f") || current_ident=''
+          if [ -z "$current_ident" ] || [ "$current_ident" != "$surface_ident" ]; then
+            signal_stale_endpoint=1
+          elif ! fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident"; then
+            signal_failed_endpoints="${signal_failed_endpoints}${f}"$'\t'"${surface_end}"$'\t'"${surface_ident}"$'\n'
+          fi
+        done <<EOF
+$FM_SIGNAL_SURFACE_ENDPOINTS
+EOF
+      fi
+      fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+      [ "$signal_publish_error" -eq 0 ] || exit 1
+      [ "$signal_stale_endpoint" -eq 0 ] || exit 1
+      if [ -n "$signal_failed_endpoints" ]; then
+        # An unrelated wake can discard this in-memory retry under the advisory
+        # refill limitation stated at the publication boundary above.
+        REFILL_BATCH_ENDPOINTS=$FM_SIGNAL_SURFACE_ENDPOINTS
+        REFILL_RETRY_ENDPOINTS=$signal_failed_endpoints
+        REFILL_RETRY_PENDING=$pending
+        REFILL_RETRY_SIGNAL_SHOULD_SURFACE=$signal_should_surface
+        REFILL_RETRY_REASON=$reason
+        continue
+      fi
+      finish_refill_batch "$FM_SIGNAL_SURFACE_ENDPOINTS" "$pending" \
+        "$signal_should_surface" "$reason"
+    fi
     # A decision-owned file's queued row payload is marked "needs-decision:"
     # instead of the ordinary "signal:" below (other files in the same batch
     # keep the ordinary payload). The wake reason line itself, and every
@@ -2129,8 +2273,7 @@ EOF
     # passes it to handle_wake (see the comment above handle_wake in
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
-    if afk_present || [ "$signal_actionable" -eq 0 ] \
-      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
+    if [ "$signal_should_surface" -eq 1 ]; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         file_reason="$reason"
@@ -2164,14 +2307,6 @@ EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
       wake "$reason"
-    elif [ "$need_refill" -eq 1 ]; then
-      while IFS=$(printf '\t') read -r sf sig f; do
-        [ -n "$sf" ] || continue
-        printf '%s' "$sig" > "$sf"
-      done <<EOF
-$pending
-EOF
-      wake "$FM_WAKE_REFILL_PAYLOAD"
     else
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue

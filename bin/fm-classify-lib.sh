@@ -149,7 +149,7 @@ status_is_terminal_verb() {
 }
 
 # 0 if a status line's leading verb frees compute capacity and should enqueue
-# one advisory fleet refill wake (bin/fm-wake-lib.sh's fm_wake_enqueue_refill).
+# an advisory fleet refill wake (bin/fm-wake-lib.sh's fm_wake_enqueue_refill).
 # Covers completion and failure, blocked/paused/needs-decision, and decision
 # resolution. Working and other nonterminal progress never free capacity.
 # Distinct from status_is_captain_relevant: paused and resolved free capacity
@@ -164,6 +164,44 @@ status_frees_capacity() {
     done|failed|blocked|needs-decision|"$pause"|"$resolve") return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# 0 if any non-blank line in the bytes after <start-offset> frees capacity.
+# Used by the watcher to enqueue an advisory refill when a capacity-freeing
+# transition is newly classified, never because the file still ends in a
+# freeing verb after an unrelated turn-end or working: append.
+# Missing, unreadable, or symlink status files return 2 (unclassified).
+# A start at or past the captured endpoint is an empty span and returns 1.
+# Re-checks file identity after the span read (mirroring
+# status_span_first_actionable_record): a replaced inode mid-read returns 2
+# rather than classifying a mixed-identity span.
+status_span_frees_capacity() {  # <status-file> <start-offset> <end-offset> <identity>
+  local f=$1 start=${2:-0} end=${3:-} ident=${4:-} cur_ident scratch chunk_file line found=1
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 2
+  case "$end" in ''|*[!0-9]*) return 2 ;; esac
+  [ -n "$ident" ] || return 2
+  case "$start" in ''|*[!0-9]*) start=0 ;; esac
+  [ "$start" -le "$end" ] || start=0
+  [ "$start" -lt "$end" ] || return 1
+  cur_ident=$(_fm_open_decisions_file_ident "$f") || return 2
+  [ "$cur_ident" = "$ident" ] || return 2
+  scratch=$(_fm_status_span_scratch "$f") || return 2
+  chunk_file="${scratch}.refill"
+  _fm_status_read_span "$f" "$start" "$((end - start))" > "$chunk_file" 2>/dev/null \
+    || { rm -f "$chunk_file"; return 2; }
+  cur_ident=$(_fm_open_decisions_file_ident "$f") || {
+    rm -f "$chunk_file"; return 2;
+  }
+  [ "$cur_ident" = "$ident" ] || { rm -f "$chunk_file"; return 2; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    if status_frees_capacity "$line"; then
+      found=0
+      break
+    fi
+  done < "$chunk_file"
+  rm -f "$chunk_file"
+  return "$found"
 }
 
 # 0 if the given (last) status line matches a captain-relevant verb.
