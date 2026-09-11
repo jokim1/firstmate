@@ -1,0 +1,5 @@
+{
+  "run_id": "live-cli-validation",
+  "selection": "lane=portable-parallel-1",
+  "scripts": [{"path": "tests/live-validation.test.sh", "family": "pure-contract-unit", "duration_ms": 500000, "exit": 0, "gate_skip": false}]
+}

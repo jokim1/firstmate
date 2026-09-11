@@ -1,0 +1,34 @@
+CASE: documented live readings
+COMMAND: bin/fm-test-run.sh --check-parallel-drift --cap-ms 600000 --lane-timing portable-parallel-1 <documented-lane1.json> --lane-timing portable-parallel-2 <documented-lane2.json>
+FM_TEST_PARALLEL_DRIFT ok portable-parallel-1_ms=447815 portable-parallel-2_ms=379279 imbalance_ms=68536 cap_ms=600000 max_lane_ms=540000 max_imbalance_ms=150000
+EXIT_CODE: 0
+
+CASE: exact 90 percent lane and 25 percent imbalance bounds
+COMMAND: bin/fm-test-run.sh --check-parallel-drift --cap-ms 600000 --lane-timing portable-parallel-1 <exact-bound-lane1.json> --lane-timing portable-parallel-2 <exact-bound-lane2.json>
+FM_TEST_PARALLEL_DRIFT ok portable-parallel-1_ms=540000 portable-parallel-2_ms=390000 imbalance_ms=150000 cap_ms=600000 max_lane_ms=540000 max_imbalance_ms=150000
+EXIT_CODE: 0
+
+CASE: one millisecond over lane bound
+COMMAND: bin/fm-test-run.sh --check-parallel-drift --cap-ms 600000 --lane-timing portable-parallel-1 <over-lane-bound-lane1.json> --lane-timing portable-parallel-2 <over-lane-bound-lane2.json>
+fm-test-run: parallel drift guard: lane portable-parallel-1 measured 540s (90% of the 600s job cap), over the 90% drift bound
+fm-test-run: parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts
+EXIT_CODE: 1
+
+CASE: one millisecond over imbalance bound
+COMMAND: bin/fm-test-run.sh --check-parallel-drift --cap-ms 600000 --lane-timing portable-parallel-1 <over-imbalance-bound-lane1.json> --lane-timing portable-parallel-2 <over-imbalance-bound-lane2.json>
+fm-test-run: parallel drift guard: lanes drifted apart by 150s (portable-parallel-1=500s, portable-parallel-2=349s), over the 150s (25% of the 600s job cap) imbalance bound
+fm-test-run: parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts
+EXIT_CODE: 1
+
+CASE: historical 88 percent versus 30 percent rot shape
+COMMAND: bin/fm-test-run.sh --check-parallel-drift --cap-ms 600000 --lane-timing portable-parallel-1 <rot-shape-lane1.json> --lane-timing portable-parallel-2 <rot-shape-lane2.json>
+fm-test-run: parallel drift guard: lanes drifted apart by 348s (portable-parallel-1=528s, portable-parallel-2=180s), over the 150s (25% of the 600s job cap) imbalance bound
+fm-test-run: parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts
+EXIT_CODE: 1
+
+CASE: missing portable-parallel-2 artifact
+COMMAND: bin/fm-test-run.sh --check-parallel-drift --cap-ms 600000 --lane-timing portable-parallel-1 <missing-artifact-lane1.json> --lane-timing portable-parallel-2 <intentionally-absent-lane2.json>
+fm-test-run: parallel drift guard: lane portable-parallel-2 produced no timing artifact at /Users/josephkim/.no-mistakes/evidence/01M28JYJB4ZZ9WWHATTMAAN6X7/intentionally-absent-lane2.json
+fm-test-run: parallel drift guard: a lane writes no timing JSON when its job is killed at the cap or dies before finalization; investigate that lane instead of re-running it
+EXIT_CODE: 1
+
