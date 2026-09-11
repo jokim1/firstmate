@@ -149,7 +149,7 @@ status_is_terminal_verb() {
 }
 
 # 0 if a status line's leading verb frees compute capacity and should enqueue
-# one advisory fleet refill wake (bin/fm-wake-lib.sh's fm_wake_enqueue_refill).
+# an advisory fleet refill wake (bin/fm-wake-lib.sh's fm_wake_enqueue_refill).
 # Covers completion and failure, blocked/paused/needs-decision, and decision
 # resolution. Working and other nonterminal progress never free capacity.
 # Distinct from status_is_captain_relevant: paused and resolved free capacity
@@ -167,9 +167,9 @@ status_frees_capacity() {
 }
 
 # 0 if any non-blank line in the bytes after <start-offset> frees capacity.
-# Used by the watcher to enqueue ONE advisory refill per capacity-freeing
-# transition (a newly appended freeing line), never because the file still
-# ends in a freeing verb after an unrelated turn-end or working: append.
+# Used by the watcher to enqueue an advisory refill when a capacity-freeing
+# transition is newly classified, never because the file still ends in a
+# freeing verb after an unrelated turn-end or working: append.
 # Missing, unreadable, or symlink status files return 2 (unclassified).
 # A start at or past the captured endpoint is an empty span and returns 1.
 # Re-checks file identity after the span read (mirroring
