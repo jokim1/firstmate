@@ -166,6 +166,36 @@ status_frees_capacity() {
   esac
 }
 
+# 0 if any non-blank line in the bytes after <start-offset> frees capacity.
+# Used by the watcher to enqueue ONE advisory refill per capacity-freeing
+# transition (a newly appended freeing line), never because the file still
+# ends in a freeing verb after an unrelated turn-end or working: append.
+# Missing, unreadable, or symlink status files return 1 (no refill).
+# A start at or past end of file is an empty span and returns 1.
+status_span_frees_capacity() {  # <status-file> <start-offset>
+  local f=$1 start=${2:-0} size scratch chunk_file line found=1
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 1
+  size=$(_fm_status_file_size "$f") || return 1
+  size=${size//[[:space:]]/}
+  case "$size" in ''|*[!0-9]*) return 1 ;; esac
+  case "$start" in ''|*[!0-9]*) start=0 ;; esac
+  [ "$start" -le "$size" ] || start=0
+  [ "$start" -lt "$size" ] || return 1
+  scratch=$(_fm_status_span_scratch "$f") || return 1
+  chunk_file="${scratch}.refill"
+  _fm_status_read_span "$f" "$start" "$((size - start))" > "$chunk_file" 2>/dev/null \
+    || { rm -f "$chunk_file"; return 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    if status_frees_capacity "$line"; then
+      found=0
+      break
+    fi
+  done < "$chunk_file"
+  rm -f "$chunk_file"
+  return "$found"
+}
+
 # 0 if the given (last) status line matches a captain-relevant verb.
 # Verb-aware by default: terminal verbs always match; nonterminal progress verbs
 # (working, resolved, captain-held) and paused never match from free-text prose;

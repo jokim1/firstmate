@@ -384,6 +384,19 @@ test_classifier_primitives() {
     && fail "default resolution verb frees capacity despite override"
   status_frees_capacity "working: implementing" && fail "working: wrongly frees capacity"
   status_frees_capacity "captain-held [key=q1]: parked" && fail "captain-held: wrongly frees capacity"
+  # Span-keyed refill: only newly appended freeing lines count, not a stale tail.
+  printf 'working: a\nresolved [key=q1]: answered: use A\n' > "$state/span.status"
+  status_span_frees_capacity "$state/span.status" 0 \
+    || fail "unclassified span with resolved: does not free capacity"
+  start=$(wc -c < "$state/span.status" | tr -d ' ')
+  status_span_frees_capacity "$state/span.status" "$start" \
+    && fail "empty span after classified resolved: wrongly frees capacity"
+  printf 'working: still going\n' >> "$state/span.status"
+  status_span_frees_capacity "$state/span.status" "$start" \
+    && fail "working: append after classified resolved: wrongly frees capacity"
+  printf 'done: ready\n' >> "$state/span.status"
+  status_span_frees_capacity "$state/span.status" "$start" \
+    || fail "new done: append in span does not free capacity"
   status_is_captain_relevant "merged" || fail "legacy bare merged free-text not captain-relevant"
   status_is_captain_relevant "PR ready https://x/pull/2" \
     || fail "legacy bare PR ready free-text not captain-relevant"
@@ -1943,6 +1956,75 @@ test_n_capacity_transitions_collapse_to_one_refill() {
   refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
   [ "$refill_n" -eq 1 ] || fail "N transitions before drain must collapse to one refill, got $refill_n"
   pass "N capacity-freeing transitions before drain collapse to one refill"
+}
+
+# Refill keys on the capacity-freeing TRANSITION, not a stale freeing tail:
+# a new resolved: enqueues one refill; a later turn-end with the same tail
+# enqueues none; a new done: enqueues one again; a working: append enqueues none.
+test_refill_only_on_capacity_freeing_transition() {
+  local dir state fakebin out drain_out status_file turn_ended pid refill_n
+  dir=$(make_case refill-transition); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+  turn_ended="$state/task.turn-ended"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
+
+  # 1) New resolved: append -> exactly one refill (signal absorbed while working).
+  printf 'needs-decision [key=q1]: pick A\nresolved [key=q1]: answered: use A\n' > "$status_file"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for new resolved: refill"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after resolved: transition failed"
+  refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+  [ "$refill_n" -eq 1 ] || fail "new resolved: should enqueue one refill, got $refill_n"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the resolved: refill wake"
+
+  # 2) Later turn-end while the tail is still resolved: -> no refill.
+  : > "$out"
+  : > "$turn_ended"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"
+    fail "turn-end after classified resolved: woke the watcher: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "turn-end after classified resolved: enqueued a wake: $(cat "$state/.wake-queue")"
+  # Stop at a lock-free boundary and ack recovery so the next cycle is not a
+  # rearm-resurface of this intentional absorb stop.
+  reap_for_ack "$pid" "$state" || fail "turn-end absorb stop did not publish recovery state"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the turn-end absorb stop"
+
+  # 3) New done: append -> one refill again (also surfaces as captain-relevant).
+  : > "$out"
+  printf 'done: ready in branch\n' >> "$status_file"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 120 || fail "watcher did not exit for new done: transition"
+  grep -F "signal: $status_file" "$out" >/dev/null \
+    || fail "new done: did not surface as a signal: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after done: transition failed"
+  refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+  [ "$refill_n" -eq 1 ] || fail "new done: should enqueue one refill, got $refill_n: $(cat "$drain_out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the done: refill wake"
+
+  # 4) working: append after that -> no refill.
+  : > "$out"
+  printf 'working: still polishing\n' >> "$status_file"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"
+    fail "working: append after classified done: woke the watcher: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "working: append enqueued a wake: $(cat "$state/.wake-queue")"
+  reap "$pid"
+
+  unset FM_FAKE_CREW_STATE
+  pass "refill enqueues once per capacity-freeing transition, not on later turn-end or working:"
 }
 
 test_terminal_stale_surfaced() {
@@ -4883,6 +4965,7 @@ test_capacity_freeing_status_enqueues_refill
 test_working_status_does_not_enqueue_refill
 test_resolved_while_working_enqueues_refill_only
 test_n_capacity_transitions_collapse_to_one_refill
+test_refill_only_on_capacity_freeing_transition
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated

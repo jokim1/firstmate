@@ -2070,14 +2070,16 @@ $pending
 EOF
     reason="signal:$files"
     # Capacity-freeing status transitions enqueue ONE advisory refill wake
-    # (deduped by kind at drain). Paused and resolved free capacity without
-    # being captain-relevant, so detect them here before the absorb decision.
-    # Working notes never free capacity and never enqueue refill.
+    # (deduped by kind at drain). Key the decision on newly appended lines in
+    # this signal's unclassified span, not on whether the file still ends in a
+    # freeing verb after a later turn-end or working: note. Paused and resolved
+    # free capacity without being captain-relevant, so detect them here before
+    # the absorb decision. Working notes never free capacity.
     need_refill=0
     while IFS=$(printf '\t') read -r sf sig f; do
       [ -n "$sf" ] || continue
       case "$f" in *.status) ;; *) continue ;; esac
-      if status_frees_capacity "$(last_status_line "$f")"; then
+      if status_span_frees_capacity "$f" "$(fm_wake_signal_seen_size "$STATE" "$f")"; then
         need_refill=1
         break
       fi
@@ -2165,11 +2167,25 @@ $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
       wake "$reason"
     elif [ "$need_refill" -eq 1 ]; then
+      # Advance reported + classified positions for every status file in this
+      # batch so the freeing line is not treated as new on the next turn-end.
+      # signal_files_actionable already captured endpoints for readable logs.
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
-        printf '%s' "$sig" > "$sf"
+        case "$f" in
+          *.status)
+            fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
+            ;;
+          *) printf '%s' "$sig" > "$sf" ;;
+        esac
       done <<EOF
 $pending
+EOF
+      while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+        [ -n "$f" ] || continue
+        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
+      done <<EOF
+$FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
       wake "$FM_WAKE_REFILL_PAYLOAD"
     else
