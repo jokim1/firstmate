@@ -598,11 +598,8 @@ print_status_presentation() {  # [<deduped-raw-rows>]
     rc=1
   }
   if [ "$rc" -eq 0 ] && [ -n "$rows" ]; then
-    # Advance the presentation cursor for every task whose unread lines were
-    # actually printed, including historical turn-ended annotations. Limiting
-    # this to direct .status signals left needs-decision/done rows stuck behind
-    # the cursor whenever a turn-ended wake annotated them, so the same unread
-    # wake-EVENT lines replayed on every later drain.
+    # Commit only the task spans that the annotation path actually printed.
+    # fm-classify-lib.sh owns the presentation-cursor contract.
     fm_wake_print_annotations "$rows" "$snapshot" || rc=1
     if [ "$rc" -eq 0 ]; then
       fully_presented=$FM_WAKE_ANNOTATED_TASKS

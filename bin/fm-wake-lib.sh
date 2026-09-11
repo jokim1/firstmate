@@ -2205,12 +2205,8 @@ fm_wake_latest_event() {  # <validated-status-path> <tail-byte-cap>
 # Print supplemental drain-time context only after the caller has committed the
 # raw queue consumption and released the append lock.
 # FM_WAKE_ANNOTATED_TASKS lists each task id whose unread status lines were
-# actually printed this call. The drain feeds that list into
-# status_acknowledge_presented_snapshot as fully_presented so the presentation
-# cursor advances past annotated bytes, including historical turn-ended rows
-# that printed. Tasks skipped because a seen marker still matches, or because
-# there was nothing unread, are omitted so a quiet turn-end cannot bury a
-# later delayed annotation.
+# actually printed this call. Skipped tasks are omitted. fm-classify-lib.sh
+# owns how this presentation result advances the cursor.
 FM_WAKE_ANNOTATED_TASKS=
 fm_wake_print_annotations() {  # <deduped-raw-rows> [<presentation-snapshot>]
   local rows=$1 snapshot=${2:-} manifest status_key mode path prefix line task endpoint
