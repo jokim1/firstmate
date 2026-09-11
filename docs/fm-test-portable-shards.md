@@ -37,8 +37,8 @@ The proof ran 24 candidates with four workers and no failures.
 
 ## Parallel lanes
 
-The two parallel lanes use longest-processing-time assignment from measured per-script durations.
-The current table is the 2026-09-11 rebalanced assignment, computed from the slowest per-script maxima in the `fm-test-timing-portable-parallel-*` artifacts of six green fork CI runs between 2026-09-09 and 2026-09-11 (34330233629, 34367407466, 34447040882, 34488161009, 34560339420, 34560354947).
+The current parallel-lane assignment is a measured one-test rebalance over the 2026-09-11 CI timing maxima, moving only `tests/fm-lint.test.sh` from shard 1 to shard 2.
+Those timings are the slowest per-script maxima in the `fm-test-timing-portable-parallel-*` artifacts of six green fork CI runs between 2026-09-09 and 2026-09-11 (34330233629, 34367407466, 34447040882, 34488161009, 34560339420, 34560354947).
 The 2026-08-20 concurrent proof above still owns proven-set membership; it no longer owns the balance, because several scripts outgrew those measurements and left shard 1 at roughly 88% of the job cap while shard 2 sat near 30%.
 
 | Lane | Script count | Measured duration |

@@ -466,10 +466,9 @@ tests/fm-x-mode.test.sh
 EOF
 }
 
-# Portable parallel shard 1: duration-balanced half of the proven-isolated set,
-# last rebalanced on the 2026-09-11 CI timing artifacts (slowest per-script
+# Portable parallel shard 1: measured half of the proven-isolated set after a
+# one-test rebalance using the 2026-09-11 CI timing artifacts (slowest per-script
 # maxima over six green runs; see docs/fm-test-portable-shards.md).
-# Execution order is longest first so wall-clock stays near the balanced sum.
 list_portable_parallel_1() {
   cat <<'EOF'
 tests/fm-x-mode.test.sh
@@ -485,8 +484,8 @@ tests/fm-transition-lib.test.sh
 EOF
 }
 
-# Portable parallel shard 2: the complementary balanced half of the proven set
-# (same 2026-09-11 rebalanced basis as shard 1).
+# Portable parallel shard 2: the complementary half after the same measured
+# one-test rebalance as shard 1.
 list_portable_parallel_2() {
   cat <<'EOF'
 tests/fm-lint.test.sh
