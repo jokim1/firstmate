@@ -466,8 +466,9 @@ tests/fm-x-mode.test.sh
 EOF
 }
 
-# Portable parallel shard 1: LPT balance of the proven-isolated set using the
-# current concurrent-proof durations in docs/fm-test-isolation-proof.json.
+# Portable parallel shard 1: duration-balanced half of the proven-isolated set,
+# last rebalanced on the 2026-09-11 CI timing artifacts (slowest per-script
+# maxima over six green runs; see docs/fm-test-portable-shards.md).
 # Execution order is longest first so wall-clock stays near the balanced sum.
 list_portable_parallel_1() {
   cat <<'EOF'
@@ -477,7 +478,6 @@ tests/fm-captain-hold-lifecycle.test.sh
 tests/fm-test-run.test.sh
 tests/fm-composer-ghost.test.sh
 tests/fm-grok-harness.test.sh
-tests/fm-lint.test.sh
 tests/fm-pi-primary-types.test.sh
 tests/fm-review-diff.test.sh
 tests/fm-brief.test.sh
@@ -485,9 +485,11 @@ tests/fm-transition-lib.test.sh
 EOF
 }
 
-# Portable parallel shard 2: the complementary LPT half of the proven set.
+# Portable parallel shard 2: the complementary balanced half of the proven set
+# (same 2026-09-11 rebalanced basis as shard 1).
 list_portable_parallel_2() {
   cat <<'EOF'
+tests/fm-lint.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-arm-pretool-check.test.sh
 tests/fm-crew-state.test.sh
