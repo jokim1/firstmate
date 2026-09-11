@@ -1614,6 +1614,17 @@ test_parallel_drift_guard() {
   assert_contains "$out" "portable-parallel-1_ms=357564" "ok line must report the lane 1 sum"
   assert_contains "$out" "imbalance_ms=24344" "ok line must report the imbalance"
 
+  # CI records run configuration after the lane identity (lane 1 passes
+  # --fail-on-gate-skip); the guard must accept its own lane's artifact.
+  write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found" 357564
+  set +e
+  out=$("$RUNNER" --check-parallel-drift --cap-ms 600000 \
+    --lane-timing portable-parallel-1 "$tmp/lane1.json" \
+    --lane-timing portable-parallel-2 "$tmp/lane2.json" 2>&1)
+  rc=$?
+  set -e
+  assert_contains "$out" "FM_TEST_PARALLEL_DRIFT ok" "a lane-prefixed CI selection must be accepted"
+
   # Sums exactly at both bounds are not over them.
   write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1" 480000
   write_drift_lane "$tmp/lane2.json" "lane=portable-parallel-2" 390000

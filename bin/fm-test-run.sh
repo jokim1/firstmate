@@ -947,9 +947,11 @@ parallel_drift_lane_selection() {
 
 # Validate one lane's artifact before measuring it: it must exist (a lane
 # killed at its cap writes no timing JSON, and that silence is itself the
-# drift signal) and it must actually be that lane's artifact.
+# drift signal) and it must actually be that lane's artifact. Lane identity
+# is the first ';'-separated segment of the recorded selection: CI lanes add
+# run configuration such as fail-on-gate-skip after it.
 check_one_drift_artifact() {
-  local lane=$1 file=$2 sel
+  local lane=$1 file=$2 sel lane_sel
   if [ ! -f "$file" ]; then
     log "parallel drift guard: lane $lane produced no timing artifact at $file"
     log "parallel drift guard: a lane writes no timing JSON when its job is killed at the cap or dies before finalization; investigate that lane instead of re-running it"
@@ -957,7 +959,8 @@ check_one_drift_artifact() {
   fi
   sel=$(parallel_drift_lane_selection "$file") \
     || die "parallel drift guard: could not parse $file as a timing artifact"
-  [ "$sel" = "lane=$lane" ] \
+  lane_sel=${sel%%;*}
+  [ "$lane_sel" = "lane=$lane" ] \
     || die "parallel drift guard: $file has selection '$sel', expected 'lane=$lane'"
   return 0
 }
