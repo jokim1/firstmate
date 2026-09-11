@@ -1,0 +1,9 @@
+status span:
+  needs-decision [key=q1]: pick A
+  resolved [key=q1]: answered
+  working: follow-up underway
+watcher output:
+  refill: re-evaluate ready work against free capacity
+drained wake records:
+  1789105643	<isolated-state>	refill	refill	refill: re-evaluate ready work against free capacity
+observed counts: refill=1 signal=0

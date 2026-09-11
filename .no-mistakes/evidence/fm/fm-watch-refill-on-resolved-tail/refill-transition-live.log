@@ -1,0 +1,12 @@
++TRACE printf 'needs-decision [key=q1]: pick A\nresolved [key=q1]: answered: use A\n'
++TRACE refill_n=1
++TRACE '[' '!' -s /private<isolated-state>/refill-transition/state/.wake-queue ']'
++TRACE '[' '!' -e /private<isolated-state>/refill-transition/state/.wake-queue.lock ']'
++TRACE '[' '!' -e /private<isolated-state>/refill-transition/state/.wake-queue.lock ']'
++TRACE '[' '!' -L /private<isolated-state>/refill-transition/state/.wake-queue.lock ']'
++TRACE printf 'done: ready in branch\n'
++TRACE grep -F 'signal: /private<isolated-state>/refill-transition/state/task.status' /private<isolated-state>/refill-transition/watch.out
++TRACE refill_n=1
++TRACE printf 'working: still polishing\n'
++TRACE '[' '!' -s /private<isolated-state>/refill-transition/state/.wake-queue ']'
+ok - refill enqueues once per capacity-freeing transition, not on later turn-end or working:
