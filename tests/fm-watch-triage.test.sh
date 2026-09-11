@@ -2084,7 +2084,7 @@ test_refill_retry_abandons_stale_endpoint() {
 }
 
 test_refill_retry_preserves_successful_endpoints() {
-  local dir state fakebin out a_status b_status b_marker pid i new_end marked_end frozen
+  local dir state fakebin out a_status b_status b_marker pid i new_end marked_end frozen child_i
   dir=$(make_case refill-retry-partial); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; a_status="$state/a.status"; b_status="$state/b.status"
   b_marker="$state/.seen-b_status"
@@ -2113,8 +2113,19 @@ test_refill_retry_preserves_successful_endpoints() {
   while [ "$i" -lt 120 ] && is_live_non_zombie "$pid"; do
     kill -STOP "$pid" 2>/dev/null || break
     if [ ! -e "$state/.wake-queue.lock" ] && [ ! -L "$state/.wake-queue.lock" ]; then
-      frozen=1
-      break
+      # SIGSTOP pauses the watcher shell, but a command it already forked can
+      # still finish against the fixture state. With the parent stopped it
+      # cannot start another command, so wait for that in-flight child to drain
+      # before opening the append-to-prime window.
+      child_i=0
+      while [ "$child_i" -lt 120 ] && [ -n "$(pgrep -P "$pid" 2>/dev/null || true)" ]; do
+        sleep 0.1
+        child_i=$((child_i + 1))
+      done
+      if [ -z "$(pgrep -P "$pid" 2>/dev/null || true)" ]; then
+        frozen=1
+        break
+      fi
     fi
     kill -CONT "$pid" 2>/dev/null || true
     sleep 0.1
