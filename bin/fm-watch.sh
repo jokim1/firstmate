@@ -1863,11 +1863,49 @@ retire_merged_pr_poll() {  # <id>
   fi
 }
 
-resurface_after_downtime() {
-  if [ "${REFILL_COMMIT_PENDING:-0}" = 1 ]; then
-    REFILL_COMMIT_PENDING=0
-    return 0
+refill_batch_endpoint_captured() {  # <file> <endpoints>
+  local wanted=$1 endpoints=$2 f surface_end surface_ident
+  while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+    [ -n "$f" ] || continue
+    [ "$f" = "$wanted" ] && return 0
+  done <<EOF
+$endpoints
+EOF
+  return 1
+}
+
+finish_refill_batch() {  # <endpoints> <pending> <should-surface> <reason>
+  local endpoints=$1 batch=$2 should_surface=$3 batch_reason=$4
+  local sf sig f surface_end surface_ident
+  while IFS=$(printf '\t') read -r sf sig f; do
+    [ -n "$sf" ] || continue
+    case "$f" in
+      *.status)
+        if ! refill_batch_endpoint_captured "$f" "$endpoints"; then
+          fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
+        fi
+        if [ "$should_surface" -eq 1 ]; then
+          mark_surface_reported "$f" "$sig" || true
+        fi
+        ;;
+      *) printf '%s' "$sig" > "$sf" ;;
+    esac
+  done <<EOF
+$batch
+EOF
+  if [ "$should_surface" -eq 1 ]; then
+    while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+      [ -n "$f" ] || continue
+      mark_surfaced "$f" "$surface_end" "$surface_ident"
+    done <<EOF
+$endpoints
+EOF
+    wake "$batch_reason"
   fi
+  wake "$FM_WAKE_REFILL_PAYLOAD"
+}
+
+resurface_after_downtime() {
   # Handling successors already have a predecessor-delivered wake on the way.
   # Re-announcing from this cycle is what turned a lost handshake into an
   # unbounded recovery loop; stay in the poll loop and supervise instead.
@@ -1913,6 +1951,22 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   watcher_beat || true
+
+  if [ -n "${REFILL_RETRY_ENDPOINTS:-}" ]; then
+    signal_commit_error=0
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+    while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+      [ -n "$f" ] || continue
+      fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" \
+        || signal_commit_error=1
+    done <<EOF
+$REFILL_RETRY_ENDPOINTS
+EOF
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+    [ "$signal_commit_error" -eq 0 ] || continue
+    finish_refill_batch "$REFILL_RETRY_ENDPOINTS" "$REFILL_RETRY_PENDING" \
+      "$REFILL_RETRY_SIGNAL_SHOULD_SURFACE" "$REFILL_RETRY_REASON"
+  fi
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
@@ -2164,9 +2218,14 @@ EOF
       fm_lock_release "$FM_WAKE_QUEUE_LOCK"
       [ "$signal_publish_error" -eq 0 ] || exit 1
       if [ "$signal_commit_error" -ne 0 ]; then
-        REFILL_COMMIT_PENDING=1
+        REFILL_RETRY_ENDPOINTS=$FM_SIGNAL_SURFACE_ENDPOINTS
+        REFILL_RETRY_PENDING=$pending
+        REFILL_RETRY_SIGNAL_SHOULD_SURFACE=$signal_should_surface
+        REFILL_RETRY_REASON=$reason
         continue
       fi
+      finish_refill_batch "$FM_SIGNAL_SURFACE_ENDPOINTS" "$pending" \
+        "$signal_should_surface" "$reason"
     fi
     # A decision-owned file's queued row payload is marked "needs-decision:"
     # instead of the ordinary "signal:" below (other files in the same batch
@@ -2180,16 +2239,14 @@ EOF
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
     if [ "$signal_should_surface" -eq 1 ]; then
-      if [ "$need_refill" -eq 0 ]; then
-        while IFS=$(printf '\t') read -r sf sig f; do
-          [ -n "$sf" ] || continue
-          file_reason="$reason"
-          case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
-          fm_wake_append signal "$(basename "$f")" "$file_reason" || exit 1
-        done <<EOF
+      while IFS=$(printf '\t') read -r sf sig f; do
+        [ -n "$sf" ] || continue
+        file_reason="$reason"
+        case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
+        fm_wake_append signal "$(basename "$f")" "$file_reason" || exit 1
+      done <<EOF
 $pending
 EOF
-      fi
       # The wake signature advances for every file in this batch, including one
       # whose span could not be classified: it has now been reported, and this is
       # what bounds an unreadable log to one report per distinct file state. Only
@@ -2199,9 +2256,7 @@ EOF
         [ -n "$sf" ] || continue
         case "$f" in
           *.status)
-            if [ "$need_refill" -eq 0 ]; then
-              fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
-            fi
+            fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
             mark_surface_reported "$f" "$sig" || true
             ;;
           *) printf '%s' "$sig" > "$sf" ;;
@@ -2211,28 +2266,12 @@ $pending
 EOF
       while IFS=$(printf '\t') read -r f surface_end surface_ident; do
         [ -n "$f" ] || continue
-        if [ "$need_refill" -eq 0 ]; then
-          fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
-        fi
+        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
         mark_surfaced "$f" "$surface_end" "$surface_ident"
       done <<EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
       wake "$reason"
-    elif [ "$need_refill" -eq 1 ]; then
-      # Advance reported + classified positions for every status file in this
-      # batch so the freeing line is not treated as new on the next turn-end.
-      # signal_files_actionable already captured endpoints for readable logs.
-      while IFS=$(printf '\t') read -r sf sig f; do
-        [ -n "$sf" ] || continue
-        case "$f" in
-          *.status) ;;
-          *) printf '%s' "$sig" > "$sf" ;;
-        esac
-      done <<EOF
-$pending
-EOF
-      wake "$FM_WAKE_REFILL_PAYLOAD"
     else
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue

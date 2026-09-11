@@ -1956,7 +1956,7 @@ test_resolved_while_working_enqueues_refill_only() {
 }
 
 test_refill_waits_for_marker_commit() {
-  local variant dir state fakebin out drain_out status_file marker pid i refill_n signal_n
+  local variant dir state fakebin out drain_out status_file marker pid i refill_n signal_n queue_n queue_after
   for variant in refill-only actionable; do
     dir=$(make_case "refill-marker-$variant"); state="$dir/state"; fakebin="$dir/fakebin"
     out="$dir/watch.out"; drain_out="$dir/drain.out"
@@ -1987,6 +1987,12 @@ test_refill_waits_for_marker_commit() {
       || fail "$variant marker failure delivered the wake before committing its endpoint"
     [ ! -s "$out" ] \
       || { reap "$pid"; fail "$variant marker failure printed a wake: $(cat "$out")"; }
+    queue_n=$(awk 'END { print NR + 0 }' "$state/.wake-queue")
+    wait_poll_cycle "$state" "$pid" \
+      || { reap "$pid"; fail "$variant marker failure did not retry its endpoint"; }
+    queue_after=$(awk 'END { print NR + 0 }' "$state/.wake-queue")
+    [ "$queue_after" -eq "$queue_n" ] \
+      || { reap "$pid"; fail "$variant marker retry grew the queue from $queue_n to $queue_after rows"; }
     signal_n=$(awk -F '\t' '$3 == "signal" { n++ } END { print n + 0 }' "$state/.wake-queue")
     case "$variant:$signal_n" in
       refill-only:0|actionable:[1-9]*) ;;
@@ -2009,6 +2015,34 @@ test_refill_waits_for_marker_commit() {
   done
   unset FM_FAKE_CREW_STATE
   pass "refill wakes wait for classified marker commits and retry failures"
+}
+
+test_refill_mixed_batch_records_unclassified_status() {
+  local dir state fakebin out good_status unreadable_status pid
+  dir=$(make_case refill-mixed-unreadable); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; good_status="$state/good.status"
+  unreadable_status="$state/unreadable.status"
+  printf 'done: ready in branch\n' > "$good_status"
+  ln -s "$dir/missing-status-target" "$unreadable_status"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · fake default'
+
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 120 \
+    || { reap "$pid"; fail "mixed refill batch did not surface"; }
+  ack_stopped_cycle "$state" || fail "could not acknowledge mixed refill batch"
+  touch "$state/.last-check" "$state/.last-heartbeat"
+
+  : > "$out"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_poll_cycle "$state" "$pid" \
+    || { reap "$pid"; fail "unchanged unclassified status repeated after mixed refill batch: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] \
+    || { reap "$pid"; fail "unchanged unclassified status queued another wake after mixed refill batch"; }
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  pass "mixed refill batches record unclassified status signatures"
 }
 
 test_n_capacity_transitions_collapse_to_one_refill() {
@@ -5045,6 +5079,7 @@ test_capacity_freeing_status_enqueues_refill
 test_working_status_does_not_enqueue_refill
 test_resolved_while_working_enqueues_refill_only
 test_refill_waits_for_marker_commit
+test_refill_mixed_batch_records_unclassified_status
 test_n_capacity_transitions_collapse_to_one_refill
 test_refill_only_on_capacity_freeing_transition
 test_terminal_stale_surfaced
