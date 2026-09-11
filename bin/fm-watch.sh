@@ -2122,6 +2122,15 @@ EOF
     [ "$refill_classification_error" -eq 0 ] || continue
     if [ "$need_refill" -eq 1 ]; then
       fm_wake_enqueue_refill || exit 1
+      signal_commit_error=0
+      while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+        [ -n "$f" ] || continue
+        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" \
+          || signal_commit_error=1
+      done <<EOF
+$FM_SIGNAL_SURFACE_ENDPOINTS
+EOF
+      [ "$signal_commit_error" -eq 0 ] || continue
     fi
     # A decision-owned file's queued row payload is marked "needs-decision:"
     # instead of the ordinary "signal:" below (other files in the same batch
@@ -2163,7 +2172,9 @@ $pending
 EOF
       while IFS=$(printf '\t') read -r f surface_end surface_ident; do
         [ -n "$f" ] || continue
-        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
+        if [ "$need_refill" -eq 0 ]; then
+          fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
+        fi
         mark_surfaced "$f" "$surface_end" "$surface_ident"
       done <<EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
@@ -2183,12 +2194,6 @@ EOF
         esac
       done <<EOF
 $pending
-EOF
-      while IFS=$(printf '\t') read -r f surface_end surface_ident; do
-        [ -n "$f" ] || continue
-        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
-      done <<EOF
-$FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
       wake "$FM_WAKE_REFILL_PAYLOAD"
     else

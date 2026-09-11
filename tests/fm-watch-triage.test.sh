@@ -1955,6 +1955,55 @@ test_resolved_while_working_enqueues_refill_only() {
   pass "resolved while working enqueues refill without a signal wake"
 }
 
+test_refill_waits_for_marker_commit() {
+  local variant dir state fakebin out drain_out status_file marker pid i refill_n signal_n
+  for variant in refill-only actionable; do
+    dir=$(make_case "refill-marker-$variant"); state="$dir/state"; fakebin="$dir/fakebin"
+    out="$dir/watch.out"; drain_out="$dir/drain.out"
+    status_file="$state/task.status"; marker="$state/.seen-task_status"
+    case "$variant" in
+      refill-only)
+        printf 'needs-decision [key=q1]: pick A\nresolved [key=q1]: answered: use A\n' > "$status_file"
+        export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
+        ;;
+      actionable)
+        printf 'done: ready in branch\n' > "$status_file"
+        export FM_FAKE_CREW_STATE='state: unknown · source: none · fake default'
+        ;;
+    esac
+    mkdir "$marker"
+    watch_bg "$state" "$fakebin" "$out"
+    pid=$!
+    i=0
+    while [ "$i" -lt 120 ] && [ ! -s "$state/.wake-queue" ] && is_live_non_zombie "$pid"; do
+      sleep 0.1
+      i=$((i + 1))
+    done
+    [ -s "$state/.wake-queue" ] \
+      || { reap "$pid"; fail "$variant marker failure never reached refill enqueue"; }
+    is_live_non_zombie "$pid" \
+      || fail "$variant marker failure delivered the wake before committing its endpoint"
+    [ ! -s "$out" ] \
+      || { reap "$pid"; fail "$variant marker failure printed a wake: $(cat "$out")"; }
+
+    rmdir "$marker"
+    wait_for_exit "$pid" 120 \
+      || { reap "$pid"; fail "$variant did not retry after marker recovery"; }
+    FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+      || fail "$variant drain after marker recovery failed"
+    refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
+    [ "$refill_n" -eq 1 ] \
+      || fail "$variant marker retry queued $refill_n refills: $(cat "$drain_out")"
+    signal_n=$(awk -F '\t' '$3 == "signal" { n++ } END { print n + 0 }' "$drain_out")
+    case "$variant:$signal_n" in
+      refill-only:0|actionable:1) ;;
+      *) fail "$variant marker retry drained $signal_n signal wakes: $(cat "$drain_out")" ;;
+    esac
+  done
+  unset FM_FAKE_CREW_STATE
+  pass "refill wakes wait for classified marker commits and retry failures"
+}
+
 test_n_capacity_transitions_collapse_to_one_refill() {
   local dir state fakebin out drain_out pid refill_n i
   dir=$(make_case refill-collapse); state="$dir/state"; fakebin="$dir/fakebin"
@@ -4988,6 +5037,7 @@ test_permission_recovery_surfaces_preserved_status
 test_capacity_freeing_status_enqueues_refill
 test_working_status_does_not_enqueue_refill
 test_resolved_while_working_enqueues_refill_only
+test_refill_waits_for_marker_commit
 test_n_capacity_transitions_collapse_to_one_refill
 test_refill_only_on_capacity_freeing_transition
 test_terminal_stale_surfaced
