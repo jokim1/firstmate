@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Contract tests for bin/fm-test-run.sh - the single owner of behavior suite
 # selection, portable lane composition, bounded concurrency, budgets, timing
-# markers, JSON artifacts, coverage guard, and aggregate exit status.
+# markers, JSON artifacts, coverage and parallel shard-drift guards, and
+# aggregate exit status.
 #
 # These tests intentionally exercise the runner with fixtures, --list, and
 # focused scheduler checks, not the complete Firstmate suite.

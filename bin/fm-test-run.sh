@@ -38,6 +38,9 @@
 #     PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP of it. The failure names
 #     the lane, its measured sum, the cap, and the rebalance remedy
 #     (docs/fm-test-portable-shards.md owns the measured table and refresh).
+#     Before summing, require each artifact's script-path set to equal the
+#     canonical lane membership; the artifact's selection string is only a
+#     descriptive label and does not prove complete lane coverage.
 #     A missing artifact fails too: a lane killed at its job cap writes no
 #     timing JSON, which is the silent-rot shape this guard exists to surface.
 #     The constants below own the thresholds; the linked shard record owns
