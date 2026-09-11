@@ -56,6 +56,7 @@ The `tests-portable-parallel-drift` CI job downloads both lanes' `fm-test-timing
 `bin/fm-test-run.sh` owns the check and its threshold constants (`PORTABLE_PARALLEL_MAX_LANE_PERCENT_OF_CAP`, `PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP`); this section owns the measured evidence behind them.
 
 Evidence at introduction on 2026-09-11: the balanced lanes measure 357564 ms (59.6% of the cap) and 333220 ms (55.5%), recorded as the slowest per-script maxima across six green runs, and observed walls swing roughly a fifth run to run with runner speed.
+The first live lane artifacts measured 447815 ms (74.6% of the cap) and 379279 ms (63.2%), with 68536 ms (11.4%) imbalance, so both the 80% lane bound and 15% imbalance bound held against real CI output.
 A healthy lane lands near 75% of the cap even on a runner a quarter slower than any of those six, while the lane bound trips above 80%, so ordinary variance cannot trip it.
 The imbalance bound trips above 15% of the cap (90000 ms) against a measured spread of 24344 ms: runner speed scales both lanes together, so their difference stays small even on a slow runner, and the bound sits about 3.7x above the measured spread.
 Against the 2026-08-to-2026-09 rot (lane 1 near 88% of the cap, lane 2 near 30%, imbalance 348000 ms), both bounds would have failed in PR checks well before the first cap-killed job reported as "cancelled".
@@ -141,7 +142,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 
 | Lane | Bound | Rationale |
 |---|---|---|
-| portable parallel 1/2 | job `timeout-minutes: 10` | Measured on 2026-09-11 from the shards' CI timing artifacts, each shard's serial script sum is about 5.6-6.0 minutes plus about 25 s of job setup, so the healthy job wall is roughly 6.0-6.5 minutes; the 10-minute timeout remains a hang tripwire with real margin. |
+| portable parallel 1/2 | job `timeout-minutes: 10` | The first live drift-guard artifacts on 2026-09-11 measured serial script sums of about 7.5 and 6.3 minutes; both remained within the guard's 80% lane bound, so the 10-minute timeout remains a hang tripwire with margin for job setup. |
 | portable serial 1-7 | job `timeout-minutes: 30` | Current runners can take about 20 minutes; the 30-minute cap remains a hang tripwire while leaving margin for job setup and runner-speed spread. The fork keeps seven serial shards (a standing divergence): upstream's raised cap now leaves headroom, but retiring back to five is a later structural step, not this rebase's union. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
 
