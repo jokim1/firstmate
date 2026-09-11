@@ -1,0 +1,4 @@
+{
+  "selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+  "scripts": [{"path": "tests/imbalance-breach.test.sh", "duration_ms": 470000}]
+}

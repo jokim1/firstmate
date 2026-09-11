@@ -1,0 +1,4 @@
+{
+  "selection": "lane=portable-parallel-2",
+  "scripts": [{"path": "tests/cap-breach.test.sh", "duration_ms": 390001}]
+}

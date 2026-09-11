@@ -1,0 +1,15 @@
+CASE exact thresholds: 480000 ms lane maximum and 90000 ms imbalance
+FM_TEST_PARALLEL_DRIFT ok portable-parallel-1_ms=480000 portable-parallel-2_ms=390000 imbalance_ms=90000 cap_ms=600000 max_lane_ms=480000 max_imbalance_ms=90000
+exit=0
+CASE lane over threshold by 1 ms
+fm-test-run: parallel drift guard: lane portable-parallel-1 measured 480s (80% of the 600s job cap), over the 80% drift bound
+fm-test-run: parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts
+exit=1
+CASE imbalance over threshold by 1 ms
+fm-test-run: parallel drift guard: lanes drifted apart by 90s (portable-parallel-1=470s, portable-parallel-2=379s), over the 90s (15% of the 600s job cap) imbalance bound
+fm-test-run: parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts
+exit=1
+CASE missing lane 2 artifact
+fm-test-run: parallel drift guard: lane portable-parallel-2 produced no timing artifact at /Users/josephkim/.no-mistakes/evidence/01M28FNJY47ZGA6HKAVJEWMAQC/does-not-exist.json
+fm-test-run: parallel drift guard: a lane writes no timing JSON when its job is killed at the cap or dies before finalization; investigate that lane instead of re-running it
+exit=1

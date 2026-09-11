@@ -1,0 +1,2 @@
+fm-test-run: parallel drift guard: /Users/josephkim/.no-mistakes/evidence/01M28FNJY47ZGA6HKAVJEWMAQC/real-run-34611918061/fm-test-timing-portable-parallel-1.json has selection 'lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found', expected 'lane=portable-parallel-1'
+exit=2

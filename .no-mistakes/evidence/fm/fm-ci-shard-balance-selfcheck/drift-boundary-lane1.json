@@ -1,0 +1,4 @@
+{
+  "selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+  "scripts": [{"path": "tests/boundary.test.sh", "duration_ms": 480000}]
+}

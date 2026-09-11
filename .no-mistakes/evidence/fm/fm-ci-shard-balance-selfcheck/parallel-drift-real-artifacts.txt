@@ -1,0 +1,7 @@
+$ jq -r '.selection, ([.scripts[].duration_ms] | add)' real-run-34611918061/fm-test-timing-portable-parallel-{1,2}.json
+lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found
+447815
+lane=portable-parallel-2
+379279
+$ bin/fm-test-run.sh --check-parallel-drift --cap-ms 600000 --lane-timing portable-parallel-1 <lane1> --lane-timing portable-parallel-2 <lane2>
+FM_TEST_PARALLEL_DRIFT ok portable-parallel-1_ms=447815 portable-parallel-2_ms=379279 imbalance_ms=68536 cap_ms=600000 max_lane_ms=480000 max_imbalance_ms=90000
