@@ -2084,7 +2084,7 @@ test_refill_retry_abandons_stale_endpoint() {
 }
 
 test_refill_retry_preserves_successful_endpoints() {
-  local dir state fakebin out a_status b_status b_marker pid i new_end marked_end
+  local dir state fakebin out a_status b_status b_marker pid i new_end marked_end frozen
   dir=$(make_case refill-retry-partial); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; a_status="$state/a.status"; b_status="$state/b.status"
   b_marker="$state/.seen-b_status"
@@ -2103,9 +2103,34 @@ test_refill_retry_preserves_successful_endpoints() {
   done
   [ -s "$state/.wake-queue" ] \
     || { reap "$pid"; fail "partial marker failure never reached refill enqueue"; }
+  # The append and the marker advance below must be atomic with respect to the
+  # watcher: between them a.status carries genuinely unannounced bytes, and a
+  # poll landing in that window makes the watcher legitimately surface and exit
+  # before the assertion (the 2026-09-11 portable CI failure of this test).
+  # Freeze it at a lock-free boundary, the same pattern reap_for_ack uses.
+  frozen=0
+  i=0
+  while [ "$i" -lt 120 ] && is_live_non_zombie "$pid"; do
+    kill -STOP "$pid" 2>/dev/null || break
+    if [ ! -e "$state/.wake-queue.lock" ] && [ ! -L "$state/.wake-queue.lock" ]; then
+      frozen=1
+      break
+    fi
+    kill -CONT "$pid" 2>/dev/null || true
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$frozen" -eq 1 ] \
+    || { reap "$pid"; fail "could not freeze the retrying watcher at a lock-free boundary"; }
   printf 'resolved: later transition\n' >> "$a_status"
+  # Deliberately exceed one full poll-plus-grace cycle before priming: with the
+  # freeze regressed, the watcher reliably observes the unannounced span here
+  # and exits, so this test fails deterministically instead of only under load.
+  sleep 3
   prime_status_seen "$state" "$a_status" \
-    || { reap "$pid"; fail "could not advance successful endpoint during partial retry"; }
+    || { kill -CONT "$pid" 2>/dev/null; reap "$pid"; fail "could not advance successful endpoint during partial retry"; }
+  kill -CONT "$pid" \
+    || { reap "$pid"; fail "could not resume the frozen watcher"; }
   new_end=$(size_of "$a_status")
   wait_poll_cycle "$state" "$pid" \
     || { reap "$pid"; fail "partial marker failure did not complete another cycle"; }
