@@ -1,0 +1,29 @@
+PRODUCT: bin/fm-test-run.sh --check-parallel-drift
+CAP_MS=600000
+
+CASE: documented healthy live-run band
+FM_TEST_PARALLEL_DRIFT ok portable-parallel-1_ms=447815 portable-parallel-2_ms=379279 imbalance_ms=68536 cap_ms=600000 max_lane_ms=540000 max_imbalance_ms=150000
+EXIT_STATUS=0
+
+CASE: exact 90 percent lane and 25 percent imbalance boundaries
+FM_TEST_PARALLEL_DRIFT ok portable-parallel-1_ms=540000 portable-parallel-2_ms=390000 imbalance_ms=150000 cap_ms=600000 max_lane_ms=540000 max_imbalance_ms=150000
+EXIT_STATUS=0
+
+CASE: lane exceeds 90 percent bound
+fm-test-run: parallel drift guard: lane portable-parallel-1 measured 560s (93% of the 600s job cap), over the 90% drift bound
+fm-test-run: parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts
+EXIT_STATUS=1
+
+CASE: imbalance exceeds 25 percent bound
+fm-test-run: parallel drift guard: lanes drifted apart by 180s (portable-parallel-1=480s, portable-parallel-2=300s), over the 150s (25% of the 600s job cap) imbalance bound
+fm-test-run: parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts
+EXIT_STATUS=1
+
+CASE: partial lane with plausible selection label
+fm-test-run: parallel drift guard: /Users/josephkim/.no-mistakes/evidence/01M28Q6G3HVCKTJADNZ8DKREEQ/partial-lane1.json does not exactly cover portable-parallel-1: missing script paths: tests/fm-test-run.test.sh
+EXIT_STATUS=2
+
+CASE: missing lane 2 artifact
+fm-test-run: parallel drift guard: lane portable-parallel-2 produced no timing artifact at /Users/josephkim/.no-mistakes/evidence/01M28Q6G3HVCKTJADNZ8DKREEQ/intentionally-absent-lane2.json
+fm-test-run: parallel drift guard: a lane writes no timing JSON when its job is killed at the cap or dies before finalization; investigate that lane instead of re-running it
+EXIT_STATUS=1
