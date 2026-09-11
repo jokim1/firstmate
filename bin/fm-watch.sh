@@ -2069,26 +2069,6 @@ while :; do
 $pending
 EOF
     reason="signal:$files"
-    # Capacity-freeing status transitions enqueue ONE advisory refill wake
-    # (deduped by kind at drain). Key the decision on newly appended lines in
-    # this signal's unclassified span, not on whether the file still ends in a
-    # freeing verb after a later turn-end or working: note. Paused and resolved
-    # free capacity without being captain-relevant, so detect them here before
-    # the absorb decision. Working notes never free capacity.
-    need_refill=0
-    while IFS=$(printf '\t') read -r sf sig f; do
-      [ -n "$sf" ] || continue
-      case "$f" in *.status) ;; *) continue ;; esac
-      if status_span_frees_capacity "$f" "$(fm_wake_signal_seen_size "$STATE" "$f")"; then
-        need_refill=1
-        break
-      fi
-    done <<EOF
-$pending
-EOF
-    if [ "$need_refill" -eq 1 ]; then
-      fm_wake_enqueue_refill || exit 1
-    fi
     # Triage: a signal is ACTIONABLE when any of these holds (cheapest first):
     #   - the away-mode daemon owns triage (afk) and wants every wake;
     #   - any status file gained a captain-relevant event since it was last
@@ -2112,14 +2092,35 @@ EOF
     # checks are costly (a bounded no-mistakes call, then a pane capture), so the ||
     # ordering evaluates them ONLY for a non-afk signal with no captain-relevant
     # status span, and the capture only once the authoritative verdict comes up short.
-    # A refill-only signal (a capacity-freeing resolved:/paused: while the crew is
-    # still working) already enqueued its advisory refill wake above; it advances
-    # markers here without being treated as a spawn recommendation.
     FM_SIGNAL_SURFACE_ENDPOINTS=''
     FM_SIGNAL_NEEDS_DECISION_FILES=''
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
     signal_files_actionable $files
     signal_actionable=$?
+    # Capacity-freeing status transitions enqueue ONE advisory refill wake
+    # (deduped by kind at drain). Evaluate AFTER classification so the refill
+    # predicate covers the same span whose endpoint later commits advance;
+    # classification does not move the seen offset. Key the decision on newly
+    # appended lines in that unclassified span, not on whether the file still
+    # ends in a freeing verb after a later turn-end or working: note. Paused and
+    # resolved free capacity without being captain-relevant. Working notes never
+    # free capacity. A refill-only signal (resolved:/paused: while the crew is
+    # still working) enqueues here, then advances markers below without being
+    # treated as a spawn recommendation.
+    need_refill=0
+    while IFS=$(printf '\t') read -r sf sig f; do
+      [ -n "$sf" ] || continue
+      case "$f" in *.status) ;; *) continue ;; esac
+      if status_span_frees_capacity "$f" "$(fm_wake_signal_seen_size "$STATE" "$f")"; then
+        need_refill=1
+        break
+      fi
+    done <<EOF
+$pending
+EOF
+    if [ "$need_refill" -eq 1 ]; then
+      fm_wake_enqueue_refill || exit 1
+    fi
     # A decision-owned file's queued row payload is marked "needs-decision:"
     # instead of the ordinary "signal:" below (other files in the same batch
     # keep the ordinary payload). The wake reason line itself, and every

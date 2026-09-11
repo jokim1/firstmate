@@ -397,6 +397,24 @@ test_classifier_primitives() {
   printf 'done: ready\n' >> "$state/span.status"
   status_span_frees_capacity "$state/span.status" "$start" \
     || fail "new done: append in span does not free capacity"
+  # Identity flip mid-read (FM_STATUS_IDENTITY_READER) must refuse the span
+  # rather than classify a mixed-identity freeing line as a refill. The counter
+  # path is fixed under $state so successive reader subprocesses share it
+  # (a $$ path would reset per invocation and never flip).
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' "count_file='$state/ident-flip.count'"
+    printf '%s\n' 'n=0'
+    printf '%s\n' '[ -f "$count_file" ] && n=$(cat "$count_file")'
+    printf '%s\n' 'n=$((n + 1))'
+    printf '%s\n' 'printf %s "$n" > "$count_file"'
+    printf '%s\n' 'if [ "$n" -eq 1 ]; then printf "strong:1:1:before"; else printf "strong:2:2:after"; fi'
+  } > "$state/ident-flip.sh"
+  chmod +x "$state/ident-flip.sh"
+  rm -f "$state/ident-flip.count"
+  FM_STATUS_IDENTITY_READER="$state/ident-flip.sh" \
+    status_span_frees_capacity "$state/span.status" 0 \
+    && fail "identity mismatch mid-read wrongly freed capacity"
   status_is_captain_relevant "merged" || fail "legacy bare merged free-text not captain-relevant"
   status_is_captain_relevant "PR ready https://x/pull/2" \
     || fail "legacy bare PR ready free-text not captain-relevant"

@@ -172,9 +172,13 @@ status_frees_capacity() {
 # ends in a freeing verb after an unrelated turn-end or working: append.
 # Missing, unreadable, or symlink status files return 1 (no refill).
 # A start at or past end of file is an empty span and returns 1.
+# Re-checks file identity after the span read (mirroring
+# status_span_first_actionable_record): a replaced inode mid-read returns 1
+# rather than classifying a mixed-identity span.
 status_span_frees_capacity() {  # <status-file> <start-offset>
-  local f=$1 start=${2:-0} size scratch chunk_file line found=1
+  local f=$1 start=${2:-0} size ident cur_ident scratch chunk_file line found=1
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 1
+  ident=$(_fm_open_decisions_file_ident "$f") || return 1
   size=$(_fm_status_file_size "$f") || return 1
   size=${size//[[:space:]]/}
   case "$size" in ''|*[!0-9]*) return 1 ;; esac
@@ -185,6 +189,10 @@ status_span_frees_capacity() {  # <status-file> <start-offset>
   chunk_file="${scratch}.refill"
   _fm_status_read_span "$f" "$start" "$((size - start))" > "$chunk_file" 2>/dev/null \
     || { rm -f "$chunk_file"; return 1; }
+  cur_ident=$(_fm_open_decisions_file_ident "$f") || {
+    rm -f "$chunk_file"; return 1;
+  }
+  [ "$cur_ident" = "$ident" ] || { rm -f "$chunk_file"; return 1; }
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
     if status_frees_capacity "$line"; then
