@@ -2200,6 +2200,7 @@ $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
     [ "$refill_classification_error" -eq 0 ] || continue
     signal_should_surface=0
+    # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
     if afk_present || [ "$signal_actionable" -eq 0 ] \
       || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
       signal_should_surface=1

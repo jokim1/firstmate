@@ -407,6 +407,7 @@ test_classifier_primitives() {
   # rather than classify a mixed-identity freeing line as a refill. The counter
   # path is fixed under $state so successive reader subprocesses share it
   # (a $$ path would reset per invocation and never flip).
+  # shellcheck disable=SC2016 # single quotes are deliberate: variables expand when the generated reader runs
   {
     printf '%s\n' '#!/usr/bin/env bash'
     printf '%s\n' "count_file='$state/ident-flip.count'"
