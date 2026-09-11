@@ -2021,6 +2021,103 @@ test_refill_waits_for_marker_commit() {
   pass "refill wakes wait for classified marker commits and retry failures"
 }
 
+test_refill_retry_surfaces_other_signals() {
+  local dir state fakebin out status_file marker pid i
+  dir=$(make_case refill-retry-other-signal); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; status_file="$state/task.status"; marker="$state/.seen-task_status"
+  printf 'resolved: frees capacity\n' > "$status_file"
+  mkdir "$marker"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  i=0
+  while [ "$i" -lt 120 ] && { [ ! -s "$state/.wake-queue" ] \
+    || [ -e "$state/.wake-queue.lock" ] || [ -L "$state/.wake-queue.lock" ]; } \
+    && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$state/.wake-queue" ] \
+    || { reap "$pid"; fail "marker failure never reached refill enqueue before other signal"; }
+  printf 'blocked: unrelated supervision\n' > "$state/other.status"
+  wait_for_exit "$pid" 120 \
+    || { reap "$pid"; fail "marker retry starved an unrelated signal"; }
+  grep -F "$state/other.status" "$out" >/dev/null \
+    || fail "unrelated signal did not surface during marker retry: $(cat "$out")"
+  unset FM_FAKE_CREW_STATE
+  pass "refill marker retries do not starve unrelated signals"
+}
+
+test_refill_retry_abandons_stale_endpoint() {
+  local dir state fakebin out status_file marker pid i rc
+  dir=$(make_case refill-retry-stale); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; status_file="$state/task.status"; marker="$state/.seen-task_status"
+  printf 'resolved: frees capacity\n' > "$status_file"
+  mkdir "$marker"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · running'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  i=0
+  while [ "$i" -lt 120 ] && { [ ! -s "$state/.wake-queue" ] \
+    || [ -e "$state/.wake-queue.lock" ] || [ -L "$state/.wake-queue.lock" ]; } \
+    && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$state/.wake-queue" ] \
+    || { reap "$pid"; fail "marker failure never reached refill enqueue before stale capture"; }
+  rmdir "$marker"
+  rm -f "$status_file"
+  i=0
+  while [ "$i" -lt 50 ] && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  is_live_non_zombie "$pid" \
+    && { reap "$pid"; fail "stale refill endpoint remained in retry forever"; }
+  wait "$pid"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "stale refill endpoint did not exit fail-awake"
+  unset FM_FAKE_CREW_STATE
+  pass "stale refill endpoints exit fail-awake"
+}
+
+test_refill_retry_preserves_successful_endpoints() {
+  local dir state fakebin out a_status b_status b_marker pid i new_end marked_end
+  dir=$(make_case refill-retry-partial); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; a_status="$state/a.status"; b_status="$state/b.status"
+  b_marker="$state/.seen-b_status"
+  printf 'done: first\n' > "$a_status"
+  printf 'done: second\n' > "$b_status"
+  mkdir "$b_marker"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · fake default'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  i=0
+  while [ "$i" -lt 120 ] && { [ ! -s "$state/.wake-queue" ] \
+    || [ -e "$state/.wake-queue.lock" ] || [ -L "$state/.wake-queue.lock" ]; } \
+    && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$state/.wake-queue" ] \
+    || { reap "$pid"; fail "partial marker failure never reached refill enqueue"; }
+  printf 'resolved: later transition\n' >> "$a_status"
+  prime_status_seen "$state" "$a_status" \
+    || { reap "$pid"; fail "could not advance successful endpoint during partial retry"; }
+  new_end=$(size_of "$a_status")
+  wait_poll_cycle "$state" "$pid" \
+    || { reap "$pid"; fail "partial marker failure did not complete another cycle"; }
+  marked_end=$(status_presentation_marker_offset "$state/.seen-a_status" "$a_status")
+  [ "$marked_end" -eq "$new_end" ] \
+    || { reap "$pid"; fail "partial retry regressed successful endpoint from $new_end to $marked_end"; }
+  rmdir "$b_marker"
+  wait_for_exit "$pid" 120 \
+    || { reap "$pid"; fail "partial marker retry did not finish after recovery"; }
+  unset FM_FAKE_CREW_STATE
+  pass "partial refill retries preserve successful endpoints"
+}
+
 test_refill_mixed_batch_records_unclassified_status() {
   local dir state fakebin out good_status unreadable_status pid
   dir=$(make_case refill-mixed-unreadable); state="$dir/state"; fakebin="$dir/fakebin"
@@ -5083,6 +5180,9 @@ test_capacity_freeing_status_enqueues_refill
 test_working_status_does_not_enqueue_refill
 test_resolved_while_working_enqueues_refill_only
 test_refill_waits_for_marker_commit
+test_refill_retry_surfaces_other_signals
+test_refill_retry_abandons_stale_endpoint
+test_refill_retry_preserves_successful_endpoints
 test_refill_mixed_batch_records_unclassified_status
 test_n_capacity_transitions_collapse_to_one_refill
 test_refill_only_on_capacity_freeing_transition

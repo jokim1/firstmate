@@ -1874,6 +1874,20 @@ EOF
   return 1
 }
 
+filter_refill_retry_pending() {  # <pending>
+  local batch=$1 sf sig f
+  while IFS=$(printf '\t') read -r sf sig f; do
+    [ -n "$sf" ] || continue
+    if [ -n "${REFILL_RETRY_ENDPOINTS:-}" ] \
+      && refill_batch_endpoint_captured "$f" "$REFILL_RETRY_ENDPOINTS"; then
+      continue
+    fi
+    printf '%s\t%s\t%s\n' "$sf" "$sig" "$f"
+  done <<EOF
+$batch
+EOF
+}
+
 finish_refill_batch() {  # <endpoints> <pending> <should-surface> <reason>
   local endpoints=$1 batch=$2 should_surface=$3 batch_reason=$4
   local sf sig f surface_end surface_ident
@@ -1906,6 +1920,9 @@ EOF
 }
 
 resurface_after_downtime() {
+  if [ -n "${REFILL_RETRY_ENDPOINTS:-}" ]; then
+    return 0
+  fi
   # Handling successors already have a predecessor-delivered wake on the way.
   # Re-announcing from this cycle is what turned a lost handshake into an
   # unbounded recovery loop; stay in the poll loop and supervise instead.
@@ -1953,22 +1970,27 @@ while :; do
   watcher_beat || true
 
   if [ -n "${REFILL_RETRY_ENDPOINTS:-}" ]; then
-    signal_commit_error=0
+    refill_failed_endpoints=''
+    refill_stale_endpoint=0
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
     while IFS=$(printf '\t') read -r f surface_end surface_ident; do
       [ -n "$f" ] || continue
-      fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" \
-        || signal_commit_error=1
+      current_ident=$(_fm_open_decisions_file_ident "$f") || current_ident=''
+      if [ -z "$current_ident" ] || [ "$current_ident" != "$surface_ident" ]; then
+        refill_stale_endpoint=1
+      elif ! fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident"; then
+        refill_failed_endpoints="${refill_failed_endpoints}${f}"$'\t'"${surface_end}"$'\t'"${surface_ident}"$'\n'
+      fi
     done <<EOF
 $REFILL_RETRY_ENDPOINTS
 EOF
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
-    if [ "$signal_commit_error" -ne 0 ]; then
-      sleep "$POLL"
-      continue
+    [ "$refill_stale_endpoint" -eq 0 ] || exit 1
+    REFILL_RETRY_ENDPOINTS=$refill_failed_endpoints
+    if [ -z "$REFILL_RETRY_ENDPOINTS" ]; then
+      finish_refill_batch "$REFILL_BATCH_ENDPOINTS" "$REFILL_RETRY_PENDING" \
+        "$REFILL_RETRY_SIGNAL_SHOULD_SURFACE" "$REFILL_RETRY_REASON"
     fi
-    finish_refill_batch "$REFILL_RETRY_ENDPOINTS" "$REFILL_RETRY_PENDING" \
-      "$REFILL_RETRY_SIGNAL_SHOULD_SURFACE" "$REFILL_RETRY_REASON"
   fi
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
@@ -2112,10 +2134,10 @@ EOF
   # hook land seconds apart, and reporting them as separate actionable wakes
   # costs a full firstmate turn each. The re-scan also picks up a newer
   # signature for an already-pending file (last write wins below).
-  pending=$(scan_signals)
+  pending=$(filter_refill_retry_pending "$(scan_signals)")
   if [ -n "$pending" ]; then
     sleep "$SIGNAL_GRACE"
-    pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
+    pending=$(filter_refill_retry_pending "$(printf '%s\n%s' "$pending" "$(scan_signals)")")
     # The final coalesced signal set is the watcher-carried status-change
     # trigger for this home's published summary. Start it before either
     # surfacing or absorbing the signal, but never wait on it: see
@@ -2188,7 +2210,8 @@ EOF
     fi
     if [ "$need_refill" -eq 1 ]; then
       signal_publish_error=0
-      signal_commit_error=0
+      signal_failed_endpoints=''
+      signal_stale_endpoint=0
       fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
       if [ "$signal_should_surface" -eq 1 ]; then
         while IFS=$(printf '\t') read -r sf sig f; do
@@ -2212,16 +2235,22 @@ EOF
       if [ "$signal_publish_error" -eq 0 ]; then
         while IFS=$(printf '\t') read -r f surface_end surface_ident; do
           [ -n "$f" ] || continue
-          fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" \
-            || signal_commit_error=1
+          current_ident=$(_fm_open_decisions_file_ident "$f") || current_ident=''
+          if [ -z "$current_ident" ] || [ "$current_ident" != "$surface_ident" ]; then
+            signal_stale_endpoint=1
+          elif ! fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident"; then
+            signal_failed_endpoints="${signal_failed_endpoints}${f}"$'\t'"${surface_end}"$'\t'"${surface_ident}"$'\n'
+          fi
         done <<EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
       fi
       fm_lock_release "$FM_WAKE_QUEUE_LOCK"
       [ "$signal_publish_error" -eq 0 ] || exit 1
-      if [ "$signal_commit_error" -ne 0 ]; then
-        REFILL_RETRY_ENDPOINTS=$FM_SIGNAL_SURFACE_ENDPOINTS
+      [ "$signal_stale_endpoint" -eq 0 ] || exit 1
+      if [ -n "$signal_failed_endpoints" ]; then
+        REFILL_BATCH_ENDPOINTS=$FM_SIGNAL_SURFACE_ENDPOINTS
+        REFILL_RETRY_ENDPOINTS=$signal_failed_endpoints
         REFILL_RETRY_PENDING=$pending
         REFILL_RETRY_SIGNAL_SHOULD_SURFACE=$signal_should_surface
         REFILL_RETRY_REASON=$reason
