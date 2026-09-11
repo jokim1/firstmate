@@ -2180,16 +2180,12 @@ EOF
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
     signal_files_actionable $files
     signal_actionable=$?
-    # Capacity-freeing status transitions enqueue ONE advisory refill wake
-    # (deduped by kind at drain). Evaluate AFTER classification so the refill
-    # predicate covers the same span whose endpoint later commits advance;
-    # classification does not move the seen offset. Key the decision on newly
-    # appended lines in that unclassified span, not on whether the file still
-    # ends in a freeing verb after a later turn-end or working: note. Paused and
-    # resolved free capacity without being captain-relevant. Working notes never
-    # free capacity. A refill-only signal (resolved:/paused: while the crew is
-    # still working) enqueues here, then advances markers below without being
-    # treated as a spawn recommendation.
+    # Evaluate AFTER classification so the refill predicate covers the same span
+    # whose endpoint later commits advance; classification does not move the seen
+    # offset. Paused and resolved free capacity without being captain-relevant.
+    # Working notes never free capacity. A refill-only signal (resolved:/paused:
+    # while the crew is still working) enqueues here, then advances markers below
+    # without being treated as a spawn recommendation.
     need_refill=0
     refill_classification_error=0
     while IFS=$(printf '\t') read -r f surface_end surface_ident; do
@@ -2228,10 +2224,14 @@ EOF
         fm_wake_append_locked refill refill "$FM_WAKE_REFILL_PAYLOAD" \
           || signal_publish_error=1
       fi
-      # Accepted crash-only residual: process death after the signal/refill rows
-      # append but before fm_wake_status_seen_commit completes can cause one
-      # duplicate advisory refill; the next heartbeat re-evaluates. Deliberately
-      # do not add a durable transaction or transition-keyed dedup ledger here.
+      # A capacity-freeing transition enqueues a refill when newly classified; a
+      # later turn-end or working: append never re-enqueues from a stale tail. In
+      # rare failure paths - a crash inside this publication window, or repeated
+      # marker-commit failure interrupted by an unrelated supervision wake - at
+      # most one duplicate ADVISORY refill can be published. Duplicates are
+      # deduped by kind at drain and are harmless; guaranteeing exactly-once
+      # would require durable transactional state at the shared queue boundary,
+      # which is deliberately out of scope.
       if [ "$signal_publish_error" -eq 0 ]; then
         while IFS=$(printf '\t') read -r f surface_end surface_ident; do
           [ -n "$f" ] || continue
@@ -2249,6 +2249,8 @@ EOF
       [ "$signal_publish_error" -eq 0 ] || exit 1
       [ "$signal_stale_endpoint" -eq 0 ] || exit 1
       if [ -n "$signal_failed_endpoints" ]; then
+        # An unrelated wake can discard this in-memory retry under the advisory
+        # refill limitation stated at the publication boundary above.
         REFILL_BATCH_ENDPOINTS=$FM_SIGNAL_SURFACE_ENDPOINTS
         REFILL_RETRY_ENDPOINTS=$signal_failed_endpoints
         REFILL_RETRY_PENDING=$pending

@@ -1611,7 +1611,7 @@ test_actionable_signal_surfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the actionable signal failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null || fail "actionable signal was not queued"
   [ -s "$state/.hb-surfaced-task" ] || fail "actionable signal did not record the surfaced marker"
-  # Capacity-freeing needs-decision also enqueues exactly one refill wake.
+  # Capacity-freeing needs-decision also enqueues a refill wake.
   refill_n=$(awk -F '\t' '$3 == "refill" { n++ } END { print n + 0 }' "$drain_out")
   [ "$refill_n" -eq 1 ] || fail "needs-decision signal should enqueue exactly one refill, got $refill_n"
   pass "captain-relevant signal is surfaced (queue + exit) and marked surfaced"
@@ -1887,7 +1887,7 @@ test_permission_recovery_surfaces_preserved_status() {
   pass "permission recovery surfaces content from the unadvanced position"
 }
 
-# Phase 2: capacity-freeing status transitions enqueue one refill; working does not.
+# Phase 2: newly classified capacity-freeing statuses enqueue refill; working does not.
 test_capacity_freeing_status_enqueues_refill() {
   local dir state fakebin out drain_out status_file pid verb refill_n
   # paused: is not captain-relevant; force not-provably-working so the path surfaces.
@@ -1908,7 +1908,7 @@ test_capacity_freeing_status_enqueues_refill() {
       || fail "refill payload missing for '$verb'"
   done
   unset FM_FAKE_CREW_STATE
-  pass "capacity-freeing status verbs enqueue exactly one refill each"
+  pass "newly classified capacity-freeing status verbs enqueue a refill"
 }
 
 test_working_status_does_not_enqueue_refill() {
@@ -2173,10 +2173,10 @@ test_n_capacity_transitions_collapse_to_one_refill() {
   pass "N capacity-freeing transitions before drain collapse to one refill"
 }
 
-# Refill keys on the capacity-freeing TRANSITION, not a stale freeing tail:
-# a new resolved: enqueues one refill; a later turn-end with the same tail
-# enqueues none; a new done: enqueues one again; a working: append enqueues none.
-test_refill_only_on_capacity_freeing_transition() {
+# Normal-path regression for the advisory-refill guarantee at the watcher
+# publication boundary: a later turn-end and working: append do not replay the
+# resolved: or done: transitions exercised here.
+test_refill_stale_tail_does_not_reenqueue() {
   local dir state fakebin out drain_out status_file turn_ended pid refill_n
   dir=$(make_case refill-transition); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
@@ -2239,7 +2239,7 @@ test_refill_only_on_capacity_freeing_transition() {
   reap "$pid"
 
   unset FM_FAKE_CREW_STATE
-  pass "refill enqueues once per capacity-freeing transition, not on later turn-end or working:"
+  pass "later turn-end and working: append do not re-enqueue stale refill tails"
 }
 
 test_terminal_stale_surfaced() {
@@ -5185,7 +5185,7 @@ test_refill_retry_abandons_stale_endpoint
 test_refill_retry_preserves_successful_endpoints
 test_refill_mixed_batch_records_unclassified_status
 test_n_capacity_transitions_collapse_to_one_refill
-test_refill_only_on_capacity_freeing_transition
+test_refill_stale_tail_does_not_reenqueue
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
