@@ -1,0 +1,23 @@
+ok - newly classified capacity-freeing status verbs enqueue a refill
+ok - resolved while working enqueues refill without a signal wake
+ok - later turn-end and working: append do not re-enqueue stale refill tails
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-marker-refill-only/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-marker-refill-only/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-marker-refill-only/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-marker-refill-only/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-marker-actionable/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-marker-actionable/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-marker-actionable/state/.seen-task_status: Is a directory
+ok - refill wakes wait for classified marker commits and retry failures
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-retry-other-signal/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-retry-other-signal/state/.seen-task_status: Is a directory
+ok - refill marker retries do not starve unrelated signals
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-retry-stale/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-retry-stale/state/.seen-task_status: Is a directory
+ok - stale refill endpoints exit fail-awake
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-retry-partial/state/.seen-b_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-retry-partial/state/.seen-b_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-retry-partial/state/.seen-b_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.kIn3Nn/refill-retry-partial/state/.seen-b_status: Is a directory
+ok - partial refill retries preserve successful endpoints
+ok - mixed refill batches record unclassified status signatures

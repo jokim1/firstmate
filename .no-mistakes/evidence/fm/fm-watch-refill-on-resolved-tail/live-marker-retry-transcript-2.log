@@ -1,0 +1,9 @@
+during_marker_failure alive=yes queue_rows_before=3 queue_rows_after=3 refills_before=1 refills_after=1 watcher_output_bytes=0
+after_marker_recovery watcher_output=signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-marker-retry-2/state/task.status 
+after_marker_recovery drained_refills=1 drained_signals=1
+1789120832	2	signal	task.status	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-marker-retry-2/state/task.status
+1789120832	3	refill	refill	refill: re-evaluate ready work against free capacity
+wake annotation: latest wake-EVENT observed at drain, not current state: task.status: done: ready for captain
+STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):
+task done: ready for captain
+RESULT: PASS - marker retries retained one published batch and delivered it only after commit recovery

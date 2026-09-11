@@ -1,0 +1,12 @@
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.Up1TTt/refill-retry-other-signal/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.Up1TTt/refill-retry-other-signal/state/.seen-task_status: Is a directory
+ok - refill marker retries do not starve unrelated signals
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.Up1TTt/refill-retry-stale/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.Up1TTt/refill-retry-stale/state/.seen-task_status: Is a directory
+ok - stale refill endpoints exit fail-awake
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.Up1TTt/refill-retry-partial/state/.seen-b_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.Up1TTt/refill-retry-partial/state/.seen-b_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.Up1TTt/refill-retry-partial/state/.seen-b_status: Is a directory
+ok - partial refill retries preserve successful endpoints
+ok - mixed refill batches record unclassified status signatures
+exit_code=0

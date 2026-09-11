@@ -1,0 +1,3 @@
+66387	Fri Sep 11 15:29:03 2026     bash /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-watch.sh	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.status
+68665	Fri Sep 11 15:29:07 2026     bash /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-watch.sh	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.turn-ended
+71175	Fri Sep 11 15:29:10 2026     bash /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-watch.sh	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.status

@@ -1,0 +1,3 @@
+1789120832	1	signal	task.status	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-marker-retry-2/state/task.status
+1789120832	2	signal	task.status	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-marker-retry-2/state/task.status
+1789120832	3	refill	refill	refill: re-evaluate ready work against free capacity

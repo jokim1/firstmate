@@ -1,0 +1,4 @@
+1789120745	2	signal	task.status	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.status
+1789120745	3	refill	refill	refill: re-evaluate ready work against free capacity
+wake annotation: unread wake-EVENT since last drain, not current state: task.status: needs-decision [key=q1]: choose A
+wake annotation: latest wake-EVENT observed at drain, not current state: task.status: resolved [key=q1]: answered A

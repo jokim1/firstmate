@@ -1,0 +1,9 @@
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.0PHpgt/refill-marker-refill-only/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.0PHpgt/refill-marker-refill-only/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.0PHpgt/refill-marker-refill-only/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.0PHpgt/refill-marker-refill-only/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.0PHpgt/refill-marker-actionable/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.0PHpgt/refill-marker-actionable/state/.seen-task_status: Is a directory
+/Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M27PRGW6N0JRD2JJGHBJQQPQ/bin/fm-classify-lib.sh: line 1241: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-watch-triage-tests.0PHpgt/refill-marker-actionable/state/.seen-task_status: Is a directory
+ok - refill wakes wait for classified marker commits and retry failures
+exit_code=0

@@ -1,0 +1,14 @@
+transition watcher_output=signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.status 
+transition drained_refills=1 drained_signals=1
+1789120745	2	signal	task.status	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.status
+1789120745	3	refill	refill	refill: re-evaluate ready work against free capacity
+wake annotation: unread wake-EVENT since last drain, not current state: task.status: needs-decision [key=q1]: choose A
+wake annotation: latest wake-EVENT observed at drain, not current state: task.status: resolved [key=q1]: answered A
+later-turn-end watcher_output=signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.turn-ended 
+later-turn-end drained_refills=0 drained_signals=1
+1789120748	5	signal	task.turn-ended	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.turn-ended
+later-working-append watcher_output=signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.status 
+later-working-append drained_refills=0 drained_signals=1
+1789120752	7	signal	task.status	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.status
+wake annotation: latest wake-EVENT observed at drain, not current state: task.status: working: pipeline poll completed
+RESULT: PASS - one refill on the capacity-freeing transition; zero refills on later turn-end and working append

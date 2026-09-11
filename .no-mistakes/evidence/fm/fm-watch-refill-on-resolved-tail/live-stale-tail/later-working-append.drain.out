@@ -1,0 +1,2 @@
+1789120752	7	signal	task.status	signal: /Users/josephkim/.no-mistakes/evidence/01M27PRGW6N0JRD2JJGHBJQQPQ/live-stale-tail/state/task.status
+wake annotation: latest wake-EVENT observed at drain, not current state: task.status: working: pipeline poll completed

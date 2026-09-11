@@ -1,0 +1,3 @@
+needs-decision [key=q1]: choose A
+resolved [key=q1]: answered A
+working: pipeline poll completed
