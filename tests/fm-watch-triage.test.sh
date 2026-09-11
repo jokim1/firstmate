@@ -1975,7 +1975,9 @@ test_refill_waits_for_marker_commit() {
     watch_bg "$state" "$fakebin" "$out"
     pid=$!
     i=0
-    while [ "$i" -lt 120 ] && [ ! -s "$state/.wake-queue" ] && is_live_non_zombie "$pid"; do
+    while [ "$i" -lt 120 ] && { [ ! -s "$state/.wake-queue" ] \
+      || [ -e "$state/.wake-queue.lock" ] || [ -L "$state/.wake-queue.lock" ]; } \
+      && is_live_non_zombie "$pid"; do
       sleep 0.1
       i=$((i + 1))
     done
@@ -1985,6 +1987,11 @@ test_refill_waits_for_marker_commit() {
       || fail "$variant marker failure delivered the wake before committing its endpoint"
     [ ! -s "$out" ] \
       || { reap "$pid"; fail "$variant marker failure printed a wake: $(cat "$out")"; }
+    signal_n=$(awk -F '\t' '$3 == "signal" { n++ } END { print n + 0 }' "$state/.wake-queue")
+    case "$variant:$signal_n" in
+      refill-only:0|actionable:[1-9]*) ;;
+      *) { reap "$pid"; fail "$variant marker failure queued $signal_n signal wakes"; } ;;
+    esac
 
     rmdir "$marker"
     wait_for_exit "$pid" 120 \

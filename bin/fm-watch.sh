@@ -1864,6 +1864,10 @@ retire_merged_pr_poll() {  # <id>
 }
 
 resurface_after_downtime() {
+  if [ "${REFILL_COMMIT_PENDING:-0}" = 1 ]; then
+    REFILL_COMMIT_PENDING=0
+    return 0
+  fi
   # Handling successors already have a predecessor-delivered wake on the way.
   # Re-announcing from this cycle is what turned a lost handshake into an
   # unbounded recovery loop; stay in the poll loop and supervise instead.
@@ -2120,17 +2124,45 @@ EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
     [ "$refill_classification_error" -eq 0 ] || continue
+    signal_should_surface=0
+    if afk_present || [ "$signal_actionable" -eq 0 ] \
+      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
+      signal_should_surface=1
+    fi
     if [ "$need_refill" -eq 1 ]; then
-      fm_wake_enqueue_refill || exit 1
+      signal_publish_error=0
       signal_commit_error=0
-      while IFS=$(printf '\t') read -r f surface_end surface_ident; do
-        [ -n "$f" ] || continue
-        fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" \
-          || signal_commit_error=1
-      done <<EOF
+      fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+      if [ "$signal_should_surface" -eq 1 ]; then
+        while IFS=$(printf '\t') read -r sf sig f; do
+          [ -n "$sf" ] || continue
+          file_reason="$reason"
+          case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
+          fm_wake_append_locked signal "$(basename "$f")" "$file_reason" \
+            || signal_publish_error=1
+        done <<EOF
+$pending
+EOF
+      fi
+      if [ "$signal_publish_error" -eq 0 ]; then
+        fm_wake_append_locked refill refill "$FM_WAKE_REFILL_PAYLOAD" \
+          || signal_publish_error=1
+      fi
+      if [ "$signal_publish_error" -eq 0 ]; then
+        while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+          [ -n "$f" ] || continue
+          fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" \
+            || signal_commit_error=1
+        done <<EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
-      [ "$signal_commit_error" -eq 0 ] || continue
+      fi
+      fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+      [ "$signal_publish_error" -eq 0 ] || exit 1
+      if [ "$signal_commit_error" -ne 0 ]; then
+        REFILL_COMMIT_PENDING=1
+        continue
+      fi
     fi
     # A decision-owned file's queued row payload is marked "needs-decision:"
     # instead of the ordinary "signal:" below (other files in the same batch
@@ -2143,16 +2175,17 @@ EOF
     # passes it to handle_wake (see the comment above handle_wake in
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
-    if afk_present || [ "$signal_actionable" -eq 0 ] \
-      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
-      while IFS=$(printf '\t') read -r sf sig f; do
-        [ -n "$sf" ] || continue
-        file_reason="$reason"
-        case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
-        fm_wake_append signal "$(basename "$f")" "$file_reason" || exit 1
-      done <<EOF
+    if [ "$signal_should_surface" -eq 1 ]; then
+      if [ "$need_refill" -eq 0 ]; then
+        while IFS=$(printf '\t') read -r sf sig f; do
+          [ -n "$sf" ] || continue
+          file_reason="$reason"
+          case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
+          fm_wake_append signal "$(basename "$f")" "$file_reason" || exit 1
+        done <<EOF
 $pending
 EOF
+      fi
       # The wake signature advances for every file in this batch, including one
       # whose span could not be classified: it has now been reported, and this is
       # what bounds an unreadable log to one report per distinct file state. Only
@@ -2162,7 +2195,9 @@ EOF
         [ -n "$sf" ] || continue
         case "$f" in
           *.status)
-            fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
+            if [ "$need_refill" -eq 0 ]; then
+              fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
+            fi
             mark_surface_reported "$f" "$sig" || true
             ;;
           *) printf '%s' "$sig" > "$sf" ;;
@@ -2187,9 +2222,7 @@ EOF
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         case "$f" in
-          *.status)
-            fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
-            ;;
+          *.status) ;;
           *) printf '%s' "$sig" > "$sf" ;;
         esac
       done <<EOF
