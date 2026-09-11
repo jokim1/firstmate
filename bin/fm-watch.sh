@@ -2148,6 +2148,10 @@ EOF
         fm_wake_append_locked refill refill "$FM_WAKE_REFILL_PAYLOAD" \
           || signal_publish_error=1
       fi
+      # Accepted crash-only residual: process death after the signal/refill rows
+      # append but before fm_wake_status_seen_commit completes can cause one
+      # duplicate advisory refill; the next heartbeat re-evaluates. Deliberately
+      # do not add a durable transaction or transition-keyed dedup ledger here.
       if [ "$signal_publish_error" -eq 0 ]; then
         while IFS=$(printf '\t') read -r f surface_end surface_ident; do
           [ -n "$f" ] || continue
