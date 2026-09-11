@@ -1956,7 +1956,7 @@ test_resolved_while_working_enqueues_refill_only() {
 }
 
 test_refill_waits_for_marker_commit() {
-  local variant dir state fakebin out drain_out status_file marker pid i refill_n signal_n queue_n queue_after
+  local variant dir state fakebin out drain_out status_file marker pid i refill_n signal_n queue_n queue_after retry_started retry_elapsed
   for variant in refill-only actionable; do
     dir=$(make_case "refill-marker-$variant"); state="$dir/state"; fakebin="$dir/fakebin"
     out="$dir/watch.out"; drain_out="$dir/drain.out"
@@ -1988,8 +1988,12 @@ test_refill_waits_for_marker_commit() {
     [ ! -s "$out" ] \
       || { reap "$pid"; fail "$variant marker failure printed a wake: $(cat "$out")"; }
     queue_n=$(awk 'END { print NR + 0 }' "$state/.wake-queue")
+    retry_started=$(date +%s)
     wait_poll_cycle "$state" "$pid" \
       || { reap "$pid"; fail "$variant marker failure did not retry its endpoint"; }
+    retry_elapsed=$(( $(date +%s) - retry_started ))
+    [ "$retry_elapsed" -ge 1 ] \
+      || { reap "$pid"; fail "$variant marker failure retried without the poll delay"; }
     queue_after=$(awk 'END { print NR + 0 }' "$state/.wake-queue")
     [ "$queue_after" -eq "$queue_n" ] \
       || { reap "$pid"; fail "$variant marker retry grew the queue from $queue_n to $queue_after rows"; }

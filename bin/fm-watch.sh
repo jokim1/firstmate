@@ -1963,7 +1963,10 @@ while :; do
 $REFILL_RETRY_ENDPOINTS
 EOF
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
-    [ "$signal_commit_error" -eq 0 ] || continue
+    if [ "$signal_commit_error" -ne 0 ]; then
+      sleep "$POLL"
+      continue
+    fi
     finish_refill_batch "$REFILL_RETRY_ENDPOINTS" "$REFILL_RETRY_PENDING" \
       "$REFILL_RETRY_SIGNAL_SHOULD_SURFACE" "$REFILL_RETRY_REASON"
   fi
