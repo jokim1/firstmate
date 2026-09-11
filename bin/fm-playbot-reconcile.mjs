@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// bin/fm-playbot-reconcile.mjs - durable completion reconciliation for
-// Playbot lane tasks (plan v3 section 3.5, data/lanemcp-impl-plan/report.md).
+// bin/fm-playbot-reconcile.mjs - durable completion and pending-input
+// reconciliation for Playbot lane tasks (plan v3 section 3.5,
+// data/lanemcp-impl-plan/report.md).
 //
 // Sole trigger: the registered per-task custom check (state/<id>.check.sh,
 // hash-bound through bin/fm-check-register.sh) invokes `check <id>` and may
@@ -27,6 +28,7 @@
 
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   readFileSync,
   writeFileSync,
   lstatSync,
@@ -51,6 +53,7 @@ import {
   writePrivateJsonAtomic,
   capturePidIdentity,
   pidAlive,
+  respondToPendingPlaybotRequests,
   REPO_ROOT
 } from './fm-playbot-lanes.mjs';
 
@@ -84,9 +87,11 @@ class ReconcileDeadline extends Error {
 
 function makeDeadline(ms) {
   const end = Date.now() + ms;
-  return () => {
+  const check = () => {
     if (Date.now() > end) throw new ReconcileDeadline();
   };
+  check.remainingMs = () => Math.max(0, end - Date.now());
+  return check;
 }
 
 // --- outbox ----------------------------------------------------------------
@@ -104,6 +109,8 @@ function readOutbox(stateDir, taskId) {
     const parsed = JSON.parse(readFileSync(realpathSync(path), 'utf8'));
     if (parsed.schema !== 'firstmate.playbot.outbox.v1') throw new Error('outbox schema mismatch');
     if (parsed.taskId !== taskId) throw new Error('outbox task id mismatch');
+    if (parsed.approvalRequestFingerprints === undefined) parsed.approvalRequestFingerprints = [];
+    if (!Array.isArray(parsed.approvalRequestFingerprints)) throw new Error('outbox approval fingerprint cursor is malformed');
     return parsed;
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -112,6 +119,7 @@ function readOutbox(stateDir, taskId) {
         taskId,
         events: [],
         knownTurnIds: [],
+        approvalRequestFingerprints: [],
         lastObservedStatus: null,
         lastReconcileAt: null,
         lastFailure: null
@@ -121,6 +129,55 @@ function readOutbox(stateDir, taskId) {
     // filtered (plan section 3.5).
     throw error;
   }
+}
+
+function approvalJournalPathFor(stateDir, taskId) {
+  return resolve(stateDir, `${taskId}.playbot-approvals.jsonl`);
+}
+
+function appendApprovalJournal(stateDir, taskId, threadId, decision) {
+  const path = approvalJournalPathFor(stateDir, taskId);
+  if (existsSync(path)) {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('approval journal is not a regular file');
+    if ((stat.mode & 0o777) !== 0o600) throw new Error('approval journal must be mode 0600');
+  }
+  const record = {
+    schema: 'firstmate.playbot.approval-decision.v1',
+    recordedAt: new Date().toISOString(),
+    taskId,
+    threadId,
+    fingerprint: decision.fingerprint,
+    kind: decision.kind,
+    requestId: decision.requestId,
+    disposition: decision.disposition,
+    ruleId: decision.ruleId,
+    requestSha256: decision.requestSha256,
+    requestText: decision.requestText,
+    requestTextTruncated: decision.requestTextTruncated,
+    blockedReference: decision.blockedReference ?? null,
+    responseChannel: decision.channel ?? null,
+    response: decision.response ?? null
+  };
+  appendFileSync(path, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
+  return path;
+}
+
+function appendPolicyBlockStatus(stateDir, taskId, decision) {
+  const statusPath = resolve(stateDir, `${taskId}.status`);
+  if (existsSync(statusPath)) {
+    const stat = lstatSync(statusPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('task status is not a regular file');
+  }
+  const requestId = String(decision.requestId).replace(/[\r\n]/g, ' ').slice(0, 128);
+  const blockedReference = decision.blockedReference === undefined
+    ? ''
+    : ` reference=${JSON.stringify(String(decision.blockedReference).slice(0, 256))}`;
+  appendFileSync(
+    statusPath,
+    `blocked: Playbot approval request ${requestId} left pending by ${decision.ruleId}${blockedReference}; see state/${taskId}.playbot-approvals.jsonl\n`,
+    { encoding: 'utf8', mode: 0o600 }
+  );
 }
 
 function eventKey(parts) {
@@ -207,7 +264,7 @@ function copyScoutReport(options) {
 
 // --- check -----------------------------------------------------------------
 
-export function reconcileCheck(taskId, options = {}) {
+export async function reconcileCheck(taskId, options = {}) {
   const env = options.env ?? process.env;
   const stateDir = options.stateDir ?? fmStateDir(env);
   const paths = options.paths ?? playbotPaths(env);
@@ -296,11 +353,41 @@ export function reconcileCheck(taskId, options = {}) {
   const observedStatus = mapped.appThread.agent_status ?? null;
   const pendingInputSpec = COMPATIBILITY_MANIFEST.releases['0.90.0'].rollout.pendingInputAgentStatus;
 
+  let approvalResult = { decisions: [], unhandledPending: false };
+  if (observedStatus === pendingInputSpec) {
+    try {
+      approvalResult = await respondToPendingPlaybotRequests(threadId, worktree, {
+        ...(options.approvalOptions ?? {}),
+        env,
+        paths,
+        deadlineMs: checkDeadline.remainingMs(),
+        knownFingerprints: outbox.approvalRequestFingerprints,
+        onDecision: async (decision) => {
+          appendApprovalJournal(stateDir, taskId, threadId, decision);
+          if (decision.disposition === 'leave-pending') appendPolicyBlockStatus(stateDir, taskId, decision);
+          outbox.approvalRequestFingerprints.push(decision.fingerprint);
+        }
+      });
+    } catch (error) {
+      return failOnce('approval-response', error.message);
+    }
+  }
+  checkDeadline();
+
   // Stage 4: dedupe against the outbox, then atomically record new pending
   // events before any output.
+  const newlyUnhandledFingerprints = approvalResult.decisions
+    .filter((decision) => decision.disposition === 'leave-pending')
+    .map((decision) => decision.fingerprint);
+  const unexplainedPendingTransition = approvalResult.unhandledPending
+    && newlyUnhandledFingerprints.length === 0
+    && outbox.lastObservedStatus !== pendingInputSpec;
+  const inputRequestFingerprints = unexplainedPendingTransition
+    ? [...newlyUnhandledFingerprints, null]
+    : newlyUnhandledFingerprints;
   let lockPid = null;
   let lockIdentity = null;
-  if (newTurns.length > 0 || (observedStatus === pendingInputSpec && outbox.lastObservedStatus !== pendingInputSpec)) {
+  if (newTurns.length > 0 || inputRequestFingerprints.length > 0) {
     try {
       lockPid = readFileSync(resolve(stateDir, '.lock'), 'utf8').trim();
       lockIdentity = capturePidIdentity(lockPid, env);
@@ -338,15 +425,17 @@ export function reconcileCheck(taskId, options = {}) {
     outbox.knownTurnIds.push(turn.turnId);
   }
 
-  if (observedStatus === pendingInputSpec && outbox.lastObservedStatus !== pendingInputSpec) {
+  for (const requestFingerprint of inputRequestFingerprints) {
     const basisTurn = mapped.rollout.latestCompletion?.turnId ?? 'none';
     const kind = 'input-request';
-    const id = eventKey({ taskId, spawnGen, workerThreadId: threadId, turnId: basisTurn, kind });
+    const eventBasis = requestFingerprint ?? basisTurn;
+    const id = eventKey({ taskId, spawnGen, workerThreadId: threadId, turnId: eventBasis, kind });
     if (!outbox.events.some((event) => event.id === id)) {
       newEvents.push({
         id,
         kind,
         turnId: basisTurn,
+        approvalRequestFingerprint: requestFingerprint,
         workerThreadId: threadId,
         state: 'pending',
         createdAt: new Date().toISOString(),
@@ -360,6 +449,9 @@ export function reconcileCheck(taskId, options = {}) {
   // Keep the cursor bounded: rotated tails far in the past are not load-bearing.
   if (outbox.knownTurnIds.length > 64) {
     outbox.knownTurnIds = outbox.knownTurnIds.slice(-64);
+  }
+  if (outbox.approvalRequestFingerprints.length > 128) {
+    outbox.approvalRequestFingerprints = outbox.approvalRequestFingerprints.slice(-128);
   }
 
   // Stage 5 (amendment 1A): Playbot workers run no Firstmate turn-end hooks,
@@ -501,7 +593,7 @@ async function main() {
     case 'check': {
       const taskId = args._[0];
       if (!taskId) throw new Error('check needs an exact task id');
-      const result = reconcileCheck(taskId, {
+      const result = await reconcileCheck(taskId, {
         checkKeyQueued: args['check-key-queued'] === '1'
       });
       for (const line of result.printed) process.stdout.write(`${line}\n`);

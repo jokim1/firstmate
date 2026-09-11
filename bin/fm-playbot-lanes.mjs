@@ -88,6 +88,36 @@ export const MUTATION_OPERATIONS = Object.freeze([
   'workspace:delete'
 ]);
 
+export const APPROVAL_RESPONSE_OPERATIONS = Object.freeze([
+  'threads:respondToApproval',
+  'threads:respondToMcpElicitation'
+]);
+
+const APPROVAL_IPC_CHANNEL_STRINGS = Object.freeze([
+  'threads:getSnapshot',
+  ...APPROVAL_RESPONSE_OPERATIONS
+]);
+
+// The responder policy is deliberately small, inspectable data. Matchers
+// below interpret only these exact methods, roots, and confirmation signature;
+// everything else stays pending for firstmate.
+export const PLAYBOT_APPROVAL_POLICY = Object.freeze({
+  maxRequestsPerPoll: 4,
+  approvalMethods: Object.freeze({
+    command: 'item/commandExecution/requestApproval',
+    fileChange: 'item/fileChange/requestApproval',
+    permissions: 'item/permissions/requestApproval'
+  }),
+  allowedFilesystemRoots: Object.freeze(['worktree', 'godot-user-dir', 'uv-cache']),
+  safeMcpElicitations: Object.freeze([
+    Object.freeze({
+      serverName: 'playbot',
+      responseMode: 'approval_action',
+      message: 'Generate game assets (images, video, sound effects, music, 3D models) using AI.'
+    })
+  ])
+});
+
 // Native dispatch requires these ops plus write-denial confinement (gate-8
 // re-scope: read-allowed/write-denied does not block spawn/steer/observe).
 export const NATIVE_REQUIRED_OPERATIONS = Object.freeze([
@@ -106,7 +136,9 @@ export const NATIVE_REQUIRED_OPERATIONS = Object.freeze([
 // wire channel became release-dependent (see releaseCompatibilityShape).
 export const MUTATION_WIRE_CHANNELS = Object.freeze([
   ...MUTATION_OPERATIONS,
-  'threads:launch'
+  'threads:launch',
+  'threads:getSnapshot',
+  ...APPROVAL_RESPONSE_OPERATIONS
 ]);
 
 function defaultMutationEvidence() {
@@ -139,7 +171,8 @@ const LEGACY_IPC_CHANNEL_STRINGS = Object.freeze([
   'threads:stop',
   'threads:archiveThread',
   'workspace:archive',
-  'workspace:delete'
+  'workspace:delete',
+  ...APPROVAL_IPC_CHANNEL_STRINGS
 ]);
 
 function releaseCompatibilityShape(overrides = {}) {
@@ -215,7 +248,8 @@ export const COMPATIBILITY_MANIFEST_SEED = {
         'threads:stop',
         'threads:archiveThread',
         'workspace:archive',
-        'workspace:delete'
+        'workspace:delete',
+        ...APPROVAL_IPC_CHANNEL_STRINGS
       ],
       threadOpen: {
         wireChannel: 'threads:launch',
@@ -238,7 +272,8 @@ export const COMPATIBILITY_MANIFEST_SEED = {
         'threads:stop',
         'threads:archiveThread',
         'workspace:archive',
-        'workspace:delete'
+        'workspace:delete',
+        ...APPROVAL_IPC_CHANNEL_STRINGS
       ],
       threadOpen: {
         wireChannel: 'threads:launch',
@@ -251,9 +286,10 @@ export const COMPATIBILITY_MANIFEST_SEED = {
       }
     }),
     // 0.104.0 keeps the 0.94.0/0.101.0 native-lane contract. Direct app.asar
-    // inspection (SHA-256 3facfec8...) confirmed the same seven exact-token
-    // fused channels and shapes; legacy workspace:create / threads:openThread /
-    // db:workspaceThreads:open remain absent. Additive multi-agent surfaces
+    // inspection (SHA-256 3facfec8...) confirmed the same seven lifecycle
+    // channels plus snapshot and two approval-response channels; legacy
+    // workspace:create / threads:openThread / db:workspaceThreads:open remain
+    // absent. Additive multi-agent surfaces
     // (threads:fetchSubAgentThread, multi_agent flags) do not replace a lane
     // dependency. Releases 0.102.0 and 0.103.0 were skipped by the deliberate
     // pin jump and are not certified here.
@@ -265,7 +301,8 @@ export const COMPATIBILITY_MANIFEST_SEED = {
         'threads:stop',
         'threads:archiveThread',
         'workspace:archive',
-        'workspace:delete'
+        'workspace:delete',
+        ...APPROVAL_IPC_CHANNEL_STRINGS
       ],
       threadOpen: {
         wireChannel: 'threads:launch',
@@ -279,8 +316,9 @@ export const COMPATIBILITY_MANIFEST_SEED = {
     }),
     // 0.106.0 keeps the 0.94.0/0.101.0/0.104.0 native-lane contract. Direct
     // app.asar inspection (SHA-256 28498b58...) confirmed the same seven
-    // exact-token fused channels and shapes; legacy workspace:create /
-    // threads:openThread / db:workspaceThreads:open remain absent. Additive
+    // lifecycle channels plus snapshot and two approval-response channels;
+    // legacy workspace:create / threads:openThread /
+    // db:workspaceThreads:open remain absent. Additive
     // multi-agent surfaces do not replace a lane dependency. Release 0.105.0
     // was skipped by the deliberate pin jump and is not certified here.
     '0.106.0': releaseCompatibilityShape({
@@ -291,7 +329,8 @@ export const COMPATIBILITY_MANIFEST_SEED = {
         'threads:stop',
         'threads:archiveThread',
         'workspace:archive',
-        'workspace:delete'
+        'workspace:delete',
+        ...APPROVAL_IPC_CHANNEL_STRINGS
       ],
       threadOpen: {
         wireChannel: 'threads:launch',
@@ -305,15 +344,16 @@ export const COMPATIBILITY_MANIFEST_SEED = {
     }),
     // 0.107.0 keeps the 0.94.0/0.101.0/0.104.0/0.106.0 native-lane contract.
     // Direct app.asar inspection (SHA-256 73e16bfe...) confirmed the same seven
-    // exact-token fused channels and shapes; legacy workspace:create /
-    // threads:openThread / db:workspaceThreads:open remain absent. 0.107.0 adds
+    // lifecycle channels plus snapshot and two approval-response channels;
+    // legacy workspace:create / threads:openThread /
+    // db:workspaceThreads:open remain absent. 0.107.0 adds
     // the GPT 6 Astra execution model (gpt-6-astra) as the default and carries
     // per-thread executionModel / executionReasoningLevel / planningModel /
     // planningReasoningLevel fields, but these are additive model-selection
     // surfaces: the threads:launch payload {destination, thread, message?,
     // activate?} carries no model field, so they do not replace a lane
-    // dependency. The lane still depends only on the fused create/open/send/
-    // stop/archive/delete surface.
+    // dependency. The lane depends on the fused create/open/send/stop/archive/
+    // delete surface plus the pending-input snapshot and response seam.
     '0.107.0': releaseCompatibilityShape({
       ipcChannelStrings: [
         'threads:launch',
@@ -322,7 +362,8 @@ export const COMPATIBILITY_MANIFEST_SEED = {
         'threads:stop',
         'threads:archiveThread',
         'workspace:archive',
-        'workspace:delete'
+        'workspace:delete',
+        ...APPROVAL_IPC_CHANNEL_STRINGS
       ],
       threadOpen: {
         wireChannel: 'threads:launch',
@@ -1564,6 +1605,275 @@ export async function invokePlaybotIpc(channel, payload, options = {}) {
     }
   }
   throw new Error(`IPC invoke failed on every page target: ${errors.join('; ')}`);
+}
+
+function policyPathWithin(root, candidate) {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+}
+
+function canonicalPolicyPath(candidate) {
+  let cursor = resolve(candidate);
+  const suffix = [];
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) return resolve(candidate);
+    suffix.unshift(basename(cursor));
+    cursor = parent;
+  }
+  return resolve(realpathSync(cursor), ...suffix);
+}
+
+function approvalFilesystemRoots(worktree, env = process.env, policy = PLAYBOT_APPROVAL_POLICY) {
+  const home = env.HOME ?? homedir();
+  const godotRoots = env.GODOT_USER_HOME
+    ? [env.GODOT_USER_HOME]
+    : process.platform === 'darwin'
+      ? [resolve(home, 'Library/Application Support/Godot')]
+      : [resolve(home, '.local/share/godot'), resolve(home, '.config/godot'), resolve(home, '.cache/godot')];
+  const uvRoot = env.UV_CACHE_DIR
+    ?? (process.platform === 'darwin' ? resolve(home, 'Library/Caches/uv') : resolve(home, '.cache/uv'));
+  const rootsByKind = {
+    worktree: [worktree],
+    'godot-user-dir': godotRoots,
+    'uv-cache': [uvRoot]
+  };
+  return policy.allowedFilesystemRoots.flatMap((kind) => rootsByKind[kind] ?? []).map(canonicalPolicyPath);
+}
+
+function permissionPathsAllowed(permissions, worktree, env = process.env, policy = PLAYBOT_APPROVAL_POLICY) {
+  if (!isPlainObject(permissions)) return false;
+  if (Object.keys(permissions).some((key) => !['network', 'fileSystem'].includes(key))) return false;
+  if (permissions.network?.enabled) return false;
+  if (permissions.network !== undefined && !isPlainObject(permissions.network)) return false;
+  if (permissions.network && Object.keys(permissions.network).some((key) => key !== 'enabled')) return false;
+  if (!isPlainObject(permissions.fileSystem)) return false;
+  if (Object.keys(permissions.fileSystem).some((key) => !['read', 'write'].includes(key))) return false;
+  for (const key of ['read', 'write']) {
+    if (permissions.fileSystem[key] !== undefined
+        && (!Array.isArray(permissions.fileSystem[key])
+          || permissions.fileSystem[key].some((item) => typeof item !== 'string'))) return false;
+  }
+  const paths = ['read', 'write'].flatMap((key) => permissions.fileSystem[key] ?? []);
+  if (paths.length === 0 || paths.some((item) => typeof item !== 'string' || !isAbsolute(item))) return false;
+  const roots = approvalFilesystemRoots(worktree, env, policy);
+  return paths.every((item) => roots.some((root) => policyPathWithin(root, canonicalPolicyPath(item))));
+}
+
+function proposedFileChangePaths(snapshot, itemId) {
+  const proposed = Array.isArray(snapshot.proposedFileChanges)
+    ? snapshot.proposedFileChanges.find((item) => item?.itemId === itemId)
+    : null;
+  if (!proposed || !Array.isArray(proposed.files) || proposed.files.length === 0) return null;
+  const paths = [];
+  for (const file of proposed.files) {
+    if (!isPlainObject(file) || typeof file.path !== 'string' || !file.path) return null;
+    paths.push(file.path);
+    if (file.oldPath !== undefined) {
+      if (typeof file.oldPath !== 'string' || !file.oldPath) return null;
+      paths.push(file.oldPath);
+    }
+  }
+  return paths;
+}
+
+function assetRequestStaysWithinPolicy(request, worktree, env, policy) {
+  const targets = [];
+  const linkedAssets = [];
+  const visit = (value, key = '') => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, key);
+      return;
+    }
+    if (!isPlainObject(value)) return;
+    for (const [childKey, childValue] of Object.entries(value)) {
+      if (childKey === 'targetPath' && typeof childValue === 'string') targets.push(childValue);
+      else if (childKey === 'linkedAssets') linkedAssets.push(childValue);
+      else visit(childValue, childKey);
+    }
+  };
+  visit(request.toolParams);
+  if (targets.length === 0) return { allowed: false, blockedReference: null };
+  const root = canonicalPolicyPath(worktree);
+  const roots = approvalFilesystemRoots(worktree, env, policy);
+  if (!targets.every((target) => roots.some((allowedRoot) => (
+    policyPathWithin(allowedRoot, canonicalPolicyPath(resolve(root, target)))
+  )))) {
+    return { allowed: false, blockedReference: null };
+  }
+  for (const entries of linkedAssets) {
+    if (!Array.isArray(entries)) {
+      return { allowed: false, blockedReference: JSON.stringify(entries) };
+    }
+    if (entries.length > 0) {
+      const reference = entries[0];
+      return {
+        allowed: false,
+        blockedReference: typeof reference === 'string' ? reference : JSON.stringify(reference)
+      };
+    }
+  }
+  return { allowed: true, blockedReference: null };
+}
+
+function boundedRequestText(request, maxBytes) {
+  const text = JSON.stringify(request);
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return { text, truncated: false };
+  return {
+    text: Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8'),
+    truncated: true
+  };
+}
+
+export function decidePlaybotPendingRequest(kind, request, snapshot, options = {}) {
+  const policy = options.policy ?? PLAYBOT_APPROVAL_POLICY;
+  const worktree = canonicalPolicyPath(options.worktree);
+  const env = options.env ?? process.env;
+  const requestCopy = boundedRequestText(request, COMPATIBILITY_MANIFEST.v1Limits.outboxTextCopyCapBytes);
+  const base = {
+    kind,
+    requestId: request?.id ?? null,
+    requestText: requestCopy.text,
+    requestTextTruncated: requestCopy.truncated,
+    requestSha256: createHash('sha256').update(JSON.stringify(request)).digest('hex')
+  };
+  const leavePending = (ruleId) => ({ ...base, disposition: 'leave-pending', ruleId });
+  const respond = (ruleId, channel, response) => ({ ...base, disposition: 'respond', ruleId, channel, response });
+  if (!isPlainObject(request) || !['string', 'number'].includes(typeof request.id)) {
+    return leavePending('deny-malformed-request');
+  }
+
+  if (kind === 'approval') {
+    const params = isPlainObject(request.params) ? request.params : {};
+    if (request.method === policy.approvalMethods.command) {
+      return leavePending('deny-command-approval-outside-sandbox');
+    }
+    if (request.method === policy.approvalMethods.permissions) {
+      if (!permissionPathsAllowed(params.permissions, worktree, env, policy)) {
+        return leavePending('deny-permissions-outside-approved-roots');
+      }
+      return respond('allow-approved-filesystem-turn', 'threads:respondToApproval', {
+        permissions: params.permissions,
+        scope: 'turn'
+      });
+    }
+    if (request.method === policy.approvalMethods.fileChange) {
+      const paths = proposedFileChangePaths(snapshot, params.itemId);
+      if (!paths || !paths.every((item) => policyPathWithin(worktree, canonicalPolicyPath(resolve(worktree, item))))) {
+        return leavePending('deny-file-change-outside-worktree');
+      }
+      return respond('allow-in-worktree-file-change', 'threads:respondToApproval', {
+        decision: 'accept'
+      });
+    }
+    return leavePending('deny-unknown-approval-method');
+  }
+
+  if (kind === 'user-input') {
+    return leavePending('deny-unknown-user-input');
+  }
+
+  if (kind === 'mcp-elicitation') {
+    const safe = policy.safeMcpElicitations.find((confirmation) => (
+      request.serverName === confirmation.serverName
+      && request.responseMode === confirmation.responseMode
+      && request.message === confirmation.message
+    ));
+    const assetPaths = safe ? assetRequestStaysWithinPolicy(request, worktree, env, policy) : { allowed: false, blockedReference: null };
+    if (!safe || !assetPaths.allowed) {
+      if (assetPaths.blockedReference !== null) {
+        return { ...leavePending('deny-linked-asset-request'), blockedReference: assetPaths.blockedReference };
+      }
+      return leavePending('deny-unknown-mcp-elicitation');
+    }
+    return respond('allow-playbot-asset-generation', 'threads:respondToMcpElicitation', {
+      action: 'accept',
+      content: null,
+      _meta: null
+    });
+  }
+  return leavePending('deny-unknown-request-kind');
+}
+
+function validateThreadSnapshot(snapshot, threadId) {
+  if (!isPlainObject(snapshot) || snapshot.threadId !== threadId) {
+    throw new Error(`threads:getSnapshot returned the wrong thread for ${threadId}`);
+  }
+  for (const field of ['approvalRequests', 'respondingRequestIds', 'userInputRequests', 'mcpElicitationRequests']) {
+    if (!Array.isArray(snapshot[field])) throw new Error(`threads:getSnapshot result missing ${field}`);
+  }
+  return snapshot;
+}
+
+export async function respondToPendingPlaybotRequests(threadId, worktree, options = {}) {
+  const paths = options.paths ?? playbotPaths(options.env);
+  const env = options.env ?? process.env;
+  const policy = options.policy ?? PLAYBOT_APPROVAL_POLICY;
+  if (!options.forSmoke) {
+    assertMutationAllowed('threads:send', {
+      ...options,
+      appVersion: resolveAppVersion(paths, options),
+      paths
+    });
+  }
+  const end = Date.now() + (options.deadlineMs ?? COMPATIBILITY_MANIFEST.v1Limits.reconcileDeadlineMs);
+  const invoke = async (channel, payload) => {
+    const remaining = end - Date.now();
+    if (remaining <= 0) throw new Error('approval responder exceeded its poll deadline');
+    const result = await invokePlaybotIpc(channel, payload, {
+      ...options,
+      env,
+      paths,
+      totalDeadlineMs: remaining,
+      timeoutMs: Math.min(remaining, options.timeoutMs ?? 750),
+      commandTimeoutMs: Math.min(remaining, options.commandTimeoutMs ?? 750)
+    });
+    if (!result.ok) throw new Error(`${channel} failed: ${result.error ?? 'unknown IPC error'}`);
+    return result.envelope.result;
+  };
+  const snapshot = validateThreadSnapshot(await invoke('threads:getSnapshot', { threadId }), threadId);
+  const responding = new Set(snapshot.respondingRequestIds);
+  const known = new Set(options.knownFingerprints ?? []);
+  const pending = [
+    ...snapshot.approvalRequests.map((request) => ({ kind: 'approval', request })),
+    ...snapshot.userInputRequests.map((request) => ({ kind: 'user-input', request })),
+    ...snapshot.mcpElicitationRequests.map((request) => ({ kind: 'mcp-elicitation', request }))
+  ].filter(({ request }) => !responding.has(request?.id));
+  const decisions = [];
+  let skippedKnown = 0;
+  for (const item of pending) {
+    if (decisions.length >= policy.maxRequestsPerPoll) break;
+    const decision = decidePlaybotPendingRequest(item.kind, item.request, snapshot, {
+      worktree,
+      env,
+      policy
+    });
+    const fingerprint = createHash('sha256')
+      .update(`${decision.kind}\0${decision.requestId}\0${decision.requestSha256}`)
+      .digest('hex');
+    if (known.has(fingerprint)) {
+      skippedKnown += 1;
+      continue;
+    }
+    if (decision.disposition === 'respond') {
+      await invoke(decision.channel, {
+        threadId,
+        requestId: decision.requestId,
+        response: decision.response
+      });
+    }
+    const recorded = { ...decision, fingerprint };
+    if (options.onDecision) await options.onDecision(recorded);
+    decisions.push(recorded);
+    known.add(fingerprint);
+  }
+  return {
+    snapshot,
+    decisions,
+    unhandledPending: pending.length === 0
+      || decisions.some((decision) => decision.disposition === 'leave-pending')
+      || pending.length > decisions.length + skippedKnown
+  };
 }
 
 export function validateWorkspaceCreateResult(result, expectedProjectId = null) {

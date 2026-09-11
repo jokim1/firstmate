@@ -21,6 +21,8 @@ RECONCILE="$ROOT/bin/fm-playbot-reconcile.mjs"
 HOME_DIR="$TMP_ROOT/home"
 STATE="$HOME_DIR/state"
 mkdir -p "$STATE"
+APPROVAL_CDP_PID=
+trap '[ -z "$APPROVAL_CDP_PID" ] || kill "$APPROVAL_CDP_PID" 2>/dev/null; fm_test_cleanup' EXIT
 
 export FM_HOME="$HOME_DIR"
 export FM_STATE_OVERRIDE="$STATE"
@@ -98,6 +100,26 @@ outbox_field() {
 const o = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 console.log(eval(process.argv[2]));
 ' "$STATE/$1.playbot-outbox.json" "$2"
+}
+
+run_fixture_reconcile() {
+  node --input-type=module - "$RECONCILE" "$1" "$2" <<'NODE'
+import { pathToFileURL } from 'node:url';
+const reconcile = await import(pathToFileURL(process.argv[2]).href);
+const result = await reconcile.reconcileCheck(process.argv[3], {
+  checkKeyQueued: process.argv[4] === '1',
+  approvalOptions: { forSmoke: true }
+});
+for (const line of result.printed) process.stdout.write(`${line}\n`);
+process.exitCode = result.exitCode;
+NODE
+}
+
+approval_state_field() {
+  node -e '
+const state = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+console.log(eval(process.argv[2]));
+' "$APPROVAL_STATE" "$1"
 }
 
 printf '%s\n' "$$" > "$STATE/.lock"
@@ -196,16 +218,141 @@ node "$RECONCILE" check rc-scout --check-key-queued 1 >/dev/null || fail "oversi
 [ ! -e "$HOME_DIR/data/rc-scout/report.md" ] || fail "no truncated copy of the authoritative report may be made"
 pass "scout report over 1 MiB keeps the workspace retained with a static failure event and no truncated copy"
 
-# --- pending input is distinct from a completed turn --------------------------------
+# --- native pending-input approval responder ----------------------------------------
 
-write_task_fixture rc-input thread-pending workspace-pending worktrees/pending ship
-node "$RECONCILE" check rc-input --check-key-queued 0 >/dev/null || fail "input-request check failed"
-[ "$(outbox_field rc-input 'o.events.length')" = 1 ] || fail "a pending_input transition must produce exactly one event"
-[ "$(outbox_field rc-input 'o.events[0].kind')" = "input-request" ] || fail "the input transition must classify as input-request"
-[ ! -e "$STATE/rc-input.turn-ended" ] || fail "an input request is not a completed turn and must not touch turn-ended"
-node "$RECONCILE" check rc-input --check-key-queued 1 >/dev/null || fail "input re-check failed"
-[ "$(outbox_field rc-input 'o.events.length')" = 1 ] || fail "an unchanged pending_input status must not re-fire the event"
-pass "pending input is a distinct, deduplicated input-request event, never a completion"
+APPROVAL_STATE="$TMP_ROOT/approval-state.json"
+FAKE_CDP_APPROVAL_STATE="$APPROVAL_STATE" \
+  node "$ROOT/tests/playbot-fixtures/fake-cdp.mjs" ws-approvals > "$TMP_ROOT/approval-cdp-port" &
+APPROVAL_CDP_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$TMP_ROOT/approval-cdp-port" ] && break
+  sleep 0.2
+done
+APPROVAL_CDP_PORT=$(cat "$TMP_ROOT/approval-cdp-port")
+[ -n "$APPROVAL_CDP_PORT" ] || fail "approval fake CDP server did not bind"
+printf '%s\n' "$APPROVAL_CDP_PORT" > "$FIX/DevToolsActivePort"
+PENDING_WORKTREE=$(cd "$FIX/worktrees/pending" && pwd -P)
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"command-pending","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"uv --offline run tool.py"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-command thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-command 0 >/dev/null || fail "command refusal reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a command approval must stay pending without an IPC response"
+grep -Fq 'blocked: Playbot approval request command-pending left pending by deny-command-approval-outside-sandbox' "$STATE/rc-command.status" || fail "a command approval must append a request-specific blocked status"
+grep -Fq 'uv --offline run tool.py' "$STATE/rc-command.playbot-approvals.jsonl" || fail "the refusal journal must retain the command request text"
+[ "$(outbox_field rc-command 'o.events[0].kind')" = "input-request" ] || fail "a command approval must remain an input-request event"
+pass "command approvals remain pending, journaled, and blocked for firstmate"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-grant","method":"item/permissions/requestApproval","params":{"permissions":{"fileSystem":{"read":["$PENDING_WORKTREE"],"write":["$PENDING_WORKTREE/assets"]}}}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-allow-grant thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-allow-grant 0 >/dev/null || fail "in-root structured grant reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an in-root structured grant must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].request.response.scope')" = turn ] || fail "an in-root structured grant must be approved only for the current turn"
+pass "in-root structured filesystem grant is turn-scoped"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"command-after-grant","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"uv --offline run tool.py"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[{"channel":"threads:respondToApproval","request":{"threadId":"thread-pending","requestId":"allow-grant","response":{"permissions":{"fileSystem":{"read":["$PENDING_WORKTREE"],"write":["$PENDING_WORKTREE/assets"]}},"scope":"turn"}}}]}
+EOF
+OUT=$(run_fixture_reconcile rc-allow-grant 0) || fail "new command after safe grant reconcile failed"
+[ "$(outbox_field rc-allow-grant 'o.events.length')" = 1 ] || fail "a new blocked request must create an input-request event without a status transition"
+[ "$(outbox_field rc-allow-grant 'o.events[0].kind')" = input-request ] || fail "the new blocked request must create an input-request event"
+REQUEST_FP=$(outbox_field rc-allow-grant 'o.events[0].approvalRequestFingerprint')
+[ "${#REQUEST_FP}" = 64 ] || fail "the input-request event must retain its blocked request fingerprint"
+[ "$(printf '%s\n' "$OUT" | grep -c '^playbot-event ')" = 1 ] || fail "the new blocked request must print one static wake pointer"
+run_fixture_reconcile rc-allow-grant 1 >/dev/null || fail "repeat new command reconcile failed"
+[ "$(outbox_field rc-allow-grant 'o.events.length')" = 1 ] || fail "a repeat poll of the same blocked request must not duplicate its event"
+[ "$(wc -l < "$STATE/rc-allow-grant.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "the safe grant and later blocked command must each be journaled once"
+pass "new blocked fingerprints wake once while status remains pending"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"deny-grant","method":"item/permissions/requestApproval","params":{"permissions":{"fileSystem":{"write":["/tmp/playbot-escape"]}}}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-deny-grant thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-deny-grant 0 >/dev/null || fail "out-of-root structured grant reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an out-of-root structured grant must stay pending"
+grep -Fq 'deny-permissions-outside-approved-roots' "$STATE/rc-deny-grant.status" || fail "an out-of-root structured grant must append a policy-specific blocked status"
+pass "out-of-root structured filesystem grant is refused and left pending"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[{"itemId":"change-in-root","files":[{"path":"assets/hero.png"}]}],"approvalRequests":[{"id":"file-change-in-root","method":"item/fileChange/requestApproval","params":{"itemId":"change-in-root"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-file-change thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-file-change 0 >/dev/null || fail "in-root file-change reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an in-root file-change proposal must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].request.response.decision')" = accept ] || fail "an in-root file-change proposal must be accepted for one request only"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[{"itemId":"change-outside-root","files":[{"path":"/tmp/playbot-escape"}]}],"approvalRequests":[{"id":"file-change-outside-root","method":"item/fileChange/requestApproval","params":{"itemId":"change-outside-root"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[{"channel":"threads:respondToApproval","request":{"threadId":"thread-pending","requestId":"file-change-in-root","response":{"decision":"accept"}}}]}
+EOF
+run_fixture_reconcile rc-file-change 0 >/dev/null || fail "second file-change reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "an out-of-root second proposal must stay pending without another IPC response"
+grep -Fq 'blocked: Playbot approval request file-change-outside-root left pending by deny-file-change-outside-worktree' "$STATE/rc-file-change.status" || fail "the out-of-root second proposal must append a request-specific blocked status"
+[ "$(wc -l < "$STATE/rc-file-change.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "each file-change proposal must be validated and journaled independently"
+pass "file-change proposals are accepted once and independently revalidated"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[{"id":"unknown-question","method":"item/tool/requestUserInput","params":{"questions":[{"header":"Choice","question":"Which direction?"}]}}],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-user-input thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-user-input 0 >/dev/null || fail "unknown user-input reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "unknown user input must stay pending without an IPC response"
+grep -Fq 'deny-unknown-user-input' "$STATE/rc-user-input.status" || fail "unknown user input must append a policy-specific blocked status"
+pass "unknown user input is never guessed and stays pending for firstmate"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"consumeResponses":false,"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[{"id":"allow-once","method":"item/commandExecution/requestApproval","params":{"cwd":"$PENDING_WORKTREE","command":"uv --offline run tool.py"}}],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-idempotent thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-idempotent 1 >/dev/null || fail "first idempotence reconcile failed"
+run_fixture_reconcile rc-idempotent 1 >/dev/null || fail "repeat idempotence reconcile failed"
+[ "$(wc -l < "$STATE/rc-idempotent.playbot-approvals.jsonl" | tr -d ' ')" = 1 ] || fail "the same approval decision must be journaled only once"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an unchanged command request must never receive an IPC response"
+pass "repeat reconciliation journals an unchanged command request only once"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-elicitation","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png"}]}]}],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-asset thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset 0 >/dev/null || fail "asset elicitation reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "known-safe asset elicitation must receive one IPC response"
+[ "$(approval_state_field 'state.responses[0].channel')" = "threads:respondToMcpElicitation" ] || fail "asset elicitation must use respondToMcpElicitation"
+[ "$(approval_state_field 'state.responses[0].request.response._meta')" = null ] || fail "asset elicitation must be accepted for one request only"
+pass "in-root target without linked assets receives one-request MCP acceptance"
+
+REMOTE_ASSET_URL=https://unknown.example/private.png
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-remote-after-accepted","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["$REMOTE_ASSET_URL"]}]}]}],"agentStatus":"pending_input"},"responses":[{"channel":"threads:respondToMcpElicitation","request":{"threadId":"thread-pending","requestId":"asset-elicitation","response":{"action":"accept","content":null,"_meta":null}}}]}
+EOF
+run_fixture_reconcile rc-asset 0 >/dev/null || fail "second asset elicitation reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 1 ] || fail "a remote second asset request must stay pending without another IPC response"
+grep -Fq "reference=\"$REMOTE_ASSET_URL\"" "$STATE/rc-asset.status" || fail "the independently validated second asset request must name its blocked reference"
+[ "$(wc -l < "$STATE/rc-asset.playbot-approvals.jsonl" | tr -d ' ')" = 2 ] || fail "each asset request must be validated and journaled independently"
+pass "a second asset request is independently validated after acceptance"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-in-root-link","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png","linkedAssets":["assets/source.png"]}]}]}],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-asset-linked thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset-linked 0 >/dev/null || fail "in-root linked asset reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "an in-root linked asset must stay pending without an IPC response"
+grep -Fq 'deny-linked-asset-request' "$STATE/rc-asset-linked.status" || fail "the in-root linked asset must append a policy-specific blocked status"
+pass "in-root linked asset stays pending"
+
+cat > "$APPROVAL_STATE" <<EOF
+{"snapshot":{"threadId":"thread-pending","proposedFileChanges":[],"approvalRequests":[],"respondingRequestIds":[],"userInputRequests":[],"mcpElicitationRequests":[{"id":"asset-message-suffix","serverName":"playbot","responseMode":"approval_action","message":"Generate game assets (images, video, sound effects, music, 3D models) using AI. Additional request.","toolParams":[{"name":"images","value":[{"targetPath":"assets/hero.png"}]}]}],"agentStatus":"pending_input"},"responses":[]}
+EOF
+write_task_fixture rc-asset-message thread-pending workspace-pending worktrees/pending ship
+run_fixture_reconcile rc-asset-message 0 >/dev/null || fail "non-exact asset message reconcile failed"
+[ "$(approval_state_field 'state.responses.length')" = 0 ] || fail "a non-exact asset confirmation message must stay pending"
+grep -Fq 'deny-unknown-mcp-elicitation' "$STATE/rc-asset-message.status" || fail "a non-exact asset confirmation must append a policy-specific blocked status"
+pass "asset confirmation matching requires the exact message"
+
+kill "$APPROVAL_CDP_PID" 2>/dev/null
+wait "$APPROVAL_CDP_PID" 2>/dev/null
+APPROVAL_CDP_PID=
 
 # --- multi-turn rollout: two events, one printed line --------------------------------
 

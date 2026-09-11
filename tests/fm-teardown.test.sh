@@ -3119,6 +3119,365 @@ land_shippable_commit() {
   git -C "$case_dir/project" fetch -q origin
 }
 
+write_playbot_meta() {  # <case-dir>
+  local case_dir=$1
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=playbot:thread-task-x1" \
+    "endpoint_task_id=task-x1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=local-only" \
+    "backend=playbot" \
+    "playbot_project_id=project-alpha" \
+    "playbot_project_root_id=root-alpha" \
+    "playbot_workspace_id=workspace-task-x1" \
+    "playbot_thread_id=thread-task-x1" \
+    "playbot_route_gen=1" \
+    "playbot_delivery_id=delivery-task-x1"
+}
+
+write_playbot_lane_fixture() {  # <case-dir> <agent-state> <delete-mode>
+  local case_dir=$1 agent_state=$2 delete_mode=$3
+  cat > "$case_dir/playbot-lanes.mjs" <<'JS'
+import { appendFileSync } from "node:fs";
+
+const [command] = process.argv.slice(2);
+const log = process.env.FM_PLAYBOT_TEST_LOG;
+if (command === "validate-endpoint") process.exit(0);
+if (command === "agent-state") {
+  process.stdout.write(`${process.env.FM_PLAYBOT_TEST_AGENT_STATE}\n`);
+  process.exit(0);
+}
+appendFileSync(log, `${command}\n`);
+if (command === "delete" && process.env.FM_PLAYBOT_TEST_DELETE_MODE === "record-gone") {
+  console.error("Error: workspace id resolved 0 rows; exact unique match required");
+  process.exit(1);
+}
+if (command === "delete" && process.env.FM_PLAYBOT_TEST_DELETE_MODE === "fail") {
+  console.error("Error: workspace:delete failed for another reason");
+  process.exit(1);
+}
+process.exit(0);
+JS
+  export FM_PLAYBOT_LANES_OVERRIDE="$case_dir/playbot-lanes.mjs"
+  export FM_PLAYBOT_TEST_LOG="$case_dir/playbot.log"
+  export FM_PLAYBOT_TEST_AGENT_STATE="$agent_state"
+  export FM_PLAYBOT_TEST_DELETE_MODE="$delete_mode"
+  : > "$case_dir/playbot.log"
+}
+
+clear_playbot_lane_fixture_env() {
+  unset FM_PLAYBOT_LANES_OVERRIDE FM_PLAYBOT_TEST_LOG \
+    FM_PLAYBOT_TEST_AGENT_STATE FM_PLAYBOT_TEST_DELETE_MODE
+}
+
+seed_playbot_project() {  # <case-dir>
+  local case_dir=$1 plugin_path=${2:-addons/other}
+  printf '%s\n' \
+    'config_version=5' \
+    '[application]' \
+    'config/name="Fixture"' \
+    '[editor_plugins]' \
+    "enabled=PackedStringArray(\"res://$plugin_path/plugin.cfg\")" \
+    > "$case_dir/wt/project.godot"
+  git -C "$case_dir/wt" add project.godot
+  wt_commit "$case_dir" "seed Godot project"
+  git -C "$case_dir/project" merge -q --ff-only fm/task-x1
+  git -C "$case_dir/project" push -q origin main
+}
+
+add_playbot_owned_churn() {  # <case-dir>
+  local case_dir=$1
+  mkdir -p "$case_dir/wt/addons/playbot/bin" "$case_dir/wt/.fm"
+  printf '%s\n' plugin > "$case_dir/wt/addons/playbot/plugin.gd"
+  printf '%s\n' native > "$case_dir/wt/addons/playbot/bin/native.dylib"
+  printf '%s\n' notices > "$case_dir/wt/addons/playbot/Third Party Notices.txt"
+  sed -i.bak 's#")$#", "res://addons/playbot/plugin.cfg")#' \
+    "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+  printf '%s\n' '' '[autoload]' 'Playbot="*res://addons/playbot/autoload.gd"' \
+    >> "$case_dir/wt/project.godot"
+  printf '%s\n' 'done: complete' > "$case_dir/wt/.fm/status.log"
+}
+
+test_playbot_owned_churn_only_does_not_block_landed_teardown() {
+  local case_dir rc
+  case_dir=$(make_case playbot-owned-churn-allow)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  write_playbot_lane_fixture "$case_dir" missing ok
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  clear_playbot_lane_fixture_env
+
+  expect_code 0 "$rc" "playbot-owned-churn-allow: Playbot-owned churn should not block landed teardown"
+  assert_grep "playbot-owned churn ignored: addons/playbot/bin/native.dylib" "$case_dir/stderr" \
+    "playbot-owned-churn-allow: ignored addon churn was not printed"
+  assert_grep "playbot-owned churn ignored: addons/playbot/Third Party Notices.txt" "$case_dir/stderr" \
+    "playbot-owned-churn-allow: whitespace-bearing addon churn was not accepted unquoted"
+  assert_grep "playbot-owned churn ignored: project.godot" "$case_dir/stderr" \
+    "playbot-owned-churn-allow: ignored project.godot churn was not printed"
+  assert_grep "playbot-owned churn ignored: .fm/status.log" "$case_dir/stderr" \
+    "playbot-owned-churn-allow: ignored courier churn was not printed"
+  ! grep -q REFUSED "$case_dir/stderr" \
+    || fail "playbot-owned-churn-allow: teardown refused Playbot-owned churn"
+  pass "backend=playbot ignores only Playbot-owned uncommitted churn after landing proof"
+}
+
+test_playbot_owned_churn_plus_real_edit_refuses() {
+  local case_dir rc
+  case_dir=$(make_case playbot-owned-churn-plus-real-edit)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  mkdir -p "$case_dir/wt/src"
+  printf '%s\n' real > "$case_dir/wt/src/real-edit.txt"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-owned-churn-plus-real-edit: real uncommitted work must refuse"
+  assert_grep "playbot-owned churn ignored:" "$case_dir/stderr" \
+    "playbot-owned-churn-plus-real-edit: Playbot churn was not classified before refusal"
+  assert_grep "first non-Playbot-owned uncommitted path: src/real-edit.txt" "$case_dir/stderr" \
+    "playbot-owned-churn-plus-real-edit: refusal did not name the real edit"
+  pass "backend=playbot still refuses uncommitted paths outside Playbot-owned churn"
+}
+
+test_playbot_project_registration_plus_real_edit_refuses() {
+  local case_dir rc
+  case_dir=$(make_case playbot-project-real-edit-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak 's/config\/name="Fixture"/config\/name="Worker edit"/' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-project-real-edit-refuses: unrelated project setting must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-project-real-edit-refuses: refusal did not name project.godot"
+  pass "backend=playbot refuses project.godot changes beyond plugin registration"
+}
+
+test_playbot_registration_does_not_hide_enabled_plugin_removal() {
+  local case_dir rc
+  case_dir=$(make_case playbot-enabled-plugin-removal-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak 's#"res://addons/other/plugin.cfg", ##' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-enabled-plugin-removal-refuses: removing another plugin must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-enabled-plugin-removal-refuses: refusal did not name project.godot"
+  pass "Playbot registration cannot hide another enabled plugin removal"
+}
+
+test_playbot_registration_does_not_hide_project_mode_change() {
+  local case_dir rc
+  case_dir=$(make_case playbot-project-mode-change-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  chmod +x "$case_dir/wt/project.godot"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-project-mode-change-refuses: mode change must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-project-mode-change-refuses: refusal did not name project.godot"
+  pass "Playbot registration cannot hide a project.godot mode change"
+}
+
+test_playbot_path_boundary_preserves_similarly_named_plugin() {
+  local case_dir rc
+  case_dir=$(make_case playbot-helper-plugin-removal-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir" addons/playbot-helper
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak 's#"res://addons/playbot-helper/plugin.cfg", ##' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-helper-plugin-removal-refuses: similarly named plugin removal must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-helper-plugin-removal-refuses: refusal did not name project.godot"
+  pass "Playbot ownership excludes similarly named addon paths"
+}
+
+test_playbot_registration_rejects_dot_segment_path() {
+  local case_dir rc
+  case_dir=$(make_case playbot-dot-segment-plugin-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir" addons/playbot/../other
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak 's#"res://addons/playbot/../other/plugin.cfg", ##' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-dot-segment-plugin-refuses: noncanonical plugin removal must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-dot-segment-plugin-refuses: refusal did not name project.godot"
+  pass "Playbot registration rejects dot-segment paths"
+}
+
+test_playbot_autoload_rejects_dot_segment_path() {
+  local case_dir rc
+  case_dir=$(make_case playbot-dot-segment-autoload-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  printf '%s\n' '' '[autoload]' 'Other="*res://addons/playbot/../other/autoload.gd"' \
+    >> "$case_dir/wt/project.godot"
+  git -C "$case_dir/wt" add project.godot
+  wt_commit "$case_dir" "seed autoload"
+  git -C "$case_dir/project" merge -q --ff-only fm/task-x1
+  git -C "$case_dir/project" push -q origin main
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  sed -i.bak '/^Other=/d' "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-dot-segment-autoload-refuses: noncanonical autoload removal must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-dot-segment-autoload-refuses: refusal did not name project.godot"
+  pass "Playbot autoload registration rejects dot-segment paths"
+}
+
+test_playbot_registration_does_not_hide_section_header_removal() {
+  local case_dir rc
+  case_dir=$(make_case playbot-section-header-removal-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  printf '%s\n' '' '[autoload]' 'Other="*res://addons/other/autoload.gd"' \
+    >> "$case_dir/wt/project.godot"
+  git -C "$case_dir/wt" add project.godot
+  wt_commit "$case_dir" "seed autoload section"
+  git -C "$case_dir/project" merge -q --ff-only fm/task-x1
+  git -C "$case_dir/project" push -q origin main
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  perl -i.bak -pe 'if (!$removed && /^\[autoload\]$/) { $removed=1; $_=q{} }' \
+    "$case_dir/wt/project.godot"
+  rm -f "$case_dir/wt/project.godot.bak"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-section-header-removal-refuses: section removal must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: project.godot" "$case_dir/stderr" \
+    "playbot-section-header-removal-refuses: refusal did not name project.godot"
+  pass "Playbot registration cannot hide a section header removal"
+}
+
+test_playbot_stray_fm_file_refuses() {
+  local case_dir rc
+  case_dir=$(make_case playbot-stray-fm-refuses)
+  write_playbot_meta "$case_dir"
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+  printf '%s\n' worker > "$case_dir/wt/.fm/worker-notes.txt"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "playbot-stray-fm-refuses: stray .fm file must refuse"
+  assert_grep "first non-Playbot-owned uncommitted path: .fm/worker-notes.txt" "$case_dir/stderr" \
+    "playbot-stray-fm-refuses: refusal did not name the stray .fm file"
+  pass "backend=playbot refuses worker-owned files under .fm"
+}
+
+test_non_playbot_owned_churn_paths_still_refuse() {
+  local case_dir rc
+  case_dir=$(make_case non-playbot-owned-churn-refuses)
+  write_meta "$case_dir" local-only ship
+  seed_playbot_project "$case_dir"
+  land_shippable_commit "$case_dir"
+  add_playbot_owned_churn "$case_dir"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "non-playbot-owned-churn-refuses: non-Playbot backend must keep the dirty gate"
+  assert_grep "has uncommitted changes" "$case_dir/stderr" \
+    "non-playbot-owned-churn-refuses: dirty refusal was not reported"
+  if grep -q "playbot-owned churn ignored:" "$case_dir/stderr"; then
+    fail "non-playbot-owned-churn-refuses: Playbot churn allowlist leaked to another backend"
+  fi
+  pass "non-Playbot backends do not inherit the Playbot-owned churn carveout"
+}
+
+test_playbot_workspace_record_gone_fallback_removes_worktree_without_receipt() {
+  local case_dir rc
+  case_dir=$(make_case playbot-record-gone-fallback)
+  write_playbot_meta "$case_dir"
+  land_shippable_commit "$case_dir"
+  printf '%s\n' stale > "$case_dir/state/task-x1.playbot-retention"
+  write_playbot_lane_fixture "$case_dir" missing record-gone
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  clear_playbot_lane_fixture_env
+
+  expect_code 0 "$rc" "playbot-record-gone-fallback: record-gone fallback should complete teardown"
+  assert_absent "$case_dir/wt" \
+    "playbot-record-gone-fallback: fallback left the Playbot worktree directory behind"
+  assert_absent "$case_dir/state/task-x1.playbot-retention" \
+    "playbot-record-gone-fallback: fallback left a retention receipt behind"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "playbot-record-gone-fallback: successful fallback did not retire task metadata"
+  assert_grep "workspace record gone; removed recorded git worktree" "$case_dir/stderr" \
+    "playbot-record-gone-fallback: fallback removal was not reported"
+  pass "Playbot workspace-record-gone teardown removes the recorded git worktree and retires receipts"
+}
+
+test_playbot_workspace_record_gone_fallback_failure_writes_receipt() {
+  local case_dir rc
+  case_dir=$(make_case playbot-record-gone-fallback-failure)
+  write_playbot_meta "$case_dir"
+  land_shippable_commit "$case_dir"
+  write_playbot_lane_fixture "$case_dir" missing record-gone
+  rm -rf "$case_dir/wt/.git"
+
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  clear_playbot_lane_fixture_env
+
+  expect_code 0 "$rc" "playbot-record-gone-fallback-failure: endpoint-gone teardown should still retire records with a receipt"
+  assert_present "$case_dir/state/task-x1.playbot-retention" \
+    "playbot-record-gone-fallback-failure: fallback failure did not write a retention receipt"
+  assert_grep "reason=workspace-record-gone-after-thread-gone" "$case_dir/state/task-x1.playbot-retention" \
+    "playbot-record-gone-fallback-failure: receipt did not record the record-gone reason"
+  assert_present "$case_dir/wt" \
+    "playbot-record-gone-fallback-failure: failing fallback unexpectedly removed the directory"
+  pass "Playbot workspace-record-gone fallback failure writes the retention receipt"
+}
+
 test_parked_own_run_is_aborted_before_teardown() {
   local case_dir rc head
   case_dir=$(make_case parked-run-abort)
@@ -4530,6 +4889,19 @@ test_transient_index_lock_clears_after_first_attempt_and_retry_succeeds
 test_persistent_index_lock_exhausts_retries_and_refuses_loudly
 test_empty_retry_wait_uses_default_without_aborting
 test_fractional_legacy_retry_wait_refuses_without_arithmetic_error
+test_playbot_owned_churn_only_does_not_block_landed_teardown
+test_playbot_owned_churn_plus_real_edit_refuses
+test_playbot_project_registration_plus_real_edit_refuses
+test_playbot_registration_does_not_hide_enabled_plugin_removal
+test_playbot_registration_does_not_hide_project_mode_change
+test_playbot_path_boundary_preserves_similarly_named_plugin
+test_playbot_registration_rejects_dot_segment_path
+test_playbot_autoload_rejects_dot_segment_path
+test_playbot_registration_does_not_hide_section_header_removal
+test_playbot_stray_fm_file_refuses
+test_non_playbot_owned_churn_paths_still_refuse
+test_playbot_workspace_record_gone_fallback_removes_worktree_without_receipt
+test_playbot_workspace_record_gone_fallback_failure_writes_receipt
 test_parked_own_run_is_aborted_before_teardown
 test_parked_run_advanced_past_unfetched_head_is_still_aborted
 test_parked_run_with_mismatched_ledger_head_is_never_aborted

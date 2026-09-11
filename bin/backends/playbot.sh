@@ -20,6 +20,8 @@
 
 FM_PLAYBOT_BACKEND_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 FM_PLAYBOT_LANES="${FM_PLAYBOT_LANES_OVERRIDE:-$FM_PLAYBOT_BACKEND_DIR/../fm-playbot-lanes.mjs}"
+# shellcheck disable=SC2034 # Public adapter constant consumed after dynamic backend sourcing.
+FM_PLAYBOT_COURIER_MARKER_PATH='.fm/status.log'
 
 # fm_backend_playbot_lane: invoke the lanes CLI with the repo's node.
 fm_backend_playbot_lane() {
@@ -498,10 +500,22 @@ fm_backend_playbot_endpoint_confirmed_gone() {  # <target>
 }
 
 fm_backend_playbot_teardown_remove_worktree() {  # <workspace-id> <pre-removal-check>
-  local workspace_id=${1:-} pre_removal_check=${2:-}
+  local workspace_id=${1:-} pre_removal_check=${2:-} err rc
   [ -n "$workspace_id" ] && [ -n "$pre_removal_check" ] || return 2
   "$pre_removal_check" || return 2
-  fm_backend_playbot_remove_worktree "$workspace_id" >/dev/null 2>&1
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-playbot-delete.XXXXXX") || return 1
+  if fm_backend_playbot_remove_worktree "$workspace_id" >/dev/null 2>"$err"; then
+    rm -f -- "$err"
+    return 0
+  fi
+  rc=$?
+  if grep -Fq "workspace id resolved 0 rows; exact unique match required" "$err"; then
+    rm -f -- "$err"
+    return 3
+  fi
+  cat "$err" >&2
+  rm -f -- "$err"
+  return "$rc"
 }
 
 # fm_backend_playbot_teardown: teardown-authority endpoint retirement (plan
@@ -538,7 +552,11 @@ fm_backend_playbot_teardown() {  # <meta-file> <task-id> <target> <worktree> <wo
         printf 'refuse:worktree-safety-recheck-failed'
         return 1
       fi
-      printf 'retained:workspace-removal-failed-after-thread-gone'
+      if [ "$remove_rc" -eq 3 ]; then
+        printf 'retained:workspace-record-gone-after-thread-gone'
+      else
+        printf 'retained:workspace-removal-failed-after-thread-gone'
+      fi
       return 0
       ;;
     alive|ambiguous)
@@ -560,6 +578,9 @@ fm_backend_playbot_teardown() {  # <meta-file> <task-id> <target> <worktree> <wo
       if [ "$remove_rc" -eq 2 ]; then
         printf 'refuse:worktree-safety-recheck-failed'
         return 1
+      elif [ "$remove_rc" -eq 3 ]; then
+        printf 'retained:workspace-record-gone-after-thread-archived'
+        return 0
       else
         printf 'retained:thread-archived-workspace-removal-failed'
         return 0

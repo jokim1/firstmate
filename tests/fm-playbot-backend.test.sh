@@ -374,6 +374,25 @@ grep -qxF delete "$PLAYBOT_TEARDOWN_LOG" \
   || fail "safe confirmed-gone teardown did not reach workspace deletion"
 pass "confirmed-gone Playbot deletion also requires a passing worktree safety recheck"
 
+fm_backend_playbot_lane() {
+  case "${1:-}" in
+    agent-state) printf 'missing\n' ;;
+    delete)
+      printf 'delete\n' >> "$PLAYBOT_TEARDOWN_LOG"
+      echo "Error: workspace id resolved 0 rows; exact unique match required" >&2
+      return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+: > "$PLAYBOT_TEARDOWN_LOG"
+TD_RECORD_GONE=$(fm_backend_playbot_teardown "$STATE/be-ep.meta" be-ep playbot:thread-archived \
+  "$WORKTREE_TASK" workspace-task thread-archived :) \
+  || fail "record-gone workspace deletion should be retained, not refused"
+[ "$TD_RECORD_GONE" = retained:workspace-record-gone-after-thread-gone ] \
+  || fail "record-gone workspace deletion must have a specific retained token, got $TD_RECORD_GONE"
+pass "Playbot teardown distinguishes an already-deleted workspace record from other deletion failures"
+
 # --- fused create record parse (0.94.0+ three-field workspace:create) ----------
 # Live 0.107.0 create prints workspace_id<TAB>worktree<TAB>fused_thread_id.
 # The spawn isolation check must see the worktree path alone; the pre-fix

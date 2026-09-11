@@ -58,7 +58,12 @@
 # The same dirty+land+four-way classify recheck runs after quiescence immediately
 # before every ordinary destructive worktree return or removal: each Treehouse
 # return attempt (including lock retries) and Playbot workspace deletion after
-# endpoint archival or confirmed absence. Uncommitted changes are never landed.
+# endpoint archival or confirmed absence. For backend=playbot only, Playbot-owned
+# app churn under addons/playbot/**, registration-only project.godot changes,
+# and the adapter's exact courier marker is printed and ignored by the
+# uncommitted-change gate; every other uncommitted path still refuses. Other
+# backends keep the ordinary dirty-worktree rule. Uncommitted changes are never
+# landed.
 # A missing pr= still discovers a merged PR by branch when possible so
 # yolo/no-CI merges are not false-refused. local-only keeps the existing merge-to-
 # local-default carveout when there is no remote.
@@ -106,6 +111,12 @@
 # Orca tasks use the same safety checks, then close the recorded terminal and
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.
+# Playbot tasks use the same safety checks, then archive the recorded thread and
+# remove the recorded workspace through the lane IPC. If the Playbot workspace
+# record is already gone but the recorded git worktree remains, teardown reruns
+# the same safety check, removes that exact worktree through the git common dir
+# reported by the worktree itself, prunes stale worktree metadata, and writes a
+# retention receipt only if that fallback fails.
 # A Herdr presentation journal never authorizes cleanup. Teardown still closes
 # only the exact task pane from ordinary endpoint metadata and never calls
 # `workspace close`. It retires the non-authoritative journal only when a
@@ -1404,6 +1415,180 @@ playbot_write_retention_receipt() {  # <reason>
   echo "warning: playbot cleanup retained an orphan receipt at $path ($reason)" >&2
 }
 
+playbot_retire_retention_receipt() {
+  rm -f -- "$(playbot_retention_receipt_path)" 2>/dev/null || true
+}
+
+playbot_owned_churn_path() {  # <repo-relative-path>
+  case "${1:-}" in
+    addons/playbot|addons/playbot/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+playbot_project_registration_only() {
+  local old_file summary rc=0
+  summary=$(git -C "$WT" --no-pager diff --no-ext-diff --summary HEAD -- project.godot 2>/dev/null) \
+    || return 1
+  [ -z "$summary" ] || return 1
+  old_file=$(mktemp "${TMPDIR:-/tmp}/fm-playbot-project.XXXXXX") || return 1
+  if ! git -C "$WT" show HEAD:project.godot > "$old_file" 2>/dev/null; then
+    rm -f -- "$old_file"
+    return 1
+  fi
+  perl -e '
+    sub owned_path {
+      my ($value) = @_;
+      return unless $value =~ m{\A"(?:\*?res://)?addons/playbot/([^"\\]*)"\z};
+      return $1 !~ m{(?:\A|/)\.{1,2}(?:/|\z)};
+    }
+    sub enabled_values {
+      my ($line) = @_;
+      return unless $line =~ s/^enabled=PackedStringArray\(//;
+      return unless $line =~ s/\)$//;
+      $line =~ s/^\s+//;
+      return [] if $line eq q{};
+      my @values;
+      my $first = 1;
+      while (length $line) {
+        my $value;
+        if ($first) {
+          return unless $line =~ s/^("(?:\\.|[^"\\])*")//;
+          $value = $1;
+          $first = 0;
+        } else {
+          return unless $line =~ s/^,\s*("(?:\\.|[^"\\])*")//;
+          $value = $1;
+        }
+        push @values, $value;
+        $line =~ s/^\s+//;
+      }
+      return \@values;
+    }
+    sub normalize {
+      my ($path) = @_;
+      open my $fh, q{<}, $path or return;
+      local $/;
+      my $raw = <$fh>;
+      close $fh or return;
+      my (@out, @body, @owned);
+      my $section;
+      my $flush = sub {
+        if (defined $section) {
+          push @out, $section, @body
+            unless (($section eq q{[editor_plugins]} || $section eq q{[autoload]}) && !@body);
+        } else {
+          push @out, @body;
+        }
+        @body = ();
+      };
+      for my $line (split /\n/, $raw, -1) {
+        $line =~ s/\r\z//;
+        next if $line =~ /^\s*$/;
+        if ($line =~ /^\[[^]]+\]$/) {
+          $flush->();
+          $section = $line;
+          next;
+        }
+        if (defined $section && $section eq q{[editor_plugins]} && $line =~ /^enabled=/) {
+          my $values = enabled_values($line);
+          return unless defined $values;
+          my @kept;
+          for my $value (@$values) {
+            if (owned_path($value)) {
+              push @owned, "enabled:$value";
+            } else {
+              push @kept, $value;
+            }
+          }
+          push @body, q{enabled=PackedStringArray(} . join(q{, }, @kept) . q{)} if @kept;
+          next;
+        }
+        if (defined $section && $section eq q{[autoload]}
+            && $line =~ /^([A-Za-z0-9_]+)=(.+)$/ && owned_path($2)) {
+          push @owned, "autoload:$1=$2";
+          next;
+        }
+        push @body, $line;
+      }
+      $flush->();
+      return (join("\n", @out), join("\n", @owned));
+    }
+    my ($old_normalized, $old_owned) = normalize($ARGV[0]);
+    defined $old_normalized or exit 1;
+    my ($new_normalized, $new_owned) = normalize($ARGV[1]);
+    defined $new_normalized or exit 1;
+    exit(($old_normalized eq $new_normalized && $old_owned ne $new_owned) ? 0 : 1);
+  ' "$old_file" "$WT/project.godot" || rc=$?
+  rm -f -- "$old_file"
+  return "$rc"
+}
+
+playbot_first_unignored_dirty_path() {
+  local status_file record status path renamed_from first='' malformed=0
+  fm_backend_source playbot || true
+  status_file=$(mktemp "${TMPDIR:-/tmp}/fm-playbot-status.XXXXXX") || return 2
+  if ! git -C "$WT" status --porcelain=v1 -z -uall > "$status_file" 2>/dev/null; then
+    rm -f -- "$status_file"
+    return 2
+  fi
+  while IFS= read -r -d '' -u 3 record; do
+    status=${record:0:2}
+    path=${record:3}
+    case "$status" in
+      R*|C*|*R|*C)
+        IFS= read -r -d '' -u 3 renamed_from || { malformed=1; break; }
+        [ -n "$renamed_from" ] || { malformed=1; break; }
+        ;;
+    esac
+    if [ "$status" = '??' ]; then
+      case "$path" in .claude/*|.fm-grok-turnend|.fm-kimi-turnend) continue ;; esac
+    fi
+    if playbot_owned_churn_path "$path" \
+       || { [ "$path" = project.godot ] && playbot_project_registration_only; } \
+       || { [ -n "${FM_PLAYBOT_COURIER_MARKER_PATH:-}" ] \
+            && [ "$path" = "$FM_PLAYBOT_COURIER_MARKER_PATH" ]; }; then
+      printf 'playbot-owned churn ignored: %s\n' "$path" >&2
+      continue
+    fi
+    first=$path
+    break
+  done 3< "$status_file"
+  rm -f -- "$status_file"
+  [ "$malformed" -eq 0 ] || return 2
+  printf '%s\n' "$first"
+}
+
+playbot_remove_record_gone_worktree() {  # <pre-removal-check>
+  local pre_removal_check=${1:-} common_dir common_abs wt_abs
+  [ -n "$pre_removal_check" ] || return 1
+  if ! inspectable_git_worktree "$WT"; then
+    echo "warning: playbot workspace record is gone but recorded worktree ${WT:-<missing>} is not inspectable" >&2
+    return 1
+  fi
+  "$pre_removal_check" || return 1
+  common_dir=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || {
+    echo "warning: cannot resolve git common dir for Playbot worktree $WT" >&2
+    return 1
+  }
+  common_abs=$(removal_target_abs_path "$common_dir" 2>/dev/null) || {
+    echo "warning: cannot canonicalize git common dir $common_dir for Playbot worktree $WT" >&2
+    return 1
+  }
+  wt_abs=$(removal_target_abs_path "$WT" 2>/dev/null) || {
+    echo "warning: cannot canonicalize Playbot worktree $WT before fallback removal" >&2
+    return 1
+  }
+  if git --git-dir="$common_abs" worktree remove --force "$wt_abs" >/dev/null 2>&1 \
+     && git --git-dir="$common_abs" worktree prune >/dev/null 2>&1; then
+    playbot_retire_retention_receipt
+    echo "playbot workspace record gone; removed recorded git worktree $wt_abs via $common_abs" >&2
+    return 0
+  fi
+  echo "warning: playbot workspace record is gone but git worktree fallback removal failed for $wt_abs" >&2
+  return 1
+}
+
 playbot_retire_records() {
   # Only after endpoint retirement is confirmed.
   rm -f -- \
@@ -1442,6 +1627,21 @@ playbot_teardown_endpoint() {
     0:retired)
       PLAYBOT_ENDPOINT_RETIRED=1
       return 0
+      ;;
+    0:retained:workspace-record-gone*)
+      if playbot_remove_record_gone_worktree "$pre_workspace_removal_check"; then
+        PLAYBOT_ENDPOINT_RETIRED=1
+        return 0
+      fi
+      playbot_write_retention_receipt "${proof#retained:}" || true
+      # Workspace retained but thread endpoint must still be gone for record retirement.
+      if declare -F fm_backend_playbot_endpoint_confirmed_gone >/dev/null 2>&1 \
+         && fm_backend_playbot_endpoint_confirmed_gone "$T"; then
+        PLAYBOT_ENDPOINT_RETIRED=1
+        return 0
+      fi
+      echo "error: playbot teardown retained workspace but could not prove endpoint $T is gone; preserving every durable record" >&2
+      return 1
       ;;
     0:retained:*)
       playbot_write_retention_receipt "${proof#retained:}" || true
@@ -2416,7 +2616,7 @@ teardown_treehouse_return_attempt() {
 }
 
 validate_worktree_teardown_safety() {
-  local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch D current
+  local dirty_raw dirty dirty_raw_rc='' unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch D current
   WORK_UNLANDED_FORGE_READ_REASON=
   LIVE_RECORDED_PR_STATE=
   LIVE_RECORDED_PR_STATE_READ=0
@@ -2440,7 +2640,13 @@ validate_worktree_teardown_safety() {
     return 1
   fi
 
-  if ! dirty_raw=$(git -C "$WT" status --porcelain 2>/dev/null); then
+  if [ "$BACKEND" = playbot ]; then
+    dirty=$(playbot_first_unignored_dirty_path) || dirty_raw_rc=$?
+  else
+    dirty_raw=$(git -C "$WT" status --porcelain 2>/dev/null) || dirty_raw_rc=$?
+  fi
+  if [ -n "${dirty_raw_rc:-}" ]; then
+    dirty_raw_rc=
     if worktree_safety_blocked_by_lock "uncommitted changes"; then
       return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
     fi
@@ -2448,7 +2654,9 @@ validate_worktree_teardown_safety() {
     echo "Restore the git index state, or get the captain's explicit OK to discard, then --force." >&2
     return 1
   fi
-  dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-(grok|kimi)-turnend$)' | head -1 || true)
+  if [ "$BACKEND" != playbot ]; then
+    dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-(grok|kimi)-turnend$)' | head -1 || true)
+  fi
 
   if ! unpushed_raw=$(git -C "$WT" log --oneline HEAD --not --remotes -- 2>/dev/null); then
     if worktree_safety_blocked_by_lock "commits not on a remote"; then
@@ -2497,6 +2705,9 @@ validate_worktree_teardown_safety() {
   if [ -n "$dirty" ]; then
     echo "REFUSED: worktree $WT has uncommitted changes." >&2
     echo "uncommitted changes present" >&2
+    if [ "$BACKEND" = playbot ]; then
+      printf 'first non-Playbot-owned uncommitted path: %s\n' "$dirty" >&2
+    fi
     echo "Commit them (or get the captain's explicit OK to discard, then --force)." >&2
     return 1
   fi
