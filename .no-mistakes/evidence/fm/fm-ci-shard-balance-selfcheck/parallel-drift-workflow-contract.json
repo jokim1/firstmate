@@ -1,0 +1,30 @@
+{
+  "contract": "GitHub Actions portable parallel drift job",
+  "job_name": "Portable parallel shard drift guard",
+  "needs": [
+    "tests-portable-parallel-1",
+    "tests-portable-parallel-2"
+  ],
+  "condition": "always()",
+  "lane_timeouts_minutes": {
+    "tests-portable-parallel-1": 10,
+    "tests-portable-parallel-2": 10
+  },
+  "download": {
+    "pattern": "fm-test-timing-portable-parallel-*",
+    "path": "${{ runner.temp }}/fm-test-drift",
+    "merge-multiple": true
+  },
+  "executable_argv": [
+    "bin/fm-test-run.sh",
+    "--check-parallel-drift",
+    "--cap-ms",
+    "600000",
+    "--lane-timing",
+    "portable-parallel-1",
+    "$RUNNER_TEMP/fm-test-drift/fm-test-timing-portable-parallel-1.json",
+    "--lane-timing",
+    "portable-parallel-2",
+    "$RUNNER_TEMP/fm-test-drift/fm-test-timing-portable-parallel-2.json"
+  ]
+}

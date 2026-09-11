@@ -1,0 +1,31 @@
+
+=== healthy-measured-lanes ===
+FM_TEST_PARALLEL_DRIFT ok portable-parallel-1_ms=357564 portable-parallel-2_ms=333220 imbalance_ms=24344 cap_ms=600000 max_lane_ms=480000 max_imbalance_ms=90000
+exit_status=0 expected=0
+
+=== exact-80-and-15-percent-bounds ===
+FM_TEST_PARALLEL_DRIFT ok portable-parallel-1_ms=480000 portable-parallel-2_ms=390000 imbalance_ms=90000 cap_ms=600000 max_lane_ms=480000 max_imbalance_ms=90000
+exit_status=0 expected=0
+
+=== lane-over-80-percent-only ===
+fm-test-run: parallel drift guard: lane portable-parallel-1 measured 486s (81% of the 600s job cap), over the 80% drift bound
+fm-test-run: parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts
+exit_status=1 expected=1
+
+=== imbalance-over-15-percent-only ===
+fm-test-run: parallel drift guard: lanes drifted apart by 90s (portable-parallel-1=450s, portable-parallel-2=359s), over the 90s (15% of the 600s job cap) imbalance bound
+fm-test-run: parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts
+exit_status=1 expected=1
+
+=== missing-lane-artifact ===
+fm-test-run: parallel drift guard: lane portable-parallel-2 produced no timing artifact at /Users/josephkim/.no-mistakes/evidence/01M28E0T14E48G3PXXP1RPNDZJ/intentionally-missing-lane2.json
+fm-test-run: parallel drift guard: a lane writes no timing JSON when its job is killed at the cap or dies before finalization; investigate that lane instead of re-running it
+exit_status=1 expected=1
+
+=== wrong-lane-artifact ===
+fm-test-run: parallel drift guard: /Users/josephkim/.no-mistakes/evidence/01M28E0T14E48G3PXXP1RPNDZJ/lane2-fixture.json has selection 'lane=portable-serial', expected 'lane=portable-parallel-2'
+exit_status=2 expected=2
+
+=== malformed-cap ===
+fm-test-run: --cap-ms requires a positive integer of milliseconds (got 'soon')
+exit_status=2 expected=2
