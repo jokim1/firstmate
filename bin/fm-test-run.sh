@@ -40,7 +40,8 @@
 #     (docs/fm-test-portable-shards.md owns the measured table and refresh).
 #     A missing artifact fails too: a lane killed at its job cap writes no
 #     timing JSON, which is the silent-rot shape this guard exists to surface.
-#     The constants below own the thresholds and their evidence.
+#     The constants below own the thresholds; the linked shard record owns
+#     their measured evidence.
 #
 # Options:
 #   --json <path>   write a deterministic timing artifact after the run. Each
@@ -209,21 +210,10 @@ PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=27000
 # instead of silently. docs/fm-test-portable-shards.md owns the refresh.
 PORTABLE_SERIAL_MAX_UNHINTED_PERCENT=15
 
-# Portable parallel shard drift guard thresholds, as percents of the CI job
-# cap that the caller passes with --cap-ms (ci.yml owns the cap numbers; the
-# 2026-09-11 lanes carry timeout-minutes: 10, so 600000 ms). MAX_LANE_PERCENT
-# trips while a lane still has real headroom, because a lane that reaches its
-# cap dies as a "cancelled" job that reads as provider flakiness. The imbalance
-# bound trips when one lane carries the wall while the other runner idles, the
-# rot that left lane 1 at roughly 88% of the cap beside lane 2 at roughly 30%
-# before the 2026-09-11 rebalance. Evidence for both, recorded in
-# docs/fm-test-portable-shards.md: balanced lanes measure 357564 ms and
-# 333220 ms against the cap, walls swing roughly a fifth run to run with
-# runner speed, and the inter-lane difference stays near 24344 ms because
-# runner speed scales both lanes together. So the 80% lane bound needs a
-# healthy run about 34% slower than the six-run recorded maxima to trip on
-# variance alone, and 15% of the cap is about 3.7x the measured spread;
-# neither threshold trips on an ordinary slow runner.
+# Portable parallel shard drift guard thresholds, as percentages of the CI job
+# cap supplied through --cap-ms. ci.yml owns the cap numbers, while
+# docs/fm-test-portable-shards.md owns the measured evidence and rationale for
+# these bounds.
 PORTABLE_PARALLEL_MAX_LANE_PERCENT_OF_CAP=80
 PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP=15
 
@@ -974,8 +964,8 @@ check_one_drift_artifact() {
 
 # Refuse when a portable parallel lane approaches its CI job cap or the two
 # lanes drift apart, reading each lane's own timing artifact. See the header's
-# "Shard drift guard" block for the contract and the constants above for the
-# thresholds and their evidence.
+# "Shard drift guard" block for the contract, the constants above for the
+# thresholds, and the linked shard record for their evidence.
 run_parallel_drift_guard() {
   local cap_ms=$1 lane1_file=$2 lane2_file=$3
   local max_lane_ms max_imbalance_ms s1 s2 pair lane sum pct diff rc=0
