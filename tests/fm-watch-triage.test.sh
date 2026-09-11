@@ -345,7 +345,7 @@ test_stale_is_terminal_classifier() {
 }
 
 test_classifier_primitives() {
-  local dir state open activity
+  local dir state open activity start endpoint ident
   dir=$(make_case classify-primitives); state="$dir/state"
   printf 'working: a\n\ndone: b\n\n' > "$state/x.status"
   [ "$(last_status_line "$state/x.status")" = "done: b" ] || fail "last_status_line did not return the last non-blank line"
@@ -386,16 +386,22 @@ test_classifier_primitives() {
   status_frees_capacity "captain-held [key=q1]: parked" && fail "captain-held: wrongly frees capacity"
   # Span-keyed refill: only newly appended freeing lines count, not a stale tail.
   printf 'working: a\nresolved [key=q1]: answered: use A\n' > "$state/span.status"
-  status_span_frees_capacity "$state/span.status" 0 \
+  endpoint=$(wc -c < "$state/span.status" | tr -d ' ')
+  ident=$(_fm_open_decisions_file_ident "$state/span.status")
+  status_span_frees_capacity "$state/span.status" 0 "$endpoint" "$ident" \
     || fail "unclassified span with resolved: does not free capacity"
-  start=$(wc -c < "$state/span.status" | tr -d ' ')
-  status_span_frees_capacity "$state/span.status" "$start" \
+  start=$endpoint
+  status_span_frees_capacity "$state/span.status" "$start" "$endpoint" "$ident" \
     && fail "empty span after classified resolved: wrongly frees capacity"
   printf 'working: still going\n' >> "$state/span.status"
-  status_span_frees_capacity "$state/span.status" "$start" \
+  endpoint=$(wc -c < "$state/span.status" | tr -d ' ')
+  status_span_frees_capacity "$state/span.status" "$start" "$endpoint" "$ident" \
     && fail "working: append after classified resolved: wrongly frees capacity"
   printf 'done: ready\n' >> "$state/span.status"
-  status_span_frees_capacity "$state/span.status" "$start" \
+  status_span_frees_capacity "$state/span.status" "$start" "$endpoint" "$ident" \
+    && fail "done: append after captured endpoint wrongly frees capacity"
+  endpoint=$(wc -c < "$state/span.status" | tr -d ' ')
+  status_span_frees_capacity "$state/span.status" "$start" "$endpoint" "$ident" \
     || fail "new done: append in span does not free capacity"
   # Identity flip mid-read (FM_STATUS_IDENTITY_READER) must refuse the span
   # rather than classify a mixed-identity freeing line as a refill. The counter
@@ -413,7 +419,7 @@ test_classifier_primitives() {
   chmod +x "$state/ident-flip.sh"
   rm -f "$state/ident-flip.count"
   FM_STATUS_IDENTITY_READER="$state/ident-flip.sh" \
-    status_span_frees_capacity "$state/span.status" 0 \
+    status_span_frees_capacity "$state/span.status" 0 "$endpoint" "strong:1:1:before" \
     && fail "identity mismatch mid-read wrongly freed capacity"
   status_is_captain_relevant "merged" || fail "legacy bare merged free-text not captain-relevant"
   status_is_captain_relevant "PR ready https://x/pull/2" \

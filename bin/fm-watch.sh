@@ -2108,16 +2108,18 @@ EOF
     # still working) enqueues here, then advances markers below without being
     # treated as a spawn recommendation.
     need_refill=0
-    while IFS=$(printf '\t') read -r sf sig f; do
-      [ -n "$sf" ] || continue
-      case "$f" in *.status) ;; *) continue ;; esac
-      if status_span_frees_capacity "$f" "$(fm_wake_signal_seen_size "$STATE" "$f")"; then
-        need_refill=1
-        break
-      fi
+    refill_classification_error=0
+    while IFS=$(printf '\t') read -r f surface_end surface_ident; do
+      [ -n "$f" ] || continue
+      status_span_frees_capacity "$f" "$(fm_wake_signal_seen_size "$STATE" "$f")" \
+        "$surface_end" "$surface_ident"
+      refill_rc=$?
+      [ "$refill_rc" -eq 0 ] && need_refill=1
+      [ "$refill_rc" -eq 2 ] && refill_classification_error=1
     done <<EOF
-$pending
+$FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
+    [ "$refill_classification_error" -eq 0 ] || continue
     if [ "$need_refill" -eq 1 ]; then
       fm_wake_enqueue_refill || exit 1
     fi
