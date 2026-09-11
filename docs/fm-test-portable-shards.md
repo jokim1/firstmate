@@ -55,11 +55,11 @@ The parallel shard drift guard below owns the watch for this table drifting towa
 The `tests-portable-parallel-drift` CI job downloads both lanes' `fm-test-timing-portable-parallel-*` artifacts and runs `bin/fm-test-run.sh --check-parallel-drift --cap-ms 600000`, where 600000 ms matches the lanes' `timeout-minutes: 10` job cap.
 `bin/fm-test-run.sh` owns the check and its threshold constants (`PORTABLE_PARALLEL_MAX_LANE_PERCENT_OF_CAP`, `PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP`); this section owns the measured evidence behind them.
 
-Evidence at introduction on 2026-09-11: the balanced lanes measure 357564 ms (59.6% of the cap) and 333220 ms (55.5%), recorded as the slowest per-script maxima across six green runs, and observed walls swing roughly a fifth run to run with runner speed.
-The first live lane artifacts measured 447815 ms (74.6% of the cap) and 379279 ms (63.2%), with 68536 ms (11.4%) imbalance, so both the 80% lane bound and 15% imbalance bound held against real CI output.
-A healthy lane lands near 75% of the cap even on a runner a quarter slower than any of those six, while the lane bound trips above 80%, so ordinary variance cannot trip it.
-The imbalance bound trips above 15% of the cap (90000 ms) against a measured spread of 24344 ms: runner speed scales both lanes together, so their difference stays small even on a slow runner, and the bound sits about 3.7x above the measured spread.
-Against the 2026-08-to-2026-09 rot (lane 1 near 88% of the cap, lane 2 near 30%, imbalance 348000 ms), both bounds would have failed in PR checks well before the first cap-killed job reported as "cancelled".
+Evidence at introduction on 2026-09-11: the balance table records 357564 ms (59.6% of the cap) and 333220 ms (55.5%) as the slowest per-script maxima across six green runs.
+The first live lane artifacts measured 447815 ms (74.6% of the cap) and 379279 ms (63.2%), with 68536 ms (11.4%) imbalance, showing that single runs land well above the sum-of-maxima table on an ordinary slow day; the balance table understates per-run sums and the thresholds anchor to per-run evidence instead.
+The lane bound trips above 90% of the cap (540000 ms), about 20% above the observed slow-day sum of 447815 ms, and it still fires roughly a minute of script time before the cap-kill zone; the missing-artifact refusal covers the case where a lane is actually killed.
+The imbalance bound trips above 25% of the cap (150000 ms) against the 68536 ms measured difference: the lanes ride different runners, so the difference swings several tens of seconds on healthy days alone, and the bound sits just above that noise band.
+Against the 2026-08-to-2026-09 rot (lane 1 near 88% of the cap, lane 2 near 30%, imbalance 348000 ms), the imbalance bound would have failed in PR checks within weeks of the rot starting, while the heavy lane was still far from the cap, so the cap-killed jobs would have arrived as known-drift instead of mysteries.
 The job runs `if: always()` after both lanes and treats a missing artifact as a failure, because a lane killed at its cap, or dead before timing finalization, writes no timing JSON; that silence is the failure shape the guard exists to surface.
 
 ## Portable serial remainder

@@ -213,9 +213,20 @@ PORTABLE_SERIAL_MAX_UNHINTED_PERCENT=15
 # Portable parallel shard drift guard thresholds, as percentages of the CI job
 # cap supplied through --cap-ms. ci.yml owns the cap numbers, while
 # docs/fm-test-portable-shards.md owns the measured evidence and rationale for
-# these bounds.
-PORTABLE_PARALLEL_MAX_LANE_PERCENT_OF_CAP=80
-PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP=15
+# these bounds. Both bounds are set above the observed healthy per-run band
+# (not the sum-of-maxima balance table, which understates single runs): the
+# first live run measured lane sums of 447815 ms and 379279 ms with 68536 ms
+# imbalance, and per-run values swing roughly a fifth with runner speed while
+# the two lanes ride different runners, so the imbalance difference swings
+# several tens of seconds on healthy days alone. The lane bound at 90% leaves
+# about a fifth of headroom over the observed slow-day sum and still fires
+# about a minute of script time before the cap-kill zone; the imbalance bound
+# at 25% of the cap sits just above the healthy differential-noise band. The
+# 2026-09 rot (lane 1 near 88% of the cap, lane 2 near 30%, imbalance 348000
+# ms) trips the imbalance bound within weeks of starting while the heavy lane
+# is still far from the cap, which is the announcement the guard exists for.
+PORTABLE_PARALLEL_MAX_LANE_PERCENT_OF_CAP=90
+PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP=25
 
 usage() {
   awk '

@@ -1626,7 +1626,7 @@ test_parallel_drift_guard() {
   assert_contains "$out" "FM_TEST_PARALLEL_DRIFT ok" "a lane-prefixed CI selection must be accepted"
 
   # Sums exactly at both bounds are not over them.
-  write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1" 480000
+  write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1" 540000
   write_drift_lane "$tmp/lane2.json" "lane=portable-parallel-2" 390000
   set +e
   out=$("$RUNNER" --check-parallel-drift --cap-ms 600000 \
@@ -1637,6 +1637,8 @@ test_parallel_drift_guard() {
   assert_contains "$out" "FM_TEST_PARALLEL_DRIFT ok" "sums exactly at the bounds must pass"
 
   # The 2026-09 rot shape: lane 1 near 88% of the cap beside lane 2 near 30%.
+  # The lane bound deliberately does not fire at 88% (an ordinary slow day
+  # reaches the low 70s); the imbalance bound is the rot detector.
   write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1" 528000
   write_drift_lane "$tmp/lane2.json" "lane=portable-parallel-2" 180000
   set +e
@@ -1645,16 +1647,31 @@ test_parallel_drift_guard() {
     --lane-timing portable-parallel-2 "$tmp/lane2.json" 2>&1)
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a lane at 88% of the cap must fail the drift guard"; }
-  assert_contains "$out" "portable-parallel-1" "lane breach must name the lane"
-  assert_contains "$out" "528" "lane breach must report the measured time"
-  assert_contains "$out" "600" "lane breach must report the cap"
-  assert_contains "$out" "80%" "lane breach must report the bound"
-  assert_contains "$out" "imbalance bound" "the rot shape must also trip the imbalance bound"
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "the rot shape must fail the drift guard"; }
+  assert_contains "$out" "portable-parallel-1" "imbalance breach must name lane 1"
+  assert_contains "$out" "portable-parallel-2" "imbalance breach must name lane 2"
+  assert_contains "$out" "348" "imbalance breach must report the difference"
+  assert_not_contains "$out" "drift bound" "an 88% lane on a healthy slow day must not report a lane breach"
   assert_contains "$out" "docs/fm-test-portable-shards.md" "failure must name the rebalance remedy"
 
-  # Imbalance alone: both lanes under the lane bound but 150s apart.
-  write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1" 450000
+  # A lane above 90% of the cap is leaving the healthy band and must trip the
+  # lane bound on its own.
+  write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1" 560000
+  write_drift_lane "$tmp/lane2.json" "lane=portable-parallel-2" 500000
+  set +e
+  out=$("$RUNNER" --check-parallel-drift --cap-ms 600000 \
+    --lane-timing portable-parallel-1 "$tmp/lane1.json" \
+    --lane-timing portable-parallel-2 "$tmp/lane2.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a lane above 90% of the cap must fail the drift guard"; }
+  assert_contains "$out" "portable-parallel-1" "lane breach must name the lane"
+  assert_contains "$out" "560" "lane breach must report the measured time"
+  assert_contains "$out" "600" "lane breach must report the cap"
+  assert_contains "$out" "90%" "lane breach must report the bound"
+
+  # Imbalance alone: both lanes under the lane bound but 180s apart.
+  write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1" 480000
   write_drift_lane "$tmp/lane2.json" "lane=portable-parallel-2" 300000
   set +e
   out=$("$RUNNER" --check-parallel-drift --cap-ms 600000 \
@@ -1662,11 +1679,11 @@ test_parallel_drift_guard() {
     --lane-timing portable-parallel-2 "$tmp/lane2.json" 2>&1)
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "lanes 150s apart must fail the imbalance bound"; }
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "lanes 180s apart must fail the imbalance bound"; }
   assert_contains "$out" "portable-parallel-1" "imbalance breach must name lane 1"
   assert_contains "$out" "portable-parallel-2" "imbalance breach must name lane 2"
-  assert_contains "$out" "150" "imbalance breach must report the difference"
-  assert_not_contains "$out" "80% drift bound" "lanes under the lane bound must not report a lane breach"
+  assert_contains "$out" "180" "imbalance breach must report the difference"
+  assert_not_contains "$out" "drift bound" "lanes under the lane bound must not report a lane breach"
 
   # A lane killed at its cap writes no timing JSON; the guard must fail loudly
   # naming the silent lane rather than passing on one artifact.
