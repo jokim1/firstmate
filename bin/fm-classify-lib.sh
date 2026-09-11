@@ -1315,6 +1315,13 @@ EOF
 }
 
 status_acknowledge_presented_snapshot() {  # <state> <snapshot> [<fully-presented-task-ids>]
+  # fully-presented-task-ids are tasks whose unread status bytes were printed
+  # this drain (direct or historical annotations). Those ids force the
+  # contiguous cursor through the captured endpoint so annotated
+  # needs-decision/done/working rows cannot replay on the next drain. Tasks
+  # absent from that list still advance when the span contains an unread-surface
+  # note or reserved pending-reply resolution; otherwise routine-only bytes stay
+  # unacked so a later signal annotation can still present them.
   local state=$1 snapshot=$2 fully_presented=${3:-} task endpoint ident f offset lines line safe
   while IFS=$(printf '\t') read -r task endpoint ident; do
     [ -n "$task" ] || continue
@@ -1326,11 +1333,6 @@ $fully_presented
       f="$state/$task.status"
       offset=$(status_presentation_cursor_offset "$f") || return 1
       lines=$(status_new_lines_since_cursor "$f" "$endpoint") || return 1
-      # Once any informational line in this span is presented fleet-wide, the
-      # contiguous cursor may advance through the captured endpoint. Routine
-      # lines remain unacknowledged only while they are the sole unread content,
-      # preserving delayed signal annotations without replaying a handled note
-      # that happened to follow a routine line.
       while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in
           *[![:space:]]*)
