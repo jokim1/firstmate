@@ -950,29 +950,42 @@ print(total)
 PY
 }
 
-parallel_drift_lane_selection() {
-  python3 -c \
-    'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("selection") or "")' \
-    "$1"
+parallel_drift_expected_paths() {
+  case "$1" in
+    portable-parallel-1) list_portable_parallel_1 ;;
+    portable-parallel-2) list_portable_parallel_2 ;;
+  esac
+}
+
+parallel_drift_membership_difference() {
+  python3 -c '
+import json, sys
+expected = {line.rstrip("\n") for line in sys.stdin if line.rstrip("\n")}
+with open(sys.argv[1], encoding="utf-8") as fh:
+    doc = json.load(fh)
+actual = {script["path"] for script in (doc.get("scripts") or [])}
+missing = sorted(expected - actual)
+extra = sorted(actual - expected)
+if missing:
+    print("missing script paths: " + ", ".join(missing))
+if extra:
+    print("unexpected script paths: " + ", ".join(extra))
+raise SystemExit(bool(missing or extra))
+' "$1"
 }
 
 # Validate one lane's artifact before measuring it: it must exist (a lane
 # killed at its cap writes no timing JSON, and that silence is itself the
-# drift signal) and it must actually be that lane's artifact. Lane identity
-# is the first ';'-separated segment of the recorded selection: CI lanes add
-# run configuration such as fail-on-gate-skip after it.
+# drift signal) and its recorded scripts must exactly cover that lane.
 check_one_drift_artifact() {
-  local lane=$1 file=$2 sel lane_sel
+  local lane=$1 file=$2 difference
   if [ ! -f "$file" ]; then
     log "parallel drift guard: lane $lane produced no timing artifact at $file"
     log "parallel drift guard: a lane writes no timing JSON when its job is killed at the cap or dies before finalization; investigate that lane instead of re-running it"
     return 1
   fi
-  sel=$(parallel_drift_lane_selection "$file") \
-    || die "parallel drift guard: could not parse $file as a timing artifact"
-  lane_sel=${sel%%;*}
-  [ "$lane_sel" = "lane=$lane" ] \
-    || die "parallel drift guard: $file has selection '$sel', expected 'lane=$lane'"
+  difference=$(parallel_drift_expected_paths "$lane" | parallel_drift_membership_difference "$file") \
+    || die "parallel drift guard: $file does not exactly cover $lane: $difference"
   return 0
 }
 

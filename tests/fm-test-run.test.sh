@@ -1580,22 +1580,41 @@ assert len(doc["scripts"])==3
   pass "aggregate-json merges lane timing artifacts"
 }
 
-# Write one lane timing artifact with a single script carrying an exact
-# duration, so drift-guard fixtures control their lane sums to the millisecond.
+# Write a complete lane timing artifact with one script carrying the duration,
+# so drift-guard fixtures control their lane sums to the millisecond.
 write_drift_lane() {
-  local file=$1 selection=$2 duration_ms=$3
-  cat >"$file" <<JSON
-{
-  "run_id": "drift-fixture",
-  "selection": "$selection",
-  "started_at": "2026-09-11T00:00:00Z",
-  "finished_at": "2026-09-11T00:06:00Z",
-  "summary": {"total": 1, "failed": 0, "skipped_gate": 0, "duration_ms": $duration_ms},
-  "scripts": [
-    {"path": "tests/drift-fixture.test.sh", "family": "pure-contract-unit", "duration_ms": $duration_ms, "exit": 0, "gate_skip": false}
-  ]
+  local file=$1 selection=$2 duration_ms=$3 lane omit_path=${5:-}
+  lane=${4:-${selection#lane=}}
+  lane=${lane%%;*}
+  "$RUNNER" --list --lane "$lane" | python3 -c '
+import json, sys
+paths = [line.rstrip("\n") for line in sys.stdin if line.rstrip("\n") != sys.argv[4]]
+scripts = [
+    {
+        "path": path,
+        "family": "pure-contract-unit",
+        "duration_ms": int(sys.argv[3]) if index == 0 else 0,
+        "exit": 0,
+        "gate_skip": False,
+    }
+    for index, path in enumerate(paths)
+]
+doc = {
+    "run_id": "drift-fixture",
+    "selection": sys.argv[2],
+    "started_at": "2026-09-11T00:00:00Z",
+    "finished_at": "2026-09-11T00:06:00Z",
+    "summary": {
+        "total": len(scripts),
+        "failed": 0,
+        "skipped_gate": 0,
+        "duration_ms": int(sys.argv[3]),
+    },
+    "scripts": scripts,
 }
-JSON
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    json.dump(doc, fh)
+' "$file" "$selection" "$duration_ms" "$omit_path"
 }
 
 test_parallel_drift_guard() {
@@ -1614,8 +1633,7 @@ test_parallel_drift_guard() {
   assert_contains "$out" "portable-parallel-1_ms=357564" "ok line must report the lane 1 sum"
   assert_contains "$out" "imbalance_ms=24344" "ok line must report the imbalance"
 
-  # CI records run configuration after the lane identity (lane 1 passes
-  # --fail-on-gate-skip); the guard must accept its own lane's artifact.
+  # Selection is descriptive metadata; lane completeness comes from scripts.
   write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found" 357564
   set +e
   out=$("$RUNNER" --check-parallel-drift --cap-ms 600000 \
@@ -1623,7 +1641,18 @@ test_parallel_drift_guard() {
     --lane-timing portable-parallel-2 "$tmp/lane2.json" 2>&1)
   rc=$?
   set -e
-  assert_contains "$out" "FM_TEST_PARALLEL_DRIFT ok" "a lane-prefixed CI selection must be accepted"
+  assert_contains "$out" "FM_TEST_PARALLEL_DRIFT ok" "a complete CI lane artifact must be accepted"
+
+  write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1;exclude-family=pure-contract-unit" 357564 \
+    portable-parallel-1 tests/fm-test-run.test.sh
+  set +e
+  out=$("$RUNNER" --check-parallel-drift --cap-ms 600000 \
+    --lane-timing portable-parallel-1 "$tmp/lane1.json" \
+    --lane-timing portable-parallel-2 "$tmp/lane2.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a partial lane artifact must be refused"; }
+  assert_contains "$out" "missing script paths" "partial lane refusal must name missing coverage"
 
   # Sums exactly at both bounds are not over them.
   write_drift_lane "$tmp/lane1.json" "lane=portable-parallel-1" 540000
@@ -1697,8 +1726,8 @@ test_parallel_drift_guard() {
   [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a missing lane artifact must fail the drift guard"; }
   assert_contains "$out" "portable-parallel-2" "missing artifact must name the silent lane"
 
-  # A wrong-lane artifact is a wiring bug, not a measurement.
-  write_drift_lane "$tmp/lane2.json" "lane=portable-serial" 333220
+  # A wrong-lane membership is a wiring bug, not a measurement.
+  write_drift_lane "$tmp/lane2.json" "lane=portable-parallel-2" 333220 portable-parallel-1
   set +e
   out=$("$RUNNER" --check-parallel-drift --cap-ms 600000 \
     --lane-timing portable-parallel-1 "$tmp/lane1.json" \
@@ -1706,7 +1735,7 @@ test_parallel_drift_guard() {
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a wrong-lane artifact must be refused"; }
-  assert_contains "$out" "selection" "wrong-lane refusal must name the selection mismatch"
+  assert_contains "$out" "does not exactly cover" "wrong-lane refusal must name the coverage mismatch"
 
   rm -rf "$tmp"
   pass "parallel drift guard fails lanes near the cap, drift, and silence"
