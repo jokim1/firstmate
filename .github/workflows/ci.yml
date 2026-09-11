@@ -130,6 +130,38 @@ jobs:
           path: ${{ runner.temp }}/fm-test/fm-test-timing-portable-parallel-2.json
           if-no-files-found: warn
 
+  # Fails loudly when a portable parallel lane approaches its job cap or the
+  # lanes drift apart, reading the lanes' own uploaded timing artifacts, so
+  # shard rot announces itself in PR checks instead of arriving as a
+  # "cancelled" job that reads as provider flakiness
+  # (docs/fm-test-portable-shards.md). The check logic and its thresholds live
+  # in bin/fm-test-run.sh; this job only downloads the artifacts and feeds it.
+  # Runs even when a lane is cancelled: a lane killed at its cap writes no
+  # timing JSON, and that missing artifact is itself the drift signal.
+  tests-portable-parallel-drift:
+    name: Portable parallel shard drift guard
+    runs-on: ubuntu-latest
+    needs:
+      - tests-portable-parallel-1
+      - tests-portable-parallel-2
+    if: always()
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download parallel lane timing artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fm-test-timing-portable-parallel-*
+          path: ${{ runner.temp }}/fm-test-drift
+          merge-multiple: true
+      - name: Check portable parallel shard drift
+        run: |
+          set -eu
+          # --cap-ms must stay in step with the parallel lanes' timeout-minutes: 10.
+          bin/fm-test-run.sh --check-parallel-drift \
+            --cap-ms 600000 \
+            --lane-timing portable-parallel-1 "$RUNNER_TEMP/fm-test-drift/fm-test-timing-portable-parallel-1.json" \
+            --lane-timing portable-parallel-2 "$RUNNER_TEMP/fm-test-drift/fm-test-timing-portable-parallel-2.json"
+
   # Required portable serial remainder: watcher, lock, AFK, tmux, daemon,
   # ambiguous, and other stateful tests. Real Herdr stays in tests-herdr.
   # Split across separate runners so no two of these stateful scripts ever share

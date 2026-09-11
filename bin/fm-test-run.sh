@@ -27,6 +27,21 @@
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
 #
+# Shard drift guard (no suite execution):
+#   fm-test-run.sh --check-parallel-drift --cap-ms <job-cap-ms> \
+#     --lane-timing portable-parallel-1 <lane.json> \
+#     --lane-timing portable-parallel-2 <lane.json>
+#     Sum each portable parallel lane's script durations from its own timing
+#     artifact and fail when a lane exceeds
+#     PORTABLE_PARALLEL_MAX_LANE_PERCENT_OF_CAP of the job cap or the two
+#     lanes drift apart by more than
+#     PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP of it. The failure names
+#     the lane, its measured sum, the cap, and the rebalance remedy
+#     (docs/fm-test-portable-shards.md owns the measured table and refresh).
+#     A missing artifact fails too: a lane killed at its job cap writes no
+#     timing JSON, which is the silent-rot shape this guard exists to surface.
+#     The constants below own the thresholds and their evidence.
+#
 # Options:
 #   --json <path>   write a deterministic timing artifact after the run. Each
 #                   script record carries its family, expected gate-skip class,
@@ -149,6 +164,10 @@ LIST_FAMILIES=0
 LIST_CONCURRENT_SAFE_FAMILIES=0
 LIST_LANES=0
 CHECK_COVERAGE=0
+CHECK_PARALLEL_DRIFT=0
+DRIFT_CAP_MS=
+DRIFT_TIMING_LANES=()
+DRIFT_TIMING_FILES=()
 AGGREGATE_OUT=
 FAMILY=
 LANE=
@@ -189,6 +208,24 @@ PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=27000
 # leaves room for newly added tests while making a stale hint table fail loudly
 # instead of silently. docs/fm-test-portable-shards.md owns the refresh.
 PORTABLE_SERIAL_MAX_UNHINTED_PERCENT=15
+
+# Portable parallel shard drift guard thresholds, as percents of the CI job
+# cap that the caller passes with --cap-ms (ci.yml owns the cap numbers; the
+# 2026-09-11 lanes carry timeout-minutes: 10, so 600000 ms). MAX_LANE_PERCENT
+# trips while a lane still has real headroom, because a lane that reaches its
+# cap dies as a "cancelled" job that reads as provider flakiness. The imbalance
+# bound trips when one lane carries the wall while the other runner idles, the
+# rot that left lane 1 at roughly 88% of the cap beside lane 2 at roughly 30%
+# before the 2026-09-11 rebalance. Evidence for both, recorded in
+# docs/fm-test-portable-shards.md: balanced lanes measure 357564 ms and
+# 333220 ms against the cap, walls swing roughly a fifth run to run with
+# runner speed, and the inter-lane difference stays near 24344 ms because
+# runner speed scales both lanes together. So the 80% lane bound needs a
+# healthy run about 34% slower than the six-run recorded maxima to trip on
+# variance alone, and 15% of the cap is about 3.7x the measured spread;
+# neither threshold trips on an ordinary slow runner.
+PORTABLE_PARALLEL_MAX_LANE_PERCENT_OF_CAP=80
+PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP=15
 
 usage() {
   awk '
@@ -895,6 +932,96 @@ select_lane() {
       ;;
   esac
   [ "$found" -eq 1 ] || die "lane '$want' selected no tests"
+}
+
+# Sum the script durations recorded in one lane timing artifact, so the drift
+# guard measures the same quantity the measured table in
+# docs/fm-test-portable-shards.md records.
+parallel_drift_lane_sum_ms() {
+  python3 - "$1" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    doc = json.load(fh)
+total = 0
+for script in doc.get("scripts") or []:
+    total += int(script.get("duration_ms") or 0)
+print(total)
+PY
+}
+
+parallel_drift_lane_selection() {
+  python3 -c \
+    'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("selection") or "")' \
+    "$1"
+}
+
+# Validate one lane's artifact before measuring it: it must exist (a lane
+# killed at its cap writes no timing JSON, and that silence is itself the
+# drift signal) and it must actually be that lane's artifact.
+check_one_drift_artifact() {
+  local lane=$1 file=$2 sel
+  if [ ! -f "$file" ]; then
+    log "parallel drift guard: lane $lane produced no timing artifact at $file"
+    log "parallel drift guard: a lane writes no timing JSON when its job is killed at the cap or dies before finalization; investigate that lane instead of re-running it"
+    return 1
+  fi
+  sel=$(parallel_drift_lane_selection "$file") \
+    || die "parallel drift guard: could not parse $file as a timing artifact"
+  [ "$sel" = "lane=$lane" ] \
+    || die "parallel drift guard: $file has selection '$sel', expected 'lane=$lane'"
+  return 0
+}
+
+# Refuse when a portable parallel lane approaches its CI job cap or the two
+# lanes drift apart, reading each lane's own timing artifact. See the header's
+# "Shard drift guard" block for the contract and the constants above for the
+# thresholds and their evidence.
+run_parallel_drift_guard() {
+  local cap_ms=$1 lane1_file=$2 lane2_file=$3
+  local max_lane_ms max_imbalance_ms s1 s2 pair lane sum pct diff rc=0
+
+  case "$cap_ms" in
+    ''|*[!0-9]*) die "--cap-ms requires a positive integer of milliseconds (got '$cap_ms')" ;;
+  esac
+  [ "$cap_ms" -gt 0 ] || die "--cap-ms requires a positive integer of milliseconds"
+
+  max_lane_ms=$((cap_ms * PORTABLE_PARALLEL_MAX_LANE_PERCENT_OF_CAP / 100))
+  max_imbalance_ms=$((cap_ms * PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP / 100))
+
+  check_one_drift_artifact portable-parallel-1 "$lane1_file" || rc=1
+  check_one_drift_artifact portable-parallel-2 "$lane2_file" || rc=1
+  [ "$rc" -eq 0 ] || return 1
+
+  s1=$(parallel_drift_lane_sum_ms "$lane1_file") \
+    || die "parallel drift guard: could not parse $lane1_file as a timing artifact"
+  s2=$(parallel_drift_lane_sum_ms "$lane2_file") \
+    || die "parallel drift guard: could not parse $lane2_file as a timing artifact"
+
+  for pair in "portable-parallel-1:$s1" "portable-parallel-2:$s2"; do
+    lane=${pair%%:*}
+    sum=${pair#*:}
+    if [ "$sum" -gt "$max_lane_ms" ]; then
+      pct=$((sum * 100 / cap_ms))
+      log "parallel drift guard: lane $lane measured $((sum / 1000))s (${pct}% of the $((cap_ms / 1000))s job cap), over the ${PORTABLE_PARALLEL_MAX_LANE_PERCENT_OF_CAP}% drift bound"
+      rc=1
+    fi
+  done
+
+  diff=$((s1 - s2))
+  [ "$diff" -ge 0 ] || diff=$((-diff))
+  if [ "$diff" -gt "$max_imbalance_ms" ]; then
+    log "parallel drift guard: lanes drifted apart by $((diff / 1000))s (portable-parallel-1=$((s1 / 1000))s, portable-parallel-2=$((s2 / 1000))s), over the $((max_imbalance_ms / 1000))s (${PORTABLE_PARALLEL_MAX_IMBALANCE_PERCENT_OF_CAP}% of the $((cap_ms / 1000))s job cap) imbalance bound"
+    rc=1
+  fi
+
+  if [ "$rc" -ne 0 ]; then
+    log "parallel drift guard: rebalance the lanes per docs/fm-test-portable-shards.md and refresh its measured table from fresh timing artifacts"
+    return 1
+  fi
+
+  printf 'FM_TEST_PARALLEL_DRIFT ok portable-parallel-1_ms=%s portable-parallel-2_ms=%s imbalance_ms=%s cap_ms=%s max_lane_ms=%s max_imbalance_ms=%s\n' \
+    "$s1" "$s2" "$diff" "$cap_ms" "$max_lane_ms" "$max_imbalance_ms"
+  return 0
 }
 
 run_coverage_guard() {
@@ -1815,6 +1942,28 @@ while [ "$#" -gt 0 ]; do
       CHECK_COVERAGE=1
       shift
       ;;
+    --check-parallel-drift)
+      CHECK_PARALLEL_DRIFT=1
+      shift
+      ;;
+    --cap-ms)
+      [ "$#" -gt 1 ] || die "--cap-ms requires the CI job cap in milliseconds"
+      DRIFT_CAP_MS=$2
+      shift 2
+      ;;
+    --cap-ms=*)
+      DRIFT_CAP_MS=${1#--cap-ms=}
+      shift
+      ;;
+    --lane-timing)
+      [ "$#" -gt 2 ] || die "--lane-timing requires a lane name and a timing artifact path"
+      DRIFT_TIMING_LANES+=("$2")
+      DRIFT_TIMING_FILES+=("$3")
+      shift 3
+      ;;
+    --lane-timing=*)
+      die "--lane-timing takes two values; use '--lane-timing <lane> <path>'"
+      ;;
     --aggregate-json)
       [ "$#" -gt 1 ] || die "--aggregate-json requires an output path"
       AGGREGATE_OUT=$2
@@ -1889,6 +2038,36 @@ if [ "$CHECK_COVERAGE" -eq 1 ]; then
   exit $?
 fi
 
+if [ "$CHECK_PARALLEL_DRIFT" -eq 1 ]; then
+  [ -z "${MODE:-}" ] || die "--check-parallel-drift takes no selection mode"
+  [ -n "$DRIFT_CAP_MS" ] || die "--check-parallel-drift requires --cap-ms <job-cap-ms>"
+  [ "${#DRIFT_TIMING_LANES[@]}" -gt 0 ] \
+    || die "--check-parallel-drift requires --lane-timing <lane> <path> for both portable parallel lanes"
+  drift_lane1_file=
+  drift_lane2_file=
+  drift_i=0
+  while [ "$drift_i" -lt "${#DRIFT_TIMING_LANES[@]}" ]; do
+    case "${DRIFT_TIMING_LANES[drift_i]}" in
+      portable-parallel-1)
+        [ -z "$drift_lane1_file" ] || die "--lane-timing portable-parallel-1 given twice"
+        drift_lane1_file=${DRIFT_TIMING_FILES[drift_i]}
+        ;;
+      portable-parallel-2)
+        [ -z "$drift_lane2_file" ] || die "--lane-timing portable-parallel-2 given twice"
+        drift_lane2_file=${DRIFT_TIMING_FILES[drift_i]}
+        ;;
+      *)
+        die "--lane-timing '${DRIFT_TIMING_LANES[drift_i]}' is not a portable parallel lane (see --list-lanes)"
+        ;;
+    esac
+    drift_i=$((drift_i + 1))
+  done
+  [ -n "$drift_lane1_file" ] || die "--check-parallel-drift requires --lane-timing portable-parallel-1 <path>"
+  [ -n "$drift_lane2_file" ] || die "--check-parallel-drift requires --lane-timing portable-parallel-2 <path>"
+  run_parallel_drift_guard "$DRIFT_CAP_MS" "$drift_lane1_file" "$drift_lane2_file"
+  exit $?
+fi
+
 if [ "${MODE:-}" = "aggregate" ]; then
   [ -n "$AGGREGATE_OUT" ] || die "--aggregate-json requires an output path"
   [ "${#SCRIPTS[@]}" -gt 0 ] || die "--aggregate-json requires at least one input timing JSON"
@@ -1918,7 +2097,8 @@ esac
 
 # Refuse before any suite is selected or run. The inspection modes execute
 # nothing: --list-families, --list-concurrent-safe-families, --list-lanes,
-# --check-coverage, --concurrent-safe-family-jobs-max and --aggregate-json have
+# --check-coverage, --check-parallel-drift,
+# --concurrent-safe-family-jobs-max and --aggregate-json have
 # already exited above, and --list/--list-scheduled print their selection and
 # exit below. An unset MODE still falls through to the usage error, so a caller
 # who named no selection mode is told that rather than this.
