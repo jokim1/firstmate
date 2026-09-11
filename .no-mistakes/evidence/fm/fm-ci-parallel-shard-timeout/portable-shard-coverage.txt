@@ -1,0 +1,2 @@
+$ bin/fm-test-run.sh --check-coverage
+FM_TEST_COVERAGE ok total=206 parallel=24 serial=167 serial_shards=7 serial_unhinted=2 herdr=15
