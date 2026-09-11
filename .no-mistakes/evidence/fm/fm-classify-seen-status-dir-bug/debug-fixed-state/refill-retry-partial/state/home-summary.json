@@ -1,0 +1,29 @@
+{
+  "schema": "fm-secondmate-home-summary.v1",
+  "hold_classifier_schema": "fm-captain-hold-buckets.v1",
+  "generated": "2026-09-11T18:10:48Z",
+  "generated_epoch": 1789150248,
+  "home": "/private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-wake-tangle-root.0fbgxf",
+  "valid": false,
+  "reason": "missing structured backlog",
+  "invalidity": {
+    "kind": "missing_backlog",
+    "ids": []
+  },
+  "state": "unknown",
+  "active_children": [],
+  "decisions_open": [],
+  "holds": [],
+  "queued": [],
+  "landed": [],
+  "endpoints": [],
+  "counts": {
+    "active_children": 0,
+    "decisions_open": 0,
+    "holds": 0,
+    "queued": 0,
+    "landed": 0,
+    "endpoints": 0
+  },
+  "omitted": []
+}

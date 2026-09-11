@@ -1,0 +1,4 @@
+STOP target and descendants immediately after signal:
+88112 87917 T    bash /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M28TD3Z7SXJEZNJM6YQV43KS/bin/fm-watch.sh
+94420 88112 S    bash /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M28TD3Z7SXJEZNJM6YQV43KS/bin/fm-watch.sh
+ok - partial refill retries preserve successful endpoints
