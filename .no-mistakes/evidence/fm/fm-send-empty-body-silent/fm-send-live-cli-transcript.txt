@@ -1,0 +1,74 @@
+fm-send live CLI regression transcript
+baseline: 92b0a2163dd2b987d64e8a55240e0fdd825d1be0
+target: 686c6a7de044d56854dbc18d4215335f31a014d9
+
+CASE: baseline-heredoc-after-separator
+exit: 0
+stderr: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ●  WATCHER DOWN - SUPERVISION IS OFF ●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s). ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair. ●  This is a supervision warning only; the requested message WILL still be sent. ●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &. ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ fm-send: doorbell not typed because the agent in nm-isolated:fm-t1 has exited; the steer is durably recorded at /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2AG5BWMEYM4TBTREG9V36YN/.nm-test-fm-send-live/runtime-40366/baseline-heredoc-after-separator/home/state/t1.inbox/001.msg for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane 
+durable inbox record: 001.msg
+durable body: --
+pending-reply files: 0
+
+CASE: target-heredoc-after-separator
+exit: 1
+stderr: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ●  WATCHER DOWN - SUPERVISION IS OFF ●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s). ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair. ●  This is a supervision warning only; the requested message WILL still be sent. ●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &. ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ error: message body is empty, whitespace-only, or only '--' separators; nothing was sent. Probable cause: the text was placed after a '--' separator, or a heredoc produced no arguments - put the body BEFORE '--' (see the Usage line above). 
+durable inbox record: absent
+durable body: <none>
+pending-reply files: 0
+
+CASE: target-empty-body
+input body: <>
+exit: 1
+stderr: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ●  WATCHER DOWN - SUPERVISION IS OFF ●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s). ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair. ●  This is a supervision warning only; the requested message WILL still be sent. ●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &. ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ error: message body is empty, whitespace-only, or only '--' separators; nothing was sent. Probable cause: the text was placed after a '--' separator, or a heredoc produced no arguments - put the body BEFORE '--' (see the Usage line above). 
+durable inbox record: absent
+durable body: <none>
+pending-reply files: 0
+
+CASE: target-whitespace-only
+input body: < 	  >
+exit: 1
+stderr: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ●  WATCHER DOWN - SUPERVISION IS OFF ●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s). ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair. ●  This is a supervision warning only; the requested message WILL still be sent. ●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &. ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ error: message body is empty, whitespace-only, or only '--' separators; nothing was sent. Probable cause: the text was placed after a '--' separator, or a heredoc produced no arguments - put the body BEFORE '--' (see the Usage line above). 
+durable inbox record: absent
+durable body: <none>
+pending-reply files: 0
+
+CASE: target-repeated-separators-only
+input body: <-- -->
+exit: 1
+stderr: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ●  WATCHER DOWN - SUPERVISION IS OFF ●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s). ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair. ●  This is a supervision warning only; the requested message WILL still be sent. ●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &. ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ error: message body is empty, whitespace-only, or only '--' separators; nothing was sent. Probable cause: the text was placed after a '--' separator, or a heredoc produced no arguments - put the body BEFORE '--' (see the Usage line above). 
+durable inbox record: absent
+durable body: <none>
+pending-reply files: 0
+
+CASE: target-secondmate-separator-only
+input body: <-->
+exit: 1
+stderr: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ●  WATCHER DOWN - SUPERVISION IS OFF ●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s). ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair. ●  This is a supervision warning only; the requested message WILL still be sent. ●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &. ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ error: message body is empty, whitespace-only, or only '--' separators; nothing was sent. Probable cause: the text was placed after a '--' separator, or a heredoc produced no arguments - put the body BEFORE '--' (see the Usage line above). 
+durable inbox record: absent
+durable body: <none>
+pending-reply files: 0
+
+CASE: target-legitimate-separator-text
+input body: <git diff a -- b, then run it with --verbose>
+exit: 0
+stderr: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ●  WATCHER DOWN - SUPERVISION IS OFF ●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s). ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair. ●  This is a supervision warning only; the requested message WILL still be sent. ●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &. ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ fm-send: doorbell not typed because the agent in nm-isolated:fm-t1 has exited; the steer is durably recorded at /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2AG5BWMEYM4TBTREG9V36YN/.nm-test-fm-send-live/runtime-40366/target-legitimate-separator-text/home/state/t1.inbox/001.msg for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane 
+durable inbox record: 001.msg
+durable body: git diff a -- b, then run it with --verbose
+pending-reply files: 0
+
+CASE: target-single-hyphen
+input body: <->
+exit: 0
+stderr: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ●  WATCHER DOWN - SUPERVISION IS OFF ●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s). ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair. ●  This is a supervision warning only; the requested message WILL still be sent. ●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &. ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ fm-send: doorbell not typed because the agent in nm-isolated:fm-t1 has exited; the steer is durably recorded at /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2AG5BWMEYM4TBTREG9V36YN/.nm-test-fm-send-live/runtime-40366/target-single-hyphen/home/state/t1.inbox/001.msg for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane 
+durable inbox record: 001.msg
+durable body: -
+pending-reply files: 0
+
+CASE: target-triple-hyphen
+input body: <--->
+exit: 0
+stderr: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ●  WATCHER DOWN - SUPERVISION IS OFF ●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s). ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair. ●  This is a supervision warning only; the requested message WILL still be sent. ●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &. ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ fm-send: doorbell not typed because the agent in nm-isolated:fm-t1 has exited; the steer is durably recorded at /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2AG5BWMEYM4TBTREG9V36YN/.nm-test-fm-send-live/runtime-40366/target-triple-hyphen/home/state/t1.inbox/001.msg for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane 
+durable inbox record: 001.msg
+durable body: ---
+pending-reply files: 0
+
