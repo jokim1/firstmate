@@ -1544,7 +1544,7 @@ test_aggregate_json() {
   cat >"$tmp/a.json" <<'JSON'
 {
   "run_id": "a",
-  "selection": "lane=portable-parallel-1",
+  "selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
   "started_at": "2026-07-22T00:00:00Z",
   "finished_at": "2026-07-22T00:01:00Z",
   "summary": {"total": 1, "failed": 0, "skipped_gate": 0, "duration_ms": 1000},
@@ -1554,7 +1554,7 @@ JSON
   cat >"$tmp/b.json" <<'JSON'
 {
   "run_id": "b",
-  "selection": "lane=portable-serial",
+  "selection": "lane=portable-parallel-2",
   "started_at": "2026-07-22T00:00:00Z",
   "finished_at": "2026-07-22T00:02:00Z",
   "summary": {"total": 2, "failed": 1, "skipped_gate": 0, "duration_ms": 2000},
@@ -1566,6 +1566,7 @@ JSON
 JSON
   out=$("$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/a.json" "$tmp/b.json")
   assert_contains "$out" "FM_TEST_AGGREGATE lanes=2 total=3 failed=1" "aggregate summary line"
+  assert_contains "$out" "portable_parallel_1_ms=1000 portable_parallel_2_ms=2000 imbalance_ms=1000" "aggregate parallel imbalance"
   python3 -c '
 import json,sys
 doc=json.load(open(sys.argv[1]))
