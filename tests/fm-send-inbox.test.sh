@@ -338,6 +338,57 @@ test_unwritable_inbox_fails_loudly() {
   pass "fm-send inbox: an unwritable record is a loud local failure that leaves no false expectation"
 }
 
+test_separator_only_body_is_refused() {
+  local dir err rc
+  dir=$(setup_case seprefuse); err="$dir/send.err"
+  # The real failure shape: a heredoc parked after '--' never reaches the
+  # argument list, so the literal '--' was the entire recorded body.
+  run_send "$dir" "$err" -- t1 -- <<'EOF' ; rc=$?
+this heredoc text lands on stdin, which fm-send never reads
+EOF
+  [ "$rc" -ne 0 ] || fail "a separator-only body must fail the send"
+  [ ! -d "$dir/home/state/t1.inbox" ] || fail "a refused send must not enqueue a record"
+  [ ! -s "$dir/send.log" ] || fail "a refused send must not ring or type anything:"$'\n'"$(cat "$dir/send.log")"
+  assert_contains "$(cat "$err")" "empty, whitespace-only, or only '--' separators" \
+    "the refusal should name the empty-body cause"
+  assert_contains "$(cat "$err")" "BEFORE '--'" \
+    "the refusal should show the body-before-separator form"
+  pass "fm-send inbox: a '--'-only body is refused before any record or ring"
+}
+
+test_empty_body_is_refused() {
+  local dir err rc
+  dir=$(setup_case emptyrefuse); err="$dir/send.err"
+  run_send "$dir" "$err" -- t1; rc=$?
+  [ "$rc" -ne 0 ] || fail "an empty body must fail the send"
+  [ ! -d "$dir/home/state/t1.inbox" ] || fail "an empty-body send must not enqueue a record"
+  [ ! -s "$dir/send.log" ] || fail "an empty-body send must not ring or type anything"
+  assert_contains "$(cat "$err")" "empty, whitespace-only" \
+    "the refusal should name the empty-body cause"
+  pass "fm-send inbox: an empty body is refused before any record or ring"
+}
+
+test_whitespace_only_body_is_refused() {
+  local dir err rc
+  dir=$(setup_case wsrefuse); err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 "   "; rc=$?
+  [ "$rc" -ne 0 ] || fail "a whitespace-only body must fail the send"
+  [ ! -d "$dir/home/state/t1.inbox" ] || fail "a whitespace-only send must not enqueue a record"
+  [ ! -s "$dir/send.log" ] || fail "a whitespace-only send must not ring or type anything"
+  pass "fm-send inbox: a whitespace-only body is refused before any record or ring"
+}
+
+test_body_containing_separator_text_still_sends() {
+  local dir err rc body
+  dir=$(setup_case sepinbody); err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 "git diff a -- b, then run it with --verbose"; rc=$?
+  expect_code 0 "$rc" "a body whose text merely contains '--' should send"
+  body=$(record_body _ "$dir/home/state/t1.inbox/001.msg")
+  [ "$body" = "git diff a -- b, then run it with --verbose" ] \
+    || fail "a literal '--' inside real text did not round-trip:"$'\n'"$body"
+  pass "fm-send inbox: literal '--' inside real text is content and still rides the inbox"
+}
+
 test_text_steer_rides_inbox
 test_multiline_steer_is_legal
 test_resend_enqueues_new_sequence
@@ -350,3 +401,7 @@ test_secondmate_marker_and_enqueue_delivery
 test_post_enqueue_bookkeeping_failure_is_not_retryable
 test_meta_lock_contention_fails_bounded
 test_unwritable_inbox_fails_loudly
+test_separator_only_body_is_refused
+test_empty_body_is_refused
+test_whitespace_only_body_is_refused
+test_body_containing_separator_text_still_sends

@@ -10,6 +10,10 @@
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
+# An empty, whitespace-only, or only-'--' message body is refused before any
+# durable record, correlation, or keystroke: it is almost always a heredoc
+# parked after a '--' separator, which would otherwise record a steer that
+# looks delivered and carries nothing.
 #
 # Two data planes:
 #
@@ -690,6 +694,27 @@ fm_send_feed_resolved_holds() {  # <answer-text>
 # target_ready path before sending, while zellij verifies pane labels in its
 # send implementation. A failed backend send is still surfaced below as a hard
 # error with the attempted resolution attached.
+
+# Refuse an empty or separator-only instruction body before any durable
+# record, pending-reply correlation, or typed submit: the classic cause is
+# `fm-send.sh <task> -- <<'EOF' ... EOF`, which parks the heredoc on stdin
+# and leaves the literal '--' as the entire body, recording a steer that
+# looks delivered and carries nothing. The class is "no content characters":
+# whitespace plus '--' tokens, the only separator this parser knows; a lone
+# '-' or '---' keeps no separator meaning here, so it stays legal text. The
+# --key path is exempt: key names follow --key and its own validation owns
+# them, and the --resolve-key empty-body refusal above still fires first.
+fm_send_message_body_is_contentless() {  # <body...> -> 0 when no content
+  local probe
+  probe=$*
+  probe=${probe//--/}
+  probe=${probe//[[:space:]]/}
+  [ -z "$probe" ]
+}
+if [ "${1:-}" != "--key" ] && fm_send_message_body_is_contentless "$@"; then
+  echo "error: message body is empty, whitespace-only, or only '--' separators; nothing was sent. Probable cause: the text was placed after a '--' separator, or a heredoc produced no arguments - put the body BEFORE '--' (see the Usage line above)." >&2
+  exit 1
+fi
 
 if [ "${1:-}" = "--key" ]; then
   [ -z "$FIRE_AND_FORGET_ID" ] \
