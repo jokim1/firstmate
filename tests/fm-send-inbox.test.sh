@@ -351,8 +351,10 @@ EOF
   [ ! -s "$dir/send.log" ] || fail "a refused send must not ring or type anything:"$'\n'"$(cat "$dir/send.log")"
   assert_contains "$(cat "$err")" "empty, whitespace-only, or only '--' separators" \
     "the refusal should name the empty-body cause"
-  assert_contains "$(cat "$err")" "BEFORE '--'" \
-    "the refusal should show the body-before-separator form"
+  assert_contains "$(cat "$err")" "reads message arguments, not stdin" \
+    "the refusal should state that stdin is not read"
+  assert_contains "$(cat "$err")" "pass the text as a quoted argument" \
+    "the refusal should point the body at a quoted argument"
   pass "fm-send inbox: a '--'-only body is refused before any record or ring"
 }
 
@@ -389,6 +391,17 @@ test_body_containing_separator_text_still_sends() {
   pass "fm-send inbox: literal '--' inside real text is content and still rides the inbox"
 }
 
+test_all_hyphen_run_stays_literal_content() {
+  local dir err rc body
+  dir=$(setup_case hyphenrun); err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 "----"; rc=$?
+  expect_code 0 "$rc" "an all-hyphen run that is not a standalone '--' token should send"
+  body=$(record_body _ "$dir/home/state/t1.inbox/001.msg")
+  [ "$body" = "----" ] \
+    || fail "a '----' body did not round-trip as literal content:"$'\n'"$body"
+  pass "fm-send inbox: '----' is literal content, not a separator run"
+}
+
 test_text_steer_rides_inbox
 test_multiline_steer_is_legal
 test_resend_enqueues_new_sequence
@@ -405,3 +418,4 @@ test_separator_only_body_is_refused
 test_empty_body_is_refused
 test_whitespace_only_body_is_refused
 test_body_containing_separator_text_still_sends
+test_all_hyphen_run_stays_literal_content
