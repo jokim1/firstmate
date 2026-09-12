@@ -1,0 +1,160 @@
+{
+  "families": [
+    {
+      "count": 3,
+      "duration_ms": 29279,
+      "failed": 0,
+      "name": "backend-dispatch"
+    },
+    {
+      "count": 1,
+      "duration_ms": 115318,
+      "failed": 0,
+      "name": "pr-forge"
+    },
+    {
+      "count": 10,
+      "duration_ms": 233579,
+      "failed": 0,
+      "name": "pure-contract-unit"
+    }
+  ],
+  "finished_at": "2026-09-11T17:41:37Z",
+  "run_id": "fm-test-run-1789148119053-2388",
+  "scripts": [
+    {
+      "duration_ms": 166568,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-lint.test.sh"
+    },
+    {
+      "duration_ms": 23021,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "backend-dispatch",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-backend-herdr.test.sh"
+    },
+    {
+      "duration_ms": 31834,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-arm-pretool-check.test.sh"
+    },
+    {
+      "duration_ms": 12207,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-crew-state.test.sh"
+    },
+    {
+      "duration_ms": 7314,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-herdr-lab.test.sh"
+    },
+    {
+      "duration_ms": 115318,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-pr-merge.test.sh"
+    },
+    {
+      "duration_ms": 5021,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-send-popup-settle.test.sh"
+    },
+    {
+      "duration_ms": 2523,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-tmux-submit-busy.test.sh"
+    },
+    {
+      "duration_ms": 2072,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-send-settle.test.sh"
+    },
+    {
+      "duration_ms": 3937,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "backend-dispatch",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-send-strict.test.sh"
+    },
+    {
+      "duration_ms": 2321,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "backend-dispatch",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-spawn-batch.test.sh"
+    },
+    {
+      "duration_ms": 301,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-supervision-instructions.test.sh"
+    },
+    {
+      "duration_ms": 904,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-ensure-agents-md.test.sh"
+    },
+    {
+      "duration_ms": 4835,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "path": "tests/fm-composer-lib.test.sh"
+    }
+  ],
+  "selection": "lane=portable-parallel-2",
+  "started_at": "2026-09-11T17:35:19Z",
+  "summary": {
+    "duration_ms": 378658,
+    "failed": 0,
+    "skipped_gate": 0,
+    "total": 14
+  }
+}

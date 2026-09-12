@@ -1,0 +1,1 @@
+FM_TEST_AGGREGATE lanes=2 total=24 failed=0 skipped_gate=0 critical_path_duration_ms=388631 portable_parallel_1_ms=388631 portable_parallel_2_ms=378658 imbalance_ms=9973

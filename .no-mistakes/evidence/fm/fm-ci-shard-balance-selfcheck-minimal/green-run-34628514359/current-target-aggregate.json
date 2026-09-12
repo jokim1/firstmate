@@ -1,0 +1,471 @@
+{
+  "kind": "aggregate",
+  "lanes": [
+    {
+      "finished_at": "2026-09-11T17:41:54Z",
+      "path": "/Users/josephkim/.no-mistakes/evidence/01M2AN4R8NWA99BEHQ6F9HKNC9/green-run-34628514359/fm-test-timing-portable-parallel-1.json",
+      "run_id": "fm-test-run-1789148125938-2302",
+      "selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "started_at": "2026-09-11T17:35:25Z",
+      "summary": {
+        "duration_ms": 388631,
+        "failed": 0,
+        "skipped_gate": 0,
+        "total": 10
+      }
+    },
+    {
+      "finished_at": "2026-09-11T17:41:37Z",
+      "path": "/Users/josephkim/.no-mistakes/evidence/01M2AN4R8NWA99BEHQ6F9HKNC9/green-run-34628514359/fm-test-timing-portable-parallel-2.json",
+      "run_id": "fm-test-run-1789148119053-2388",
+      "selection": "lane=portable-parallel-2",
+      "started_at": "2026-09-11T17:35:19Z",
+      "summary": {
+        "duration_ms": 378658,
+        "failed": 0,
+        "skipped_gate": 0,
+        "total": 14
+      }
+    }
+  ],
+  "scripts": [
+    {
+      "duration_ms": 250692,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-captain-hold-lifecycle.test.sh"
+    },
+    {
+      "duration_ms": 166568,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-lint.test.sh"
+    },
+    {
+      "duration_ms": 115318,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-pr-merge.test.sh"
+    },
+    {
+      "duration_ms": 87195,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-test-run.test.sh"
+    },
+    {
+      "duration_ms": 31834,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-arm-pretool-check.test.sh"
+    },
+    {
+      "duration_ms": 23021,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "backend-dispatch",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-backend-herdr.test.sh"
+    },
+    {
+      "duration_ms": 22501,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-x-mode.test.sh"
+    },
+    {
+      "duration_ms": 13899,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-cd-pretool-check.test.sh"
+    },
+    {
+      "duration_ms": 12207,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-crew-state.test.sh"
+    },
+    {
+      "duration_ms": 7314,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-herdr-lab.test.sh"
+    },
+    {
+      "duration_ms": 5749,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-grok-harness.test.sh"
+    },
+    {
+      "duration_ms": 5021,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-send-popup-settle.test.sh"
+    },
+    {
+      "duration_ms": 4835,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-composer-lib.test.sh"
+    },
+    {
+      "duration_ms": 3937,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "backend-dispatch",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-send-strict.test.sh"
+    },
+    {
+      "duration_ms": 3386,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-pi-primary-types.test.sh"
+    },
+    {
+      "duration_ms": 2523,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-tmux-submit-busy.test.sh"
+    },
+    {
+      "duration_ms": 2321,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "backend-dispatch",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-spawn-batch.test.sh"
+    },
+    {
+      "duration_ms": 2072,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-send-settle.test.sh"
+    },
+    {
+      "duration_ms": 1843,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-review-diff.test.sh"
+    },
+    {
+      "duration_ms": 1603,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-composer-ghost.test.sh"
+    },
+    {
+      "duration_ms": 1388,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-brief.test.sh"
+    },
+    {
+      "duration_ms": 904,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-ensure-agents-md.test.sh"
+    },
+    {
+      "duration_ms": 301,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-supervision-instructions.test.sh"
+    },
+    {
+      "duration_ms": 73,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-transition-lib.test.sh"
+    }
+  ],
+  "slowest": [
+    {
+      "duration_ms": 250692,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-captain-hold-lifecycle.test.sh"
+    },
+    {
+      "duration_ms": 166568,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-lint.test.sh"
+    },
+    {
+      "duration_ms": 115318,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-pr-merge.test.sh"
+    },
+    {
+      "duration_ms": 87195,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-test-run.test.sh"
+    },
+    {
+      "duration_ms": 31834,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-arm-pretool-check.test.sh"
+    },
+    {
+      "duration_ms": 23021,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "backend-dispatch",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-backend-herdr.test.sh"
+    },
+    {
+      "duration_ms": 22501,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-x-mode.test.sh"
+    },
+    {
+      "duration_ms": 13899,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-cd-pretool-check.test.sh"
+    },
+    {
+      "duration_ms": 12207,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-crew-state.test.sh"
+    },
+    {
+      "duration_ms": 7314,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-herdr-lab.test.sh"
+    },
+    {
+      "duration_ms": 5749,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-grok-harness.test.sh"
+    },
+    {
+      "duration_ms": 5021,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-send-popup-settle.test.sh"
+    },
+    {
+      "duration_ms": 4835,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-composer-lib.test.sh"
+    },
+    {
+      "duration_ms": 3937,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "backend-dispatch",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148119053-2388",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/fm-send-strict.test.sh"
+    },
+    {
+      "duration_ms": 3386,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-pi-primary-types.test.sh"
+    }
+  ],
+  "summary": {
+    "critical_path_duration_ms": 388631,
+    "failed": 0,
+    "lanes": 2,
+    "skipped_gate": 0,
+    "total": 24
+  }
+}

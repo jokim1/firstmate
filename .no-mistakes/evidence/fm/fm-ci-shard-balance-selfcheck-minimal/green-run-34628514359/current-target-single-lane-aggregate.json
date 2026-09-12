@@ -1,0 +1,249 @@
+{
+  "kind": "aggregate",
+  "lanes": [
+    {
+      "finished_at": "2026-09-11T17:41:54Z",
+      "path": "/Users/josephkim/.no-mistakes/evidence/01M2AN4R8NWA99BEHQ6F9HKNC9/green-run-34628514359/fm-test-timing-portable-parallel-1.json",
+      "run_id": "fm-test-run-1789148125938-2302",
+      "selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "started_at": "2026-09-11T17:35:25Z",
+      "summary": {
+        "duration_ms": 388631,
+        "failed": 0,
+        "skipped_gate": 0,
+        "total": 10
+      }
+    }
+  ],
+  "scripts": [
+    {
+      "duration_ms": 250692,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-captain-hold-lifecycle.test.sh"
+    },
+    {
+      "duration_ms": 87195,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-test-run.test.sh"
+    },
+    {
+      "duration_ms": 22501,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-x-mode.test.sh"
+    },
+    {
+      "duration_ms": 13899,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-cd-pretool-check.test.sh"
+    },
+    {
+      "duration_ms": 5749,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-grok-harness.test.sh"
+    },
+    {
+      "duration_ms": 3386,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-pi-primary-types.test.sh"
+    },
+    {
+      "duration_ms": 1843,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-review-diff.test.sh"
+    },
+    {
+      "duration_ms": 1603,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-composer-ghost.test.sh"
+    },
+    {
+      "duration_ms": 1388,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-brief.test.sh"
+    },
+    {
+      "duration_ms": 73,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-transition-lib.test.sh"
+    }
+  ],
+  "slowest": [
+    {
+      "duration_ms": 250692,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-captain-hold-lifecycle.test.sh"
+    },
+    {
+      "duration_ms": 87195,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-test-run.test.sh"
+    },
+    {
+      "duration_ms": 22501,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-x-mode.test.sh"
+    },
+    {
+      "duration_ms": 13899,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-cd-pretool-check.test.sh"
+    },
+    {
+      "duration_ms": 5749,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-grok-harness.test.sh"
+    },
+    {
+      "duration_ms": 3386,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-pi-primary-types.test.sh"
+    },
+    {
+      "duration_ms": 1843,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pr-forge",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-review-diff.test.sh"
+    },
+    {
+      "duration_ms": 1603,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-composer-ghost.test.sh"
+    },
+    {
+      "duration_ms": 1388,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-brief.test.sh"
+    },
+    {
+      "duration_ms": 73,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1789148125938-2302",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "tests/fm-transition-lib.test.sh"
+    }
+  ],
+  "summary": {
+    "critical_path_duration_ms": 388631,
+    "failed": 0,
+    "lanes": 1,
+    "skipped_gate": 0,
+    "total": 10
+  }
+}
