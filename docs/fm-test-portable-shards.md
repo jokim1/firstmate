@@ -119,6 +119,8 @@ It reports the unmeasured serial share as `serial_unhinted=` and refuses when th
 
 Portable shards, each portable serial shard, and the Herdr lane upload runner-generated timing JSON.
 `bin/fm-test-run.sh --aggregate-json` creates the combined summary artifact.
+When both portable parallel artifacts are present, its summary line reports each lane's wall time and their absolute imbalance for every CI run.
+That observation does not fail the aggregate job because the available green-run evidence does not support a stable imbalance threshold across independent runners.
 `.github/workflows/ci.yml` owns the exact artifact names and aggregation wiring.
 
 ## Local entry points
@@ -130,7 +132,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 
 | Lane | Bound | Rationale |
 |---|---|---|
-| portable parallel 1/2 | job `timeout-minutes: 10` | Measured on 2026-09-11 from the shards' CI timing artifacts, each shard's serial script sum is about 5.6-6.0 minutes plus about 25 s of job setup, so the healthy job wall is roughly 6.0-6.5 minutes; the 10-minute timeout remains a hang tripwire with real margin. |
+| portable parallel 1/2 | runner `--max-wall-ms 540000`; job `timeout-minutes: 10` | Measured on 2026-09-11 from the shards' CI timing artifacts, each shard's serial script sum is about 5.6-6.0 minutes plus about 25 s of job setup, so the healthy job wall is roughly 6.0-6.5 minutes; the shared 9-minute runner guard fails excessive completed wall time while the 10-minute job timeout remains the hang tripwire. |
 | portable serial 1-7 | job `timeout-minutes: 30` | Current runners can take about 20 minutes; the 30-minute cap remains a hang tripwire while leaving margin for job setup and runner-speed spread. The fork keeps seven serial shards (a standing divergence): upstream's raised cap now leaves headroom, but retiring back to five is a later structural step, not this rebase's union. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
 
