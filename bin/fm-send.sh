@@ -10,6 +10,11 @@
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
+# Messages are arguments: stdin is not read. An empty, whitespace-only, or
+# only-'--' message body is refused before any durable record, correlation, or
+# keystroke: it is almost always a heredoc whose text stayed on stdin while a
+# stray '--' became the whole body, which would otherwise record a steer that
+# looks delivered and carries nothing.
 #
 # Two data planes:
 #
@@ -690,6 +695,27 @@ fm_send_feed_resolved_holds() {  # <answer-text>
 # target_ready path before sending, while zellij verifies pane labels in its
 # send implementation. A failed backend send is still surfaced below as a hard
 # error with the attempted resolution attached.
+
+# Refuse a contentless instruction body before any durable record,
+# pending-reply correlation, or typed submit. The classic cause is
+# `fm-send.sh <task> -- <<'EOF' ... EOF`: the heredoc text stays on stdin,
+# which fm-send never reads, and the stray '--' is left as the whole body.
+# Contentless means every argument is empty, whitespace-only, or a
+# standalone '--' token; '--' inside real text is content. The --key path is
+# exempt: key names follow --key and its own validation owns them.
+fm_send_message_body_is_contentless() {  # <body...> -> 0 when no content
+  local arg probe
+  for arg in "$@"; do
+    [ "$arg" = "--" ] && continue
+    probe=${arg//[[:space:]]/}
+    [ -n "$probe" ] && return 1
+  done
+  return 0
+}
+if [ "${1:-}" != "--key" ] && fm_send_message_body_is_contentless "$@"; then
+  echo "error: message body is empty, whitespace-only, or only '--' separators; nothing was sent. fm-send reads message arguments, not stdin: pass the text as a quoted argument and omit the stray '--'." >&2
+  exit 1
+fi
 
 if [ "${1:-}" = "--key" ]; then
   [ -z "$FIRE_AND_FORGET_ID" ] \
