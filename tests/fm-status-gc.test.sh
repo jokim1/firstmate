@@ -13,8 +13,9 @@ DRAIN="$ROOT/bin/fm-wake-drain.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-status-gc-tests)
 
-run_gc() {  # <state> <id>
-  FM_STATE_OVERRIDE="$1" FM_ROOT_OVERRIDE="$ROOT" "$GC" "$2"
+run_gc() {  # <state> <id> [extra args...]
+  local state=$1; shift
+  FM_STATE_OVERRIDE="$state" FM_ROOT_OVERRIDE="$ROOT" "$GC" "$@"
 }
 
 # Write the watcher's per-task notification markers through the owners that
@@ -476,6 +477,110 @@ test_other_surviving_records_refuse() {
   pass "a task with any other surviving record is reported as unfinished cleanup, not retired"
 }
 
+# --finish-cleanup is the writer-owned forward path for exactly that refusal:
+# each surviving family retires through its own writer (the kimi token through
+# the control-plane deregistration path, never a hand-delete), and the status
+# log then retires through the ordinary path.
+test_finish_cleanup_retires_partial_records_through_their_writers() {
+  local dir state token_auth out rc markers
+  dir=$(make_case finish-cleanup-writers)
+  state="$dir/state"
+  printf 'working: trying\ndone: trial ok\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+  printf 'fm.reprotok123\n' > "$state/partial.kimi-turnend-token"
+  token_auth="$dir/fakehome/.kimi-code/fm-turn-end.d/fm.reprotok123"
+  mkdir -p "$(dirname "$token_auth")"
+  printf 'hook\n' > "$token_auth"
+  mkdir -p "$state/partial.inbox"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null 2>/dev/null \
+    || fail "priming drain failed"
+  markers=$(seed_watcher_markers "$state" partial) || fail "could not seed watcher markers"
+
+  rc=0
+  HOME="$dir/fakehome" run_gc "$state" partial --finish-cleanup \
+    > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "finish-cleanup refused a retirable partial record: $(cat "$dir/gc.err")"
+  grep -F 'retired orphaned status record' "$dir/gc.out" >/dev/null \
+    || fail "the retirement was not reported: $(cat "$dir/gc.out")"
+  [ ! -e "$state/partial.status" ] || fail "the status log survived finish-cleanup"
+  [ ! -e "$state/partial.turn-ended" ] || fail "the turn-ended marker survived"
+  [ ! -e "$state/partial.kimi-turnend-token" ] || fail "the kimi token file survived"
+  [ ! -e "$token_auth" ] || fail "the kimi turn-end hook auth was not deregistered through its control-plane path"
+  [ ! -d "$state/partial.inbox" ] || fail "the steering inbox survived"
+  [ ! -e "$state/.partial.open-decisions-cursor" ] || fail "the open-decisions cursor survived"
+  pass "finish-cleanup retires a partial cleanup through each record's own writer, kimi hook auth included"
+}
+
+# A writer's conservative preservation refuses the whole finish: the herdr
+# journal's own orphan path keeps it while its projection cannot be proven
+# gone, and nothing else may be retired around that refusal.
+test_finish_cleanup_refuses_when_a_writer_preserves_its_record() {
+  local dir state rc
+  dir=$(make_case finish-cleanup-herdr-preserved)
+  state="$dir/state"
+  printf 'done: trial ok\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+  printf 'version=2\ntask_id=partial\nprojection_id=AbCdEfGhIjKlMnOpQrStUv\nhome=%s\nsession=default\nworkspace_id=wRe\ntab_id=wRe:t1\npane_id=wRe:p1\nworkspace_label=repro\ntask_label=fm-partial\n' \
+    "$dir" > "$state/partial.herdr-presentation"
+  # A herdr that cannot answer keeps the writer's orphan path conservative on
+  # any host, with or without a live herdr installation.
+  mkdir -p "$dir/fakebin"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
+
+  rc=0
+  PATH="$dir/fakebin:$PATH" run_gc "$state" partial --finish-cleanup \
+    > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "a preserved herdr journal did not refuse the whole finish (rc=$rc)"
+  grep -F 'preserved by its own writer' "$dir/gc.err" >/dev/null \
+    || fail "the writer-preservation refusal did not name the journal: $(cat "$dir/gc.err")"
+  [ -f "$state/partial.herdr-presentation" ] || fail "the refusal removed the preserved journal"
+  [ -f "$state/partial.turn-ended" ] || fail "the refusal retired other records around the preserved journal"
+  [ -f "$state/partial.status" ] || fail "the refusal removed the status log"
+  pass "finish-cleanup refuses atomically when a writer preserves its record"
+}
+
+# Families with no writer-owned retirement (locks, adapter route records,
+# anything unrecognized) still refuse the finish, and nothing is retired.
+test_finish_cleanup_refuses_records_no_writer_owns_and_retires_nothing() {
+  local dir state rc
+  dir=$(make_case finish-cleanup-no-writer)
+  state="$dir/state"
+  printf 'done: landed\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+  : > "$state/.control-partial.lock"
+  printf 'route\n' > "$state/partial.playbot-route.json"
+
+  rc=0
+  run_gc "$state" partial --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "records no writer owns did not refuse the finish (rc=$rc)"
+  grep -F 'no writer-owned retirement' "$dir/gc.err" >/dev/null \
+    || fail "the refusal did not name the missing writers: $(cat "$dir/gc.err")"
+  [ -f "$state/partial.turn-ended" ] || fail "the refusal retired the turn-ended marker"
+  [ -f "$state/partial.status" ] || fail "the refusal removed the status log"
+  [ -f "$state/.control-partial.lock" ] || fail "the refusal removed the lock"
+  pass "finish-cleanup refuses, retiring nothing, when any surviving record has no writer-owned retirement"
+}
+
+# The finish path runs the janitor's own terminal gates before retiring
+# anything: a partial record of unfinished work keeps every record.
+test_finish_cleanup_refuses_unfinished_work_and_retires_nothing() {
+  local dir state rc
+  dir=$(make_case finish-cleanup-unfinished)
+  state="$dir/state"
+  printf 'working: still going\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+
+  rc=0
+  run_gc "$state" partial --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "an unfinished partial record was finished by the flag (rc=$rc)"
+  grep -F 'not a finished one' "$dir/gc.err" >/dev/null \
+    || fail "the unfinished refusal did not print: $(cat "$dir/gc.err")"
+  [ -f "$state/partial.status" ] || fail "the refusal removed the unfinished status log"
+  [ -f "$state/partial.turn-ended" ] || fail "the refusal retired records of unfinished work"
+  pass "finish-cleanup never retires records of unfinished work"
+}
+
 test_invalid_and_absent_ids_refuse() {
   local dir state rc
   dir=$(make_case invalid-id)
@@ -509,3 +614,7 @@ test_live_task_record_refuses
 test_unfinished_and_undecided_records_refuse
 test_other_surviving_records_refuse
 test_invalid_and_absent_ids_refuse
+test_finish_cleanup_retires_partial_records_through_their_writers
+test_finish_cleanup_refuses_when_a_writer_preserves_its_record
+test_finish_cleanup_refuses_records_no_writer_owns_and_retires_nothing
+test_finish_cleanup_refuses_unfinished_work_and_retires_nothing

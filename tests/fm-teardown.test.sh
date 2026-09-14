@@ -4814,6 +4814,224 @@ SH
   pass "a failed post-fetch remote default lookup refuses teardown"
 }
 
+# --- teardown-slot-collision-forward ---------------------------------------
+# End-to-end coverage for the dead-record forward path: a stale record and a
+# live record name the same treehouse pool slot. The guard's judgement is
+# unchanged - the slot is never returned while a live task owns it - but once
+# the OTHER record is proven the live owner and this record's own endpoint
+# reads dead or missing, an explicit --force retires the stale record without
+# touching the slot. Real tmux on an isolated socket backs the recovery-grade
+# agent-state proof; the default fakebin tmux (exit 0) would fabricate it.
+REAL_TMUX_FOR_COLLISION=$(command -v tmux || true)
+
+# Extend a make_case fixture into the treehouse pool layout: the slot lives at
+# <pool>/<slot>/<repo> with the pool state file and a git common dir matching
+# the project clone, which is what is_treehouse_pool_slot requires. The tmux
+# socket dir lives under short /tmp paths because macOS unix socket paths cap
+# out near 104 characters and $TMPDIR-based case paths already approach it.
+make_slot_case() {  # <name>
+  local name=$1 case_dir sock_dir
+  case_dir=$(make_case "$name")
+  mkdir -p "$case_dir/pool/7"
+  git -C "$case_dir/project" worktree add -q --detach "$case_dir/pool/7/firstmate" main
+  printf '{}\n' > "$case_dir/pool/treehouse-state.json"
+  sock_dir=$(mktemp -d /tmp/fmt-sock.XXXXXX) || fail "could not create the tmux socket dir"
+  printf '%s\n' "$sock_dir" > "$case_dir/sockdir"
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+export TMUX_TMPDIR="$sock_dir"
+exec "$REAL_TMUX_FOR_COLLISION" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+  printf '%s\n' "$case_dir"
+}
+
+run_teardown_for_id() {  # <case_dir> <id> [teardown args...]
+  local case_dir=$1 id=$2; shift 2
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" "$id" "$@"
+}
+
+slot_tmux() {  # <case_dir> <tmux args...>
+  local case_dir=$1; shift
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$(cat "$case_dir/sockdir")" \
+    "$REAL_TMUX_FOR_COLLISION" "$@"
+}
+
+slot_cleanup() {  # <case_dir>
+  slot_tmux "$1" kill-session -t fmcoll 2>/dev/null || true
+  rm -rf "$(cat "$1/sockdir")" 2>/dev/null || true
+}
+
+slot_start_agent_window() {  # <case_dir> <session> <window-name>
+  slot_tmux "$1" kill-session -t "$2" 2>/dev/null || true
+  slot_tmux "$1" new-session -d -s "$2" -n "$3" -x 200 -y 50 \
+    'exec -a kimi-agent sleep 600'
+  # Wait until the pane's foreground process is observable.
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+    pgrep -f 'kimi-agent' >/dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+slot_write_pair() {  # <case_dir> <live-id> <dead-id>
+  local case_dir=$1 live=$2 dead=$3 slot
+  slot="$case_dir/pool/7/firstmate"
+  fm_write_meta "$case_dir/state/$live.meta" \
+    "window=fmcoll:fm-$live" "endpoint_task_id=$live" "worktree=$slot" \
+    "project=$case_dir/project" "kind=ship" "spawn_gen=coll-live-1"
+  fm_write_meta "$case_dir/state/$dead.meta" \
+    "window=fmcoll:fm-$dead" "endpoint_task_id=$dead" "worktree=$slot" \
+    "project=$case_dir/project" "kind=scout" "spawn_gen=coll-dead-1"
+  printf 'done: abandoned\n' > "$case_dir/state/$dead.status"
+}
+
+test_slot_collision_foreign_worktree_retires_stale_record_without_touching_the_slot() {
+  local case_dir live=fm-coll-live dead=fm-coll-dead rc
+  if [ -z "$REAL_TMUX_FOR_COLLISION" ]; then
+    pass "slot-collision-forward: tmux not installed; live-socket cases skipped"
+    return 0
+  fi
+  case_dir=$(make_slot_case slot-collision-forward)
+  slot_start_agent_window "$case_dir" fmcoll "fm-$live" \
+    || fail "the live owner's agent window never came up"
+  slot_write_pair "$case_dir" "$live" "$dead"
+
+  rc=0
+  run_teardown_for_id "$case_dir" "$dead" --force --retire-foreign-worktree \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "foreign-slot forward teardown refused: $(cat "$case_dir/stderr")"
+  assert_grep "belongs to live task $live" "$case_dir/stderr" \
+    "the forward path did not name the proven live owner"
+  assert_grep "record retired without returning the slot" "$case_dir/stdout" \
+    "the completion line did not record the foreign-slot retirement"
+  [ ! -e "$case_dir/state/$dead.meta" ] || fail "the stale record survived the forward teardown"
+  [ ! -e "$case_dir/state/$dead.status" ] || fail "the stale status log survived"
+  assert_present "$case_dir/state/$live.meta" \
+    "the forward teardown removed the live owner's record"
+  assert_present "$case_dir/pool/7/firstmate" \
+    "the forward teardown returned or removed the live owner's slot"
+  pgrep -f 'kimi-agent' >/dev/null 2>&1 \
+    || fail "the forward teardown killed the live owner's agent process"
+  slot_cleanup "$case_dir"
+  pass "a slot collision whose other record is the proven live owner retires the stale record without touching the slot"
+}
+
+test_slot_collision_refuses_without_force_even_with_a_provable_owner() {
+  local case_dir live=fm-coll-live dead=fm-coll-dead rc
+  if [ -z "$REAL_TMUX_FOR_COLLISION" ]; then
+    pass "slot-collision-no-force: tmux not installed; live-socket cases skipped"
+    return 0
+  fi
+  case_dir=$(make_slot_case slot-collision-no-force)
+  slot_start_agent_window "$case_dir" fmcoll "fm-$live" \
+    || fail "the live owner's agent window never came up"
+  slot_write_pair "$case_dir" "$live" "$dead"
+
+  rc=0
+  run_teardown_for_id "$case_dir" "$dead" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "the collision refusal should stand without --force"
+  assert_grep "not even with --force" "$case_dir/stderr" \
+    "the ordinary collision refusal did not print"
+  assert_grep "--retire-foreign-worktree" "$case_dir/stderr" \
+    "the refusal did not name the forward path"
+  assert_present "$case_dir/state/$dead.meta" "the refusal retired the stale record"
+  assert_present "$case_dir/state/$live.meta" "the refusal removed the live owner's record"
+  assert_present "$case_dir/pool/7/firstmate" "the refusal touched the slot"
+  slot_cleanup "$case_dir"
+  pass "the slot-collision refusal stands without --force even when the owner is provable"
+}
+
+test_slot_collision_refuses_when_the_other_record_is_not_a_live_owner() {
+  local case_dir live=fm-coll-live dead=fm-coll-dead rc
+  if [ -z "$REAL_TMUX_FOR_COLLISION" ]; then
+    pass "slot-collision-dead-owner: tmux not installed; live-socket cases skipped"
+    return 0
+  fi
+  case_dir=$(make_slot_case slot-collision-dead-owner)
+  # No live window: the other record's endpoint reads missing, so the slot
+  # cannot be proven to belong to it.
+  slot_cleanup "$case_dir"
+  slot_write_pair "$case_dir" "$live" "$dead"
+
+  rc=0
+  run_teardown_for_id "$case_dir" "$dead" --force --retire-foreign-worktree \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "a dead other record should not license the forward path"
+  assert_grep "not even with --force" "$case_dir/stderr" \
+    "the ordinary collision refusal did not print"
+  assert_grep "not a verified live agent" "$case_dir/stderr" \
+    "the refusal did not name the missing proof leg"
+  assert_present "$case_dir/state/$dead.meta" "the refusal retired the stale record"
+  assert_present "$case_dir/state/$live.meta" "the refusal removed the other record"
+  pass "the forward path refuses when the other record cannot be proven the live owner"
+}
+
+test_slot_collision_refuses_when_this_record_is_not_proven_stale() {
+  local case_dir live=fm-coll-live dead=fm-coll-dead rc
+  if [ -z "$REAL_TMUX_FOR_COLLISION" ]; then
+    pass "slot-collision-live-self: tmux not installed; live-socket cases skipped"
+    return 0
+  fi
+  case_dir=$(make_slot_case slot-collision-live-self)
+  slot_start_agent_window "$case_dir" fmcoll "fm-$live" \
+    || fail "the live owner's agent window never came up"
+  slot_start_agent_window "$case_dir" fmcoll "fm-$dead" \
+    || fail "the stale record's own agent window never came up"
+  slot_write_pair "$case_dir" "$live" "$dead"
+
+  rc=0
+  run_teardown_for_id "$case_dir" "$dead" --force --retire-foreign-worktree \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "a live own endpoint should not be retired as stale"
+  assert_grep "not even with --force" "$case_dir/stderr" \
+    "the ordinary collision refusal did not print"
+  assert_grep "cannot be proven the stale one" "$case_dir/stderr" \
+    "the refusal did not name the missing proof leg"
+  assert_present "$case_dir/state/$dead.meta" "the refusal retired a live record"
+  slot_cleanup "$case_dir"
+  pass "the forward path refuses while this record's own endpoint may still be live"
+}
+
+test_retire_foreign_worktree_requires_force_and_a_real_collision() {
+  local case_dir live=fm-coll-live dead=fm-coll-dead rc
+  if [ -z "$REAL_TMUX_FOR_COLLISION" ]; then
+    pass "retire-foreign-worktree-usage: tmux not installed; live-socket cases skipped"
+    return 0
+  fi
+  case_dir=$(make_slot_case retire-foreign-usage)
+  slot_start_agent_window "$case_dir" fmcoll "fm-$live" \
+    || fail "the live owner's agent window never came up"
+  slot_write_pair "$case_dir" "$live" "$dead"
+
+  rc=0
+  run_teardown_for_id "$case_dir" "$dead" --retire-foreign-worktree \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 2 "$rc" "the flag without --force should be a usage error"
+  assert_grep "requires --force" "$case_dir/stderr" \
+    "the usage error did not name the missing discard authority"
+  assert_present "$case_dir/state/$dead.meta" "the usage error changed the record"
+
+  # With the other record retired, no collision remains: the flag alone is
+  # still a usage error, never an ordinary teardown.
+  rm -f "$case_dir/state/$dead.meta" "$case_dir/state/$dead.status"
+  rc=0
+  run_teardown_for_id "$case_dir" "$live" --force --retire-foreign-worktree \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 2 "$rc" "the flag without a collision should be a usage error"
+  assert_grep "requires a slot collision" "$case_dir/stderr" \
+    "the usage error did not name the missing collision"
+  assert_present "$case_dir/state/$live.meta" "the usage error changed the live record"
+  slot_cleanup "$case_dir"
+  pass "--retire-foreign-worktree is a usage error without --force and without a real collision"
+}
+
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
@@ -4934,3 +5152,8 @@ test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
 test_process_reap_mutation_refuses_before_worktree_return
 test_playbot_archive_mutation_refuses_before_workspace_deletion
+test_slot_collision_foreign_worktree_retires_stale_record_without_touching_the_slot
+test_slot_collision_refuses_without_force_even_with_a_provable_owner
+test_slot_collision_refuses_when_the_other_record_is_not_a_live_owner
+test_slot_collision_refuses_when_this_record_is_not_proven_stale
+test_retire_foreign_worktree_requires_force_and_a_real_collision

@@ -282,6 +282,37 @@ reset_fixture; : > "$FIXTURE_DIR/race"; assert_preserved "revalidation race"
 reset_fixture; printf '%s\n' "$TAB" > "$FIXTURE_DIR/active-tab"; assert_preserved "active target"
 reset_fixture; : > "$FIXTURE_DIR/focus-refuse"; assert_preserved "focus refusal"
 
+# The gone sweep: a version 2 journal whose projection title matches no live
+# workspace is residue only when the projection reads authoritatively gone -
+# its label token appears on zero live workspaces and its bound workspace id
+# reads dead. Anything less preserves it, and no pane is ever closed.
+reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
+write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
+fm_herdr_session_cleanup >/dev/null 2>&1
+[ ! -e "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "gone sweep kept a journal whose bound projection is authoritatively gone"
+[ ! -s "$CLOSE_LOG" ] || fail "gone sweep closed a pane it never proved present"
+pass "gone sweep retires a v2 journal whose bound projection is authoritatively gone, without closing anything"
+
+reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
+write_v2 "$FM_HOME" "$WS" "$TAB" "$PANE"
+fm_herdr_session_cleanup >/dev/null 2>&1
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "gone sweep retired a journal whose bound workspace is still present under a renamed label"
+[ ! -s "$CLOSE_LOG" ] || fail "the preserved workspace's pane was closed"
+pass "gone sweep preserves a v2 journal whose bound workspace still exists, even without its label token"
+
+reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
+fm_herdr_session_cleanup >/dev/null 2>&1
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "gone sweep retired a v1 journal it cannot bind to any workspace"
+[ ! -s "$CLOSE_LOG" ] || fail "the preserved v1 journal's pane was closed"
+pass "gone sweep preserves a v1 journal, which binds no workspace id to prove gone"
+
+reset_fixture; : > "$FM_STATE_OVERRIDE/$ID.meta"
+printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
+write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
+fm_herdr_session_cleanup >/dev/null 2>&1
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "gone sweep retired a live task's journal"
+pass "gone sweep never touches a journal whose task record still exists"
+
 INTEGRATION_ROOT="$TMP_ROOT/bootstrap-integration"
 mkdir -p "$INTEGRATION_ROOT/home/state" "$INTEGRATION_ROOT/home/data" "$INTEGRATION_ROOT/home/config"
 cp -R "$ROOT/bin" "$INTEGRATION_ROOT/bin"
