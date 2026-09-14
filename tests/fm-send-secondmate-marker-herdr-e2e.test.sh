@@ -8,7 +8,8 @@
 # and proves both sides of the routing boundary:
 #   - exact task id through explicit FM_HOME receives exactly one marker;
 #   - direct terminal input remains unmarked;
-#   - fm-control exit stops the same idle agent without removing its endpoint.
+#   - fm-control relaunch replaces the idle agent in the same endpoint;
+#   - fm-control exit stops the replacement without removing its endpoint.
 #
 # Every Herdr call, including calls made inside the production backend adapter,
 # is routed through bin/fm-herdr-lab.sh. The PATH shim strips only the adapter's
@@ -205,6 +206,32 @@ if fm_message_from_firstmate "$GOT"; then
 fi
 printf 'evidence: direct-input received-hex=%s\n' "$(printf '%s' "$GOT" | od -An -tx1 | tr -d ' \n')"
 pass "real Pi/Herdr: direct captain terminal input stays unmarked"
+
+CHARTER_BEFORE=$(jq -s --arg needle 'Isolated marker capture secondmate' \
+  '[.[] | select(.prompt | contains($needle))] | length' "$CAPTURE")
+RELAUNCH_OUT=$(PATH="$FAKEBIN:$ORIGINAL_PATH" FM_GATE_REFUSE_BYPASS=1 \
+  FM_HOME="$SENDER_HOME" FM_CONTROL_POLL=0.25 FM_CONTROL_EXIT_WAIT=30 \
+  "$ROOT/bin/fm-control.sh" "$ID" relaunch --harness pi 2>&1) \
+  || fail "real Pi lifecycle relaunch did not replace the idle agent: $RELAUNCH_OUT"
+case "$RELAUNCH_OUT" in
+  *"relaunched $ID harness=pi from=pi"*) : ;;
+  *) fail "real Pi lifecycle relaunch did not report its verified replacement postcondition: $RELAUNCH_OUT" ;;
+esac
+[ "$(fm_backend_target_of_meta "$META")" = "$TARGET" ] \
+  || fail "real Pi lifecycle relaunch changed the secondmate endpoint"
+restarted=0
+for _ in $(seq 1 240); do
+  CHARTER_AFTER=$(jq -s --arg needle 'Isolated marker capture secondmate' \
+    '[.[] | select(.prompt | contains($needle))] | length' "$CAPTURE")
+  if [ "$CHARTER_AFTER" -gt "$CHARTER_BEFORE" ]; then
+    restarted=1
+    break
+  fi
+  sleep 0.25
+done
+[ "$restarted" = 1 ] || fail "real Pi replacement did not receive its startup charter"
+wait_for_idle || fail "real Pi replacement did not become idle after relaunch"
+pass "real Pi/Herdr: fm-control relaunch replaces the idle agent in the same endpoint"
 
 CONTROL_OUT=$(PATH="$FAKEBIN:$ORIGINAL_PATH" FM_GATE_REFUSE_BYPASS=1 \
   FM_HOME="$SENDER_HOME" FM_CONTROL_POLL=0.25 FM_CONTROL_EXIT_WAIT=30 \

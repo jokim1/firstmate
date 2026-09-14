@@ -84,9 +84,19 @@ lab pane run "$PANE" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEN
   || fail "could not launch Claude Code ($VERSION) in the isolated Herdr pane"
 
 ready=0
+trusted=0
 i=0
 while [ "$i" -lt 45 ]; do
   st=$(lab agent get "$PANE" 2>/dev/null | jq -r '.result.agent.agent_status // empty')
+  if [ "$trusted" -eq 0 ] && [ "$st" = blocked ]; then
+    screen=$(lab pane read "$PANE" --source recent --lines 200 2>/dev/null || true)
+    if printf '%s\n' "$screen" | grep -F 'Yes, I trust this folder' >/dev/null; then
+      lab pane send-keys "$PANE" down >/dev/null \
+        && lab pane send-keys "$PANE" enter >/dev/null \
+        || fail "could not accept Claude Code's session-local workspace trust prompt"
+      trusted=1
+    fi
+  fi
   case "$st" in
     idle|done|blocked)
       [ "$(fm_backend_herdr_composer_state "$TARGET")" = empty ] \
