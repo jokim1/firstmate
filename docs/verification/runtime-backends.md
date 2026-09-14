@@ -901,7 +901,8 @@ The CLI matrix was checked directly:
 | --- | --- | --- |
 | Explicit session routing | `herdr <verb> ... --session <name>` | Reached the named session even while another server was running. |
 | Literal send | `herdr pane send-text <pane> <text> --session <name>` | Left text unsubmitted until Enter. |
-| Keys | `herdr pane send-keys <pane> enter|escape|ctrl+c --session <name>` | Enter and Escape worked; Ctrl-C interrupted foreground work. |
+| Atomic line submit | `herdr pane run <pane> <text> --session <name>` | Submitted text in one bracketed-paste-aware request on idle agent panes. |
+| Keys | `herdr pane send-keys <pane> enter|escape|ctrl+c --session <name>` | Escape and Ctrl-C worked as direct controls; a separately requested Enter was not reliable as the final submit for earlier `send-text` input on an idle agent pane. |
 | Capture | `herdr pane read <pane> --source recent --lines N` | Small N could return empty below viewport height; a 200-line request plus local trim was stable. |
 | Native state | `herdr agent get <pane>` | Working and done transitions were visible on some harnesses; live Claude Code 2.1.236 on Herdr 0.8.0 kept `agent_status=idle` for an entire landed turn, including a multi-second tool call, so submit confirmation falls through to the shared composer verdict. Native `busy` remains positive activity evidence, while native `idle` cannot close a turn and the adapter's semantic lifecycle decides worker state. |
 | Restart | guarded named-session stop then start | Workspace, tab, pane, and labels persisted; the agent process and registration did not. |
@@ -990,6 +991,42 @@ Observed 2026-08-19:
 
 ```text
 ok - live Herdr submit confirm: Claude Code (2.1.236 (Claude Code)) on herdr 0.8.0 reports empty for a landed idle steer
+```
+
+Reproduced again on 2026-09-14 against Herdr 0.8.0 after an idle Kimi 0.42.0 worker retained both a doorbell and `/exit` in its composer across turn boundaries.
+The tmux control with the same Kimi version submitted both inputs, isolating the defect to Herdr rather than Kimi.
+The guarded non-default lab then reproduced the same post-launch split-submission failure with Claude Code 2.1.270, Codex 0.147.0, and Pi 0.84.4.
+Claude and Codex failed to start an idle prompt from `pane send-text` followed by `pane send-keys enter`, while Pi retained `/quit` and stayed registered.
+Grok 1.0.30 stopped at its first-run telemetry choice, Gemini 0.59.0 stopped at authentication, and Muse 1.1.1 did not register an agent in the lab, so those installed binaries produced no clean harness-specific verdict.
+The exposure is nevertheless backend-wide: every Herdr harness routes post-launch line delivery through the same `fm_backend_herdr_send_text_submit` implementation.
+
+Herdr's own 0.8.0 changelog identifies `pane run` as the bracketed-paste-aware atomic command path and says it avoids the final-Enter reliability problem of split requests.
+The adapter now captures its pre-submit baselines, uses `pane run` for attempt one, and reserves `pane send-keys enter` for confirmation-driven retries without retyping.
+After the change, the guarded lab rendered the requested replies on Claude Code 2.1.270 and Codex 0.147.0, stopped Kimi 0.42.0 with `/exit`, delivered a real `fm-send` inbox doorbell to idle Pi 0.84.4, and stopped that Pi through `fm-control exit` with the endpoint-preserving postcondition.
+The portable regression asserts the exact `pane run` request, absence of split `send-text`, Enter-only popup retry, and failure/postcondition directions:
+
+```sh
+bin/fm-test-run.sh tests/fm-backend-herdr.test.sh
+```
+
+Refresh the two guarded live paths with:
+
+```sh
+HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
+  FM_HERDR_SUBMIT_CONFIRM_LIVE=1 \
+  tests/fm-herdr-submit-confirm-live-e2e.test.sh
+
+HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
+  FM_SEND_MARKER_HERDR_E2E=1 \
+  tests/fm-send-secondmate-marker-herdr-e2e.test.sh
+```
+
+Observed 2026-09-14:
+
+```text
+ok - live Herdr submit confirm: Claude Code (2.1.270 (Claude Code)) on herdr 0.8.0 reports empty and renders the requested reply
+ok - real Pi/Herdr: exact-id FM_HOME send delivers its atomic doorbell and records exactly one from-firstmate marker
+ok - real Pi/Herdr: fm-control submits /quit atomically and verifies the idle agent stopped
 ```
 
 ### Prune and respawn

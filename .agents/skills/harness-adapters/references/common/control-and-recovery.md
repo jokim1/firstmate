@@ -27,6 +27,7 @@ Codex shows a directory-trust dialog on the first run for a repository root.
 Use the tool's exact skill form, or natural language only when no separate command is verified or the form remains uncertain.
 A successful send or key return is not proof of submission; require the tool-specific postcondition.
 Popup, queued-input, and readiness handling belongs to `../../../bin/fm-composer-lib.sh` and the selected backend.
+Herdr line submission starts with its atomic `pane run` primitive because a successful split `pane send-text` plus `pane send-keys enter` can leave text parked in an idle composer; `../../../bin/backends/herdr.sh` owns the retries and proof.
 
 ## Interrupt and exit
 

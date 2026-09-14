@@ -82,8 +82,9 @@
 # bin/fm-tmux-lib.sh. Tune with FM_SEND_RETRIES (default 3; agy typed targets
 # default to 20 for agy's late busy render) / FM_SEND_SLEEP (0.4). Slash
 # commands, and codex `$...` skill invocations resolved through harness meta,
-# get a longer pre-Enter settle so completion popups do not swallow Enter.
-# A remote secondmate target has no typed text plane at all:
+# get a longer backend-specific settle around the first submit so completion
+# popups do not swallow it. A remote secondmate target has no typed text plane
+# at all:
 # every remote text steer rides the inbox (a marked secondmate request already
 # reaches the harness as marker-prefixed chat rather than a parser command, so
 # routing a remote "/..." or "$..." through the record changes nothing the
@@ -1078,8 +1079,8 @@ else
     exit 0
   fi
   # Slash commands open a completion popup in some TUIs (verified on codex);
-  # submitting too fast selects nothing, so give the popup time to settle before
-  # the (retried) Enter. Codex opens the same kind of popup for a `$<skill>`
+  # submitting too fast selects nothing, so give the backend's first attempt
+  # enough settle budget. Codex opens the same kind of popup for a `$<skill>`
   # invocation, so a `$...` message to a codex target gets the same settle. That
   # `$` case is scoped to codex on purpose: unlike `/`, a leading `$` commonly
   # starts ordinary text ("$5/month", "$HOME"), so a universal `$` rule would
