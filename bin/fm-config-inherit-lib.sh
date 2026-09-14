@@ -20,9 +20,8 @@
 # Primary config/claude-permission-mode is a captain-wide safety preference
 # (bypass or auto for every claude launch), so it flows down too and a
 # secondmate's own claude crewmates launch on the same permission posture.
-# It also pushes
-# the one primary-authoritative shared captain-preference file,
-# data/captain-shared.md, into each secondmate home's data/ as a read-only copy.
+# It also pushes the declared primary-authoritative shared data files into each
+# secondmate home's data/ as read-only copies.
 #
 # Usage: . bin/fm-config-inherit-lib.sh   (no FM_* setup required)
 #
@@ -57,11 +56,10 @@
 # shellcheck source=bin/fm-startup-memory-budget-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-startup-memory-budget-lib.sh"
 
-# The one shared data file in this inheritance contract. There is deliberately
-# no shared learnings file.
-FM_SHARED_CAPTAIN_FILE="captain-shared.md"
-FM_SHARED_CAPTAIN_REL="data/$FM_SHARED_CAPTAIN_FILE"
-FM_SHARED_CAPTAIN_MODE="444"
+# The declared shared data files in this inheritance contract. There is
+# deliberately no shared learnings file. Items must not contain whitespace.
+FM_SHARED_DATA_FILES="captain-shared.md standing-authority.md"
+FM_SHARED_DATA_MODE="444"
 
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
@@ -86,14 +84,24 @@ fm_config_inherit_item_session_scoped() {  # <item>
 
 # The complete declared inherited-material set as home-relative paths, one per
 # line, in propagation order: every FM_INHERITABLE_CONFIG item under config/,
-# then the one shared data file. This is what remote senders and receivers
+# then the shared data files. This is what remote senders and receivers
 # derive from, so both ends of a transfer agree by construction.
 fm_config_inherit_items() {
-  local item
+  local item file
   for item in $FM_INHERITABLE_CONFIG; do
     printf 'config/%s\n' "$item"
   done
-  printf '%s\n' "$FM_SHARED_CAPTAIN_REL"
+  for file in $FM_SHARED_DATA_FILES; do
+    printf 'data/%s\n' "$file"
+  done
+}
+
+fm_shared_data_item() {  # <home-relative-path>
+  local rel=$1 file
+  for file in $FM_SHARED_DATA_FILES; do
+    [ "$rel" = "data/$file" ] && return 0
+  done
+  return 1
 }
 
 fm_config_source_present() {
@@ -228,7 +236,7 @@ shared_captain_header_valid() {
   case "$head" in *"marked status"*|*"document pointer"*) ;; *) return 1 ;; esac
 }
 
-shared_captain_dir_safe() {
+shared_data_dir_safe() {
   local dir=$1
   [ -n "$dir" ] || return 1
   if [ -e "$dir" ] || [ -L "$dir" ]; then
@@ -239,24 +247,24 @@ shared_captain_dir_safe() {
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
 }
 
-shared_captain_file_safe_existing() {
+shared_data_file_safe_existing() {
   local path=$1
   [ -f "$path" ] && [ ! -L "$path" ] || return 1
   [ "$(fm_inherit_file_link_count "$path")" = 1 ]
 }
 
-restore_shared_captain_readonly() {
+restore_shared_data_readonly() {
   local dest=$1
   [ -e "$dest" ] || [ -L "$dest" ] || return 0
-  shared_captain_file_safe_existing "$dest" || return 1
-  chmod "$FM_SHARED_CAPTAIN_MODE" "$dest" 2>/dev/null || return 1
+  shared_data_file_safe_existing "$dest" || return 1
+  chmod "$FM_SHARED_DATA_MODE" "$dest" 2>/dev/null || return 1
 }
 
-shared_captain_quarantine_existing_for_hash() {
-  local parent=$1 hash=$2 artifact artifact_hash
-  for artifact in "$parent"/."$FM_SHARED_CAPTAIN_FILE".quarantine.*."$hash" "$parent"/."$FM_SHARED_CAPTAIN_FILE".quarantine.*."$hash".[0-9]*; do
+shared_data_quarantine_existing_for_hash() {
+  local parent=$1 file=$2 hash=$3 artifact artifact_hash
+  for artifact in "$parent"/."$file".quarantine.*."$hash" "$parent"/."$file".quarantine.*."$hash".[0-9]*; do
     [ -e "$artifact" ] || [ -L "$artifact" ] || continue
-    shared_captain_file_safe_existing "$artifact" || return 1
+    shared_data_file_safe_existing "$artifact" || return 1
     artifact_hash=$(fm_inherit_sha256 "$artifact") || return 1
     [ "$artifact_hash" = "$hash" ] || continue
     printf '%s\n' "$artifact"
@@ -265,10 +273,10 @@ shared_captain_quarantine_existing_for_hash() {
   return 1
 }
 
-shared_captain_quarantine_name() {
-  local parent=$1 hash=$2 stamp base candidate n
+shared_data_quarantine_name() {
+  local parent=$1 file=$2 hash=$3 stamp base candidate n
   stamp=$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null) || return 1
-  base="$parent/.$FM_SHARED_CAPTAIN_FILE.quarantine.$stamp.$hash"
+  base="$parent/.$file.quarantine.$stamp.$hash"
   candidate=$base
   n=0
   while [ -e "$candidate" ] || [ -L "$candidate" ]; do
@@ -278,176 +286,179 @@ shared_captain_quarantine_name() {
   printf '%s\n' "$candidate"
 }
 
-quarantine_shared_captain_dest() {
-  local dest=$1 dest_parent=$2 dest_hash artifact existing
-  shared_captain_file_safe_existing "$dest" || return 1
+quarantine_shared_data_dest() {
+  local dest=$1 dest_parent=$2 file=$3 dest_hash artifact existing
+  shared_data_file_safe_existing "$dest" || return 1
   dest_hash=$(fm_inherit_sha256 "$dest") || return 1
-  if existing=$(shared_captain_quarantine_existing_for_hash "$dest_parent" "$dest_hash" 2>/dev/null); then
+  if existing=$(shared_data_quarantine_existing_for_hash "$dest_parent" "$file" "$dest_hash" 2>/dev/null); then
     chmod u+w "$dest" 2>/dev/null || return 1
     if rm -f -- "$dest" 2>/dev/null; then
       printf '%s\n' "$existing"
       return 0
     fi
-    restore_shared_captain_readonly "$dest" || true
+    restore_shared_data_readonly "$dest" || true
     return 1
   fi
-  artifact=$(shared_captain_quarantine_name "$dest_parent" "$dest_hash") || return 1
+  artifact=$(shared_data_quarantine_name "$dest_parent" "$file" "$dest_hash") || return 1
   chmod u+w "$dest" 2>/dev/null || return 1
   if mv -- "$dest" "$artifact" 2>/dev/null; then
     chmod 0600 "$artifact" 2>/dev/null || return 1
-    shared_captain_file_safe_existing "$artifact" || return 1
+    shared_data_file_safe_existing "$artifact" || return 1
     printf '%s\n' "$artifact"
     return 0
   fi
-  restore_shared_captain_readonly "$dest" || true
+  restore_shared_data_readonly "$dest" || true
   return 1
 }
 
-copy_shared_captain_file() {
+copy_shared_data_file() {
   local src=$1 dest=$2 dest_parent tmp
   dest_parent=${dest%/*}
-  shared_captain_dir_safe "$dest_parent" || return 1
-  tmp=$(mktemp "$dest_parent/.fm-captain-shared.XXXXXX" 2>/dev/null) || return 1
+  shared_data_dir_safe "$dest_parent" || return 1
+  tmp=$(mktemp "$dest_parent/.fm-shared-data.XXXXXX" 2>/dev/null) || return 1
   if ! cp "$src" "$tmp" 2>/dev/null; then
     rm -f "$tmp" 2>/dev/null || true
     return 1
   fi
   chmod 0600 "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null || true; return 1; }
-  shared_captain_file_safe_existing "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+  shared_data_file_safe_existing "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
   if mv -f -- "$tmp" "$dest" 2>/dev/null; then
-    chmod "$FM_SHARED_CAPTAIN_MODE" "$dest" 2>/dev/null || return 1
-    shared_captain_file_safe_existing "$dest" || return 1
+    chmod "$FM_SHARED_DATA_MODE" "$dest" 2>/dev/null || return 1
+    shared_data_file_safe_existing "$dest" || return 1
     return 0
   fi
   rm -f "$tmp" 2>/dev/null || true
   return 1
 }
 
-propagate_shared_captain_preferences() {
-  local src_data=$1 dest_data=$2 src dest src_hash dest_hash dest_parent dest_home quarantine reason rc
+propagate_shared_data_file() {
+  local src_data=$1 dest_data=$2 file=$3 rel src dest src_hash dest_hash dest_parent dest_home quarantine reason rc
   [ -n "$src_data" ] || return 1
   [ -n "$dest_data" ] || return 1
-  src="$src_data/$FM_SHARED_CAPTAIN_FILE"
-  dest="$dest_data/$FM_SHARED_CAPTAIN_FILE"
+  rel="data/$file"
+  src="$src_data/$file"
+  dest="$dest_data/$file"
   dest_parent=${dest%/*}
   dest_home=${dest_data%/data}
   rc=0
 
   if [ -e "$src" ] || [ -L "$src" ]; then
-    if ! shared_captain_file_safe_existing "$src"; then
+    if ! shared_data_file_safe_existing "$src"; then
       reason="unsafe primary source"
-      warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$src" "$reason"
-      record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
+      warn_inheritable_config_error "$rel" "$src" "$reason"
+      record_inheritable_config_result "$rel" error "$reason"
       return 1
     fi
-    if ! shared_captain_header_valid "$src"; then
+    if [ "$file" = captain-shared.md ] && ! shared_captain_header_valid "$src"; then
       reason="primary source header missing required main-authoritative warning"
-      warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$src" "$reason"
-      record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
+      warn_inheritable_config_error "$rel" "$src" "$reason"
+      record_inheritable_config_result "$rel" error "$reason"
       return 1
     fi
     src_hash=$(fm_inherit_sha256 "$src") || {
       reason="failed to hash primary source"
-      warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$src" "$reason"
-      record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
+      warn_inheritable_config_error "$rel" "$src" "$reason"
+      record_inheritable_config_result "$rel" error "$reason"
       return 1
     }
     if [ -e "$dest" ] || [ -L "$dest" ]; then
-      if ! shared_captain_file_safe_existing "$dest"; then
+      if ! shared_data_file_safe_existing "$dest"; then
         reason="unsafe destination"
-        warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest" "$reason"
-        record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
+        warn_inheritable_config_error "$rel" "$dest" "$reason"
+        record_inheritable_config_result "$rel" error "$reason"
         return 1
       fi
       dest_hash=$(fm_inherit_sha256 "$dest") || {
         reason="failed to hash destination"
-        warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest" "$reason"
-        record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
-        restore_shared_captain_readonly "$dest" || true
+        warn_inheritable_config_error "$rel" "$dest" "$reason"
+        record_inheritable_config_result "$rel" error "$reason"
+        restore_shared_data_readonly "$dest" || true
         return 1
       }
       if [ "$src_hash" = "$dest_hash" ]; then
-        if restore_shared_captain_readonly "$dest"; then
-          record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" unchanged ""
+        if restore_shared_data_readonly "$dest"; then
+          record_inheritable_config_result "$rel" unchanged ""
           return 0
         fi
         reason="failed to restore read-only mode"
-        warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest" "$reason"
-        record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
+        warn_inheritable_config_error "$rel" "$dest" "$reason"
+        record_inheritable_config_result "$rel" error "$reason"
         return 1
       fi
-      if ! shared_captain_dir_safe "$dest_parent"; then
+      if ! shared_data_dir_safe "$dest_parent"; then
         reason="unsafe destination directory"
-        warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest_parent" "$reason"
-        record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
-        restore_shared_captain_readonly "$dest" || true
+        warn_inheritable_config_error "$rel" "$dest_parent" "$reason"
+        record_inheritable_config_result "$rel" error "$reason"
+        restore_shared_data_readonly "$dest" || true
         return 1
       fi
-      if ! quarantine=$(quarantine_shared_captain_dest "$dest" "$dest_parent"); then
+      if ! quarantine=$(quarantine_shared_data_dest "$dest" "$dest_parent" "$file"); then
         reason="failed to quarantine divergent destination"
-        warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest" "$reason"
-        record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
-        restore_shared_captain_readonly "$dest" || true
+        warn_inheritable_config_error "$rel" "$dest" "$reason"
+        record_inheritable_config_result "$rel" error "$reason"
+        restore_shared_data_readonly "$dest" || true
         return 1
       fi
-      printf 'SECONDMATE_SYNC: secondmate home %s: quarantined %s drift at %s\n' "$dest_home" "$FM_SHARED_CAPTAIN_REL" "$quarantine"
-    elif ! shared_captain_dir_safe "$dest_parent"; then
+      printf 'SECONDMATE_SYNC: secondmate home %s: quarantined %s drift at %s\n' "$dest_home" "$rel" "$quarantine"
+    elif ! shared_data_dir_safe "$dest_parent"; then
       reason="unsafe destination directory"
-      warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest_parent" "$reason"
-      record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
+      warn_inheritable_config_error "$rel" "$dest_parent" "$reason"
+      record_inheritable_config_result "$rel" error "$reason"
       return 1
     fi
-    if copy_shared_captain_file "$src" "$dest"; then
+    if copy_shared_data_file "$src" "$dest"; then
       if [ -n "${quarantine:-}" ]; then
-        record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" pushed "quarantined local drift at $quarantine"
+        record_inheritable_config_result "$rel" pushed "quarantined local drift at $quarantine"
       else
-        record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" pushed ""
+        record_inheritable_config_result "$rel" pushed ""
       fi
     else
       reason="failed to copy"
-      warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest" "$reason"
-      record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
+      warn_inheritable_config_error "$rel" "$dest" "$reason"
+      record_inheritable_config_result "$rel" error "$reason"
       rc=1
     fi
   elif [ -e "$dest" ] || [ -L "$dest" ]; then
-    if ! shared_captain_file_safe_existing "$dest"; then
+    if ! shared_data_file_safe_existing "$dest"; then
       reason="unsafe destination"
-      warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest" "$reason"
-      record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
+      warn_inheritable_config_error "$rel" "$dest" "$reason"
+      record_inheritable_config_result "$rel" error "$reason"
       return 1
     fi
-    if ! shared_captain_dir_safe "$dest_parent"; then
+    if ! shared_data_dir_safe "$dest_parent"; then
       reason="unsafe destination directory"
-      warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest_parent" "$reason"
-      record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
-      restore_shared_captain_readonly "$dest" || true
+      warn_inheritable_config_error "$rel" "$dest_parent" "$reason"
+      record_inheritable_config_result "$rel" error "$reason"
+      restore_shared_data_readonly "$dest" || true
       return 1
     fi
-    if quarantine=$(quarantine_shared_captain_dest "$dest" "$dest_parent"); then
-      printf 'SECONDMATE_SYNC: secondmate home %s: quarantined %s drift at %s\n' "$dest_home" "$FM_SHARED_CAPTAIN_REL" "$quarantine"
-      record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" pushed "mirrored primary absence after quarantining local copy at $quarantine"
+    if quarantine=$(quarantine_shared_data_dest "$dest" "$dest_parent" "$file"); then
+      printf 'SECONDMATE_SYNC: secondmate home %s: quarantined %s drift at %s\n' "$dest_home" "$rel" "$quarantine"
+      record_inheritable_config_result "$rel" pushed "mirrored primary absence after quarantining local copy at $quarantine"
     else
       reason="failed to quarantine destination before mirroring primary absence"
-      warn_inheritable_config_error "$FM_SHARED_CAPTAIN_REL" "$dest" "$reason"
-      record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" error "$reason"
-      restore_shared_captain_readonly "$dest" || true
+      warn_inheritable_config_error "$rel" "$dest" "$reason"
+      record_inheritable_config_result "$rel" error "$reason"
+      restore_shared_data_readonly "$dest" || true
       rc=1
     fi
   else
-    record_inheritable_config_result "$FM_SHARED_CAPTAIN_REL" unchanged ""
+    record_inheritable_config_result "$rel" unchanged ""
   fi
   return "$rc"
 }
 
 propagate_secondmate_inheritance() {
-  local src_home=$1 dest_home=$2 src_config=${3:-} src_data=${4:-} rc
+  local src_home=$1 dest_home=$2 src_config=${3:-} src_data=${4:-} file rc
   [ -n "$src_home" ] || return 1
   [ -n "$dest_home" ] || return 1
   [ -n "$src_config" ] || src_config="$src_home/config"
   [ -n "$src_data" ] || src_data="$src_home/data"
   rc=0
   propagate_inheritable_config "$src_config" "$dest_home/config" || rc=1
-  propagate_shared_captain_preferences "$src_data" "$dest_home/data" || rc=1
+  for file in $FM_SHARED_DATA_FILES; do
+    propagate_shared_data_file "$src_data" "$dest_home/data" "$file" || rc=1
+  done
   return "$rc"
 }
 
@@ -577,7 +588,7 @@ FM_CONFIG_REREAD_FRAMING='These inherited config files changed. Re-read and appl
 
 # fm_config_reread_is_allowlisted_item <item>
 # True only for the declared inheritable config allowlist (bare item name as
-# recorded in FM_CONFIG_INHERIT_REPORT). data/captain-shared.md is never
+# recorded in FM_CONFIG_INHERIT_REPORT). Shared data is never
 # allowlisted here and must never be inlined into a reread instruction.
 fm_config_reread_is_allowlisted_item() {
   local item=$1 candidate
@@ -708,7 +719,7 @@ fm_config_reread_save_retry_report() {
 # relative path, begin/end delimiters, and either the destination file's full
 # exact post-write bytes (streamed unparsed) or the literal token ABSENT when
 # the destination copy was removed. Returns 1 when no allowlisted config item
-# changed (or on write failure). Never inlines data/captain-shared.md, SHA
+# changed (or on write failure). Never inlines shared data, SHA
 # values, selected profiles, or any generated interpretation.
 fm_config_write_reread_instruction() {
   local dest_home=$1 report=$2 instruction_path=$3 item rel dest parent tmp first=1
@@ -1063,7 +1074,7 @@ fm_config_reread_quarantine_pending() {
 # single-line pointers to those files through the routed secondmate path
 # (fm-send). The files contain only changed config paths, clear delimiters, and
 # the destination's full exact post-write bytes (or ABSENT) - never summaries,
-# SHA values, selected profiles, or data/captain-shared.md. No-op (return 0) when
+# SHA values, selected profiles, or shared data. No-op (return 0) when
 # nothing changed and no pending delivery exists. On publication or send
 # failure, print a concrete CONFIG_REREAD retry diagnostic to stdout and return
 # non-zero - never claim the live agent reread the values.

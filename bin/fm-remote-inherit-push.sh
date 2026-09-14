@@ -2,8 +2,8 @@
 # Push the declared inherited-material allowlist to one remote secondmate route.
 # Usage: fm-remote-inherit-push.sh <secondmate-id> <generation>
 #
-# The item set is derived from the ONE declared owner
-# (FM_INHERITABLE_CONFIG in bin/fm-config-inherit-lib.sh), the same declaration
+# The item set is derived from the one declared owner
+# (fm_config_inherit_items in bin/fm-config-inherit-lib.sh), the same declaration
 # the receiving bin/fm-remote-inherit.sh enforces, so the two implementations in
 # one code revision cannot drift silently. Different local and remote revisions
 # fail closed as documented by that owner. FM_CONFIG_INHERIT_LIVE=1 marks a live
@@ -28,15 +28,6 @@ sha256_file() {
 }
 file_link_count() {
   if [ "$(uname)" = Darwin ]; then /usr/bin/stat -f %l "$1" 2>/dev/null; else stat -c %h "$1" 2>/dev/null; fi
-}
-shared_captain_header_valid() {
-  local head
-  head=$(sed -n '1,12p' "$1" 2>/dev/null) || return 1
-  case "$head" in *main-authoritative*) ;; *) return 1 ;; esac
-  case "$head" in *"read-only in secondmate homes"*) ;; *) return 1 ;; esac
-  case "$head" in *"must not be edited there"*) ;; *) return 1 ;; esac
-  case "$head" in *"main firstmate"*) ;; *) return 1 ;; esac
-  case "$head" in *"marked status"*|*"document pointer"*) ;; *) return 1 ;; esac
 }
 [ "$#" -eq 2 ] || { echo "usage: fm-remote-inherit-push.sh <secondmate-id> <generation>" >&2; exit 2; }
 ID=$1
