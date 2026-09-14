@@ -540,6 +540,48 @@ test_finish_cleanup_refuses_when_a_writer_preserves_its_record() {
   pass "finish-cleanup refuses atomically when a writer preserves its record"
 }
 
+test_finish_cleanup_retires_only_its_own_gone_herdr_journal() {
+  local dir home state close_log rc token_a token_b
+  dir=$(make_case finish-cleanup-herdr-scoped)
+  home="$dir/home"
+  state="$home/state"
+  close_log="$dir/pane-closes.log"
+  token_a=AbCdEfGhIjKlMnOpQrStUv
+  token_b=ZyXwVuTsRqPoNmLkJiHgFe
+  mkdir -p "$state" "$dir/fakebin"
+  printf 'done: task A finished\n' > "$state/task-a.status"
+  : > "$state/task-b.turn-ended"
+  {
+    printf 'version=2\ntask_id=task-a\nprojection_id=%s\nhome=%s\n' "$token_a" "$home"
+    printf 'session=default\nworkspace_id=wA\ntab_id=wA:t1\npane_id=wA:p1\n'
+    printf 'parent_workspace_id=w0\nparent_label=firstmate\nworkspace_label=└ task-a · p:%s\ntask_label=fm-task-a\n' "$token_a"
+  } > "$state/task-a.herdr-presentation"
+  {
+    printf 'version=2\ntask_id=task-b\nprojection_id=%s\nhome=%s\n' "$token_b" "$home"
+    printf 'session=default\nworkspace_id=wB\ntab_id=wB:t1\npane_id=wB:p1\n'
+    printf 'parent_workspace_id=w0\nparent_label=firstmate\nworkspace_label=└ task-b · p:%s\ntask_label=fm-task-b\n' "$token_b"
+  } > "$state/task-b.herdr-presentation"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    "case \"\${1:-} \${2:-}\" in" \
+    '  "workspace list") printf "%s\\n" '\''{"result":{"workspaces":[]}}'\'' ;;' \
+    "  \"pane close\") printf \"%s\\\\n\" \"\$*\" >> \"\${HERDR_CLOSE_LOG:?}\" ;;" \
+    '  *) exit 1 ;;' \
+    'esac' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
+
+  rc=0
+  FM_HOME="$home" HERDR_CLOSE_LOG="$close_log" PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" task-a --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "finish-cleanup refused task A's gone Herdr journal: $(cat "$dir/gc.err")"
+  [ ! -e "$state/task-a.herdr-presentation" ] || fail "task A's gone Herdr journal survived finish-cleanup"
+  [ ! -e "$state/task-a.status" ] || fail "task A's status survived finish-cleanup"
+  [ -f "$state/task-b.herdr-presentation" ] || fail "finishing task A removed task B's eligible journal"
+  [ -f "$state/task-b.turn-ended" ] || fail "finishing task A removed another record belonging to task B"
+  [ ! -s "$close_log" ] || fail "finishing task A closed a pane belonging to another task"
+  pass "finish-cleanup retires only its requested task's gone Herdr journal"
+}
+
 # Families with no writer-owned retirement (locks, adapter route records,
 # anything unrecognized) still refuse the finish, and nothing is retired.
 test_finish_cleanup_refuses_records_no_writer_owns_and_retires_nothing() {
@@ -616,5 +658,6 @@ test_other_surviving_records_refuse
 test_invalid_and_absent_ids_refuse
 test_finish_cleanup_retires_partial_records_through_their_writers
 test_finish_cleanup_refuses_when_a_writer_preserves_its_record
+test_finish_cleanup_retires_only_its_own_gone_herdr_journal
 test_finish_cleanup_refuses_records_no_writer_owns_and_retires_nothing
 test_finish_cleanup_refuses_unfinished_work_and_retires_nothing

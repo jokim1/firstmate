@@ -308,51 +308,99 @@ fm_herdr_cleanup_one() { # <session> <workspace> <title> <home-real>
 # (unparseable journal, cross-home binding, busy task lock, token anywhere on
 # a live label, unknown presence, a re-read that changed under the lock)
 # preserves the journal.
+fm_herdr_cleanup_gone_journal() { # <session> <home-real> <list-json> <journal> <task-id>
+  local session=$1 home_real=$2 list_json=$3 journal=$4 id=$5
+  local token token_count bound_workspace presence task_lock journal_home retired=1
+  [ "$journal" = "$STATE/$id$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX" ] || return 1
+  [ -f "$journal" ] && [ ! -L "$journal" ] || return 1
+  fm_task_id_creation_valid "$id" || return 1
+  [ ! -e "$STATE/$id.meta" ] && [ ! -L "$STATE/$id.meta" ] || return 1
+  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
+  [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] || return 1
+  [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] || return 1
+  journal_home=$(fm_backend_herdr_projection_home_identity \
+    "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null) || return 1
+  [ "$journal_home" = "$home_real" ] || return 1
+  token=$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID
+  token_count=$(printf '%s' "$list_json" | jq -r --arg token "$token" '
+    [ .result.workspaces[]? | (.label? // "") |
+      ((split("p:" + $token) | length) - 1) ] | add // 0
+  ' 2>/dev/null) || token_count=
+  [ "$token_count" = 0 ] || return 1
+  bound_workspace=$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID
+  presence=$(fm_backend_herdr_workspace_presence_state "$session" "$bound_workspace")
+  [ "$presence" = dead ] || return 1
+  task_lock="$STATE/.spawn-$id.lock"
+  if ! fm_lock_try_acquire "$task_lock"; then
+    fm_herdr_cleanup_warn "$id preserved because its task lock is busy"
+    return 1
+  fi
+  if [ -f "$journal" ] && [ ! -L "$journal" ] \
+     && [ ! -e "$STATE/$id.meta" ] && [ ! -L "$STATE/$id.meta" ] \
+     && fm_backend_herdr_projection_journal_snapshot "$journal" "$id" \
+     && [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] \
+     && [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] \
+     && [ "$(fm_backend_herdr_projection_home_identity \
+       "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null)" = "$home_real" ] \
+     && [ "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID" = "$token" ] \
+     && [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" = "$bound_workspace" ] \
+     && [ "$(fm_backend_herdr_workspace_presence_state "$session" "$bound_workspace")" = dead ]; then
+    if rm -f -- "$journal"; then
+      retired=0
+    else
+      fm_herdr_cleanup_warn "$id projection is authoritatively gone but its journal could not be retired"
+    fi
+  else
+    fm_herdr_cleanup_warn "$id preserved because its projection read changed or its journal was replaced under the task lock"
+  fi
+  fm_lock_release "$task_lock" || true
+  return "$retired"
+}
+
 fm_herdr_cleanup_gone_sweep() { # <session> <home-real> <list-json>
-  local session=$1 home_real=$2 list_json=$3
-  local journal id token token_count bound_workspace presence task_lock journal_home
+  local session=$1 home_real=$2 list_json=$3 journal id
   for journal in "$STATE"/*"$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX"; do
     [ -f "$journal" ] && [ ! -L "$journal" ] || continue
     id=$(basename "$journal" "$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX")
-    fm_task_id_creation_valid "$id" || continue
-    [ ! -e "$STATE/$id.meta" ] && [ ! -L "$STATE/$id.meta" ] || continue
-    fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || continue
-    [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] || continue
-    [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] || continue
-    journal_home=$(fm_backend_herdr_projection_home_identity \
-      "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null) || continue
-    [ "$journal_home" = "$home_real" ] || continue
-    token=$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID
-    token_count=$(printf '%s' "$list_json" | jq -r --arg token "$token" '
-      [ .result.workspaces[]? | (.label? // "") |
-        ((split("p:" + $token) | length) - 1) ] | add // 0
-    ' 2>/dev/null) || token_count=
-    [ "$token_count" = 0 ] || continue
-    bound_workspace=$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID
-    presence=$(fm_backend_herdr_workspace_presence_state "$session" "$bound_workspace")
-    [ "$presence" = dead ] || continue
-    task_lock="$STATE/.spawn-$id.lock"
-    if ! fm_lock_try_acquire "$task_lock"; then
-      fm_herdr_cleanup_warn "$id preserved because its task lock is busy"
-      continue
-    fi
-    if [ -f "$journal" ] && [ ! -L "$journal" ] \
-       && [ ! -e "$STATE/$id.meta" ] && [ ! -L "$STATE/$id.meta" ] \
-       && fm_backend_herdr_projection_journal_snapshot "$journal" "$id" \
-       && [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] \
-       && [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] \
-       && [ "$(fm_backend_herdr_projection_home_identity \
-         "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null)" = "$home_real" ] \
-       && [ "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID" = "$token" ] \
-       && [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" = "$bound_workspace" ] \
-       && [ "$(fm_backend_herdr_workspace_presence_state "$session" "$bound_workspace")" = dead ]; then
-      rm -f -- "$journal" \
-        || fm_herdr_cleanup_warn "$id projection is authoritatively gone but its journal could not be retired"
-    else
-      fm_herdr_cleanup_warn "$id preserved because its projection read changed or its journal was replaced under the task lock"
-    fi
-    fm_lock_release "$task_lock" || true
+    fm_herdr_cleanup_gone_journal "$session" "$home_real" "$list_json" "$journal" "$id" || true
   done
+}
+
+fm_herdr_cleanup_task_journal() { # <task-id>
+  local id=$1 journal home_real session list title candidates workspace
+  fm_task_id_creation_valid "$id" || return 1
+  [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
+  journal="$STATE/$id$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX"
+  [ -f "$journal" ] && [ ! -L "$journal" ] || return 1
+  [ ! -e "$STATE/$id.meta" ] && [ ! -L "$STATE/$id.meta" ] || return 1
+  command -v herdr >/dev/null 2>&1 \
+    && command -v jq >/dev/null 2>&1 || return 1
+  home_real=$(fm_herdr_cleanup_home_identity) || return 1
+  session=$(fm_backend_herdr_session)
+  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
+  printf '%s' "$list" | jq -e '
+    (.result.workspaces | type) == "array"
+  ' >/dev/null 2>&1 || return 1
+  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
+  if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ]; then
+    [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] || return 1
+    [ "$(fm_backend_herdr_projection_home_identity \
+      "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null)" = "$home_real" ] || return 1
+  fi
+  title=$(fm_backend_herdr_projection_workspace_label \
+    "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID")
+  candidates=$(printf '%s' "$list" | jq -r --arg title "$title" '
+    .result.workspaces[]
+    | select(.label == $title)
+    | select((.workspace_id | type) == "string" and (.workspace_id | length) > 0)
+    | .workspace_id
+  ' 2>/dev/null) || return 1
+  while IFS= read -r workspace; do
+    [ -n "$workspace" ] || continue
+    fm_herdr_cleanup_one "$session" "$workspace" "$title" "$home_real"
+  done <<< "$candidates"
+  [ ! -e "$journal" ] && [ ! -L "$journal" ] && return 0
+  fm_herdr_cleanup_gone_journal "$session" "$home_real" "$list" "$journal" "$id"
 }
 
 fm_herdr_session_cleanup() {

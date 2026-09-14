@@ -380,8 +380,7 @@ gc_retire_herdr_journal() {
   FM_HERDR_SESSION_CLEANUP_SOURCE_ONLY=1
   # shellcheck source=bin/fm-herdr-session-cleanup.sh
   . "$SCRIPT_DIR/fm-herdr-session-cleanup.sh"
-  fm_herdr_session_cleanup || true
-  if [ -e "$STATE/$ID.herdr-presentation" ] || [ -L "$STATE/$ID.herdr-presentation" ]; then
+  if ! fm_herdr_cleanup_task_journal "$ID"; then
     echo "REFUSED: task $ID's herdr presentation journal is preserved by its own writer (its projection may still be live, or herdr is unreadable); reconcile that projection first, then re-run with --finish-cleanup." >&2
     return 1
   fi
