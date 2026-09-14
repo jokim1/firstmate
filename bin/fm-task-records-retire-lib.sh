@@ -72,7 +72,8 @@ fm_task_records_validate_turnend() {  # <grok|kimi> <state-dir> <id>
   path=$(fm_control_harness_turnend_auth_path "$harness" "$token") || return 1
   [ -n "$path" ] || return 0
   [ -e "$path" ] || [ -L "$path" ] || return 0
-  if [ ! -f "$path" ] || [ -L "$path" ]; then
+  if [ ! -f "$path" ] || [ -L "$path" ] \
+    || [ "$(fm_pr_file_link_count "$path")" != 1 ]; then
     echo "REFUSED: unsafe task turn-end auth target; preserving task state." >&2
     return 1
   fi

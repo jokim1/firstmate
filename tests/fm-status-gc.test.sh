@@ -596,6 +596,33 @@ test_finish_cleanup_preflights_turnend_auth_target() {
   pass "finish-cleanup preflights the external turn-end auth target"
 }
 
+test_finish_cleanup_refuses_hardlinked_turnend_auth_target() {
+  local dir home state token token_auth token_auth_link rc
+  dir=$(make_case finish-cleanup-hardlinked-auth-target)
+  home="$dir/home"
+  state="$home/state"
+  token=fm.hardlinktoken
+  token_auth="$dir/fakehome/.kimi-code/fm-turn-end.d/$token"
+  token_auth_link="$dir/auth-second-link"
+  mkdir -p "$state" "$(dirname "$token_auth")"
+  printf 'done: trial ok\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+  printf '%s\n' "$token" > "$state/partial.kimi-turnend-token"
+  printf 'auth\n' > "$token_auth"
+  ln "$token_auth" "$token_auth_link"
+
+  rc=0
+  FM_HOME="$home" HOME="$dir/fakehome" \
+    run_gc "$state" partial --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup accepted a hard-linked turn-end auth target (rc=$rc)"
+  [ -f "$state/partial.status" ] || fail "hard-link refusal removed the status log"
+  [ -f "$state/partial.turn-ended" ] || fail "hard-link refusal removed task residue"
+  [ -f "$state/partial.kimi-turnend-token" ] || fail "hard-link refusal removed the token record"
+  [ -f "$token_auth" ] && [ -f "$token_auth_link" ] \
+    || fail "hard-link refusal changed the auth target"
+  pass "finish-cleanup refuses hard-linked turn-end auth targets atomically"
+}
+
 test_finish_cleanup_preflights_unsafe_residue() {
   local dir home state rc
   dir=$(make_case finish-cleanup-residue-preflight)
@@ -864,6 +891,7 @@ test_finish_cleanup_retires_partial_records_through_their_writers
 test_finish_cleanup_preflights_late_pr_refusal
 test_finish_cleanup_refuses_symlinked_turnend_token_without_mutation
 test_finish_cleanup_preflights_turnend_auth_target
+test_finish_cleanup_refuses_hardlinked_turnend_auth_target
 test_finish_cleanup_preflights_unsafe_residue
 test_finish_cleanup_preflights_unsafe_busy_state
 test_finish_cleanup_preflights_status_presentation_retirement

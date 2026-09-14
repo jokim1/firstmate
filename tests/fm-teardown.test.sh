@@ -2379,6 +2379,49 @@ test_teardown_preflights_turnend_records_before_mutation() {
   pass "teardown preflights both turn-end records before runtime mutation"
 }
 
+test_teardown_refuses_hardlinked_turnend_auth_before_mutation() {
+  local case_dir token token_auth token_auth_link rc head
+  case_dir=$(make_case hardlinked-turnend-auth)
+  write_meta "$case_dir" local-only ship
+  printf 'done: trial ok\n' > "$case_dir/state/task-x1.status"
+  : > "$case_dir/state/task-x1.turn-ended"
+  token=fm.hardlinktoken
+  token_auth="$case_dir/fakehome/.kimi-code/fm-turn-end.d/$token"
+  token_auth_link="$case_dir/auth-second-link"
+  mkdir -p "$(dirname "$token_auth")"
+  printf '%s\n' "$token" > "$case_dir/state/task-x1.kimi-turnend-token"
+  printf 'auth\n' > "$token_auth"
+  ln "$token_auth" "$token_auth_link"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  : > "$case_dir/treehouse.log"
+  : > "$case_dir/tmux.log"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/treehouse.log'" \
+    'exit 0' > "$case_dir/fakebin/treehouse"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/tmux.log'" \
+    'exit 0' > "$case_dir/fakebin/tmux"
+  chmod +x "$case_dir/fakebin/treehouse" "$case_dir/fakebin/tmux"
+
+  rc=0
+  HOME="$case_dir/fakehome" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "teardown accepted a hard-linked turn-end auth target"
+  [ ! -s "$case_dir/treehouse.log" ] || fail "hard-link refusal returned the worktree"
+  ! grep -Eq '^kill-(window|pane)' "$case_dir/tmux.log" \
+    || fail "hard-link refusal killed the task endpoint"
+  [ -d "$case_dir/wt" ] || fail "hard-link refusal removed the worktree"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD 2>/dev/null)" = "$head" ] \
+    || fail "hard-link refusal changed the worktree branch"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "hard-link refusal removed task metadata"
+  [ -f "$case_dir/state/task-x1.status" ] || fail "hard-link refusal removed task status"
+  [ -f "$case_dir/state/task-x1.turn-ended" ] || fail "hard-link refusal removed task residue"
+  [ -f "$case_dir/state/task-x1.kimi-turnend-token" ] || fail "hard-link refusal removed the token"
+  [ -f "$token_auth" ] && [ -f "$token_auth_link" ] \
+    || fail "hard-link refusal changed the auth target"
+  pass "teardown refuses hard-linked turn-end auth before runtime mutation"
+}
+
 assert_teardown_preflights_unsafe_record_shape() {  # <suffix>
   local suffix=$1 case_dir rc head
   case_dir=$(make_case "record-shape-preflight-$suffix")
@@ -5242,6 +5285,7 @@ test_secondmate_pr_registration_publishes_ready_line
 test_secondmate_home_teardown_delivers_final_line_or_refuses
 test_teardown_missing_busy_sidecar_completes
 test_teardown_preflights_turnend_records_before_mutation
+test_teardown_refuses_hardlinked_turnend_auth_before_mutation
 test_teardown_preflights_busy_shape_before_mutation
 test_teardown_preflights_residue_shape_before_mutation
 test_teardown_enqueues_refill_wake
