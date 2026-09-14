@@ -270,12 +270,10 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 
 # Ring the doorbell, best-effort: one endpoint-liveness pre-check, one advisory
 # composer pre-check, then the backend's submit machinery with a minimal retry
-# budget, verdict discarded.
-# Returns 0 rang, 1 skipped because the composer PROVENLY holds pending text
-# (the watcher re-rings later), 2 the backend send failed, 3 skipped because
-# the endpoint is positively dead or missing (nothing typed; recovery owns the
-# record). No return value is delivery proof; the acknowledgement move is the
-# only delivery signal.
+# budget. Returns 0 only when the backend confirms submission; 1 when the
+# pre-check skips a proven pending composer; 2 on send failure; 3 for a dead or
+# missing endpoint; and 4, 5, or 6 for the unconfirmed submit verdicts pending,
+# pending-unproven, or unknown respectively.
 # The skip is deliberately narrow: only an exact `pending` verdict defers,
 # because there our Enter could submit someone's real half-typed content.
 # `pending-unproven` and `unknown` still ring - the worst outcome is a garbled
@@ -300,10 +298,13 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   if ! verdict=$(fm_backend_send_text_submit "$backend" "$target" "$line" 1 0.4 0.3 "$label" 2>/dev/null); then
     return 2
   fi
-  # The verdict is read only to report a failed keystroke; every other value
-  # (empty, pending, unknown, ...) is deliberately ignored, never proof.
-  [ "$verdict" != send-failed ] || return 2
-  return 0
+  case "$verdict" in
+    empty) return 0 ;;
+    send-failed) return 2 ;;
+    pending) return 4 ;;
+    pending-unproven) return 5 ;;
+    *) return 6 ;;
+  esac
 }
 
 fm_task_inbox_is_fire_and_forget() {  # <record-path>

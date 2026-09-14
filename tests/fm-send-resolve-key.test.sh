@@ -6,8 +6,8 @@
 # next line is working [key=<workstream>], never resolved [key=<decision>].
 # fm-send's --resolve-key removes that writer-dependency at its source: the
 # ANSWERING firstmate closes the decision in this home's own ledger at answer
-# time - for a local target that is ENQUEUE time, because the durable inbox
-# write is delivery to the task's record. These tests drive the real fm-send
+# time - for a local target that means a confirmed inbox doorbell, not merely
+# a durable queued record. These tests drive the real fm-send
 # executable over stubbed transports and assert closure through the real
 # consumer (fm-wake-drain.sh's OPEN DECISIONS section), never through source
 # text:
@@ -22,8 +22,8 @@
 #      same way, and the closing line carries the plain answer, not marker or
 #      corr bytes.
 #   6. A remote secondmate answer differs only at the transport layer: the
-#      message crosses the stubbed ssh transport while the close is the same
-#      local ledger append; a failed transport closes nothing.
+#      message crosses the stubbed ssh transport while a confirmed remote leg
+#      permits the same local ledger append; a failed transport closes nothing.
 #   7. Flag misuse (--key, empty message, explicit backend target) refuses.
 #   8. A reserved pending-reply-* decision actually closes through --resolve-key
 #      (the operator path the OPEN DECISIONS hint names), while an unrelated
@@ -65,6 +65,7 @@ case "${1:-}" in
     done
     if [ "$literal" = 1 ]; then
       printf '%s' "${1:-}" >> "$FM_SEND_LOG"
+      [ -z "${FM_FAKE_TMUX_TYPED:-}" ] || : > "$FM_FAKE_TMUX_TYPED"
     fi
     exit 0 ;;
   display-message)
@@ -73,6 +74,13 @@ case "${1:-}" in
   capture-pane)
     if [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ]; then
       cat "$FM_FAKE_TMUX_CAPTURE"
+    elif [ -n "${FM_FAKE_TMUX_TYPED:-}" ] && [ -e "$FM_FAKE_TMUX_TYPED" ]; then
+      case "${FM_FAKE_TMUX_POST_VERDICT:-}" in
+        pending) printf '╭──────────╮\n│ draft    │\n╰──────────╯\n' ;;
+        pending-unproven) printf '╭──────────╮\n│ > text │\n╰──────────╯\n' ;;
+        unknown) printf '╭──────────╮\n│        │\n╰──────────╯\n' ;;
+        *) printf '╭────╮\n│    │\n╰────╯\n' ;;
+      esac
     else
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
@@ -333,6 +341,32 @@ test_skipped_ring_leaves_decision_open() {
   pass "fm-send --resolve-key: a skipped doorbell leaves the decision open"
 }
 
+test_unconfirmed_ring_verdicts_leave_decision_open() {
+  local dir fb log home err typed verdict rc out
+  for verdict in pending pending-unproven unknown; do
+    dir="$TMP_ROOT/ring-$verdict"; mkdir -p "$dir"
+    fb=$(make_stubs "$dir"); log="$dir/send.log"; err="$dir/send.err"; typed="$dir/typed"
+    home=$(setup_home "ring-$verdict")
+    fm_write_meta "$home/state/t5.meta" "window=sess:fm-t5" "kind=ship"
+    printf 'blocked [key=creds]: need the deploy token\n' > "$home/state/t5.status"
+
+    rc=0
+    env PATH="$fb:$PATH" FM_FAKE_TMUX_TYPED="$typed" FM_FAKE_TMUX_POST_VERDICT="$verdict" \
+      FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+      "$SEND" t5 --resolve-key creds "token is in the vault now" >/dev/null 2>"$err" || rc=$?
+    expect_code 0 "$rc" "an unconfirmed $verdict doorbell must leave the durable answer queued"
+    assert_contains "$(cat "$err")" "verdict=$verdict" \
+      "the doorbell diagnostic should preserve the $verdict submit outcome"
+    if grep -F 'resolved [key=creds]' "$home/state/t5.status" >/dev/null; then
+      fail "an unconfirmed $verdict doorbell closed the decision: $(cat "$home/state/t5.status")"
+    fi
+    out=$(drain_out "$home")
+    printf '%s' "$out" | grep -F '[key=creds]' >/dev/null \
+      || fail "the blocker vanished after an unconfirmed $verdict doorbell: $out"
+  done
+  pass "fm-send --resolve-key: every unconfirmed doorbell verdict leaves the decision open"
+}
+
 test_failed_ring_leaves_captain_hold_open() {
   local dir fb log home rc
   command -v tasks-axi >/dev/null 2>&1 || { pass "captain-held failed doorbell (tasks-axi unavailable)"; return; }
@@ -359,6 +393,33 @@ test_failed_ring_leaves_captain_hold_open() {
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" open hold-choice \
     || fail "a failed doorbell closed the captain-held task"
   pass "fm-send --resolve-key: a failed doorbell leaves captain-held work open"
+}
+
+test_confirmed_ring_closes_captain_hold() {
+  local dir fb log home rc
+  command -v tasks-axi >/dev/null 2>&1 || { pass "captain-held confirmed doorbell (tasks-axi unavailable)"; return; }
+  dir="$TMP_ROOT/hold-ring-confirmed"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_home hold-ring-confirmed)
+  mkdir -p "$home/data" "$home/config"
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  (cd "$home" && tasks-axi add hold-confirmed "Choose the held option" --repo sample --start >/dev/null) \
+    || fail "could not create the confirmed captain-held fixture"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" hold hold-confirmed \
+      --reason "waiting for the captain" >/dev/null \
+    || fail "could not hold the confirmed fixture for the captain"
+  fm_write_meta "$home/state/t5.meta" "window=sess:fm-t5" "kind=ship"
+  printf 'captain-held [key=hold-confirmed]: transferred\n' > "$home/state/t5.status"
+
+  run_send "$fb" "$home" "$log" t5 --resolve-key hold-confirmed "approve it"; rc=$?
+  expect_code 0 "$rc" "a confirmed doorbell should deliver the captain-held answer"
+  if FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" open hold-confirmed; then
+    fail "a confirmed doorbell left the captain-held task open"
+  fi
+  pass "fm-send --resolve-key: a confirmed doorbell closes captain-held work"
 }
 
 # The real local failure - an unwritable record - is the case that must never
@@ -781,7 +842,9 @@ test_routine_steer_never_closes
 test_not_open_key_refuses_before_send
 test_failed_ring_leaves_decision_open
 test_skipped_ring_leaves_decision_open
+test_unconfirmed_ring_verdicts_leave_decision_open
 test_failed_ring_leaves_captain_hold_open
+test_confirmed_ring_closes_captain_hold
 test_failed_enqueue_does_not_close
 test_multiple_keys_close_together
 test_local_secondmate_answer_marked_and_closed

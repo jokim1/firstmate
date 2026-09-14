@@ -168,8 +168,9 @@
 # status-line cap, it refuses before sending and names the cause rather than
 # exiting 0 on a silent no-op. After a delivered close it also re-folds and
 # fails loudly if the named key is still open. On the local inbox plane the
-# close waits for a successful initial doorbell; a skipped or failed doorbell
-# leaves the decision and any captain-held task open while the watcher re-rings.
+# close waits for a confirmed initial doorbell; any skipped, failed, or
+# unconfirmed doorbell leaves the decision and any captain-held task open while
+# the watcher re-rings. The remote send leg relays the same ring verdict.
 # On the typed plane it waits for the confirmed submit. The close is a LOCAL
 # append for every target kind -
 # crewmate, scout, local secondmate, and remote secondmate alike - because the
@@ -881,6 +882,7 @@ else
       exit 1
     fi
     remote_rc=0
+    remote_ring_rc=0
     remote_completion_unknown=0
     REMOTE_SEND_ARGS=("$TARGET_REMOTE_ID" "$MESSAGE")
     [ -z "$FIRE_AND_FORGET_ID" ] || REMOTE_SEND_ARGS+=(fire-and-forget)
@@ -901,6 +903,12 @@ else
       fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" "$TARGET_REMOTE_ID" \
         fm-remote-secondmate-control.sh send "${REMOTE_SEND_ARGS[@]}" < /dev/null || remote_rc=$?
     fi
+    case "$remote_rc" in
+      201|202|203|204|205|206)
+        remote_ring_rc=$((remote_rc - 200))
+        remote_rc=0
+        ;;
+    esac
     fm_lock_release "$REMOTE_META_LOCK"
     if [ "$remote_rc" -ne 0 ] && [ "$remote_completion_unknown" -eq 1 ]; then
       if [ -n "$FIRE_AND_FORGET_ID" ]; then
@@ -949,7 +957,7 @@ else
         fi
       fi
     fi
-    if [ -n "$RESOLVE_KEYS" ]; then
+    if [ "$remote_ring_rc" -eq 0 ] && [ -n "$RESOLVE_KEYS" ]; then
       fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1
       fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
     fi
@@ -1033,6 +1041,9 @@ else
       1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
       2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
       3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;
+      4) echo "fm-send: doorbell delivery is unconfirmed (verdict=pending); the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
+      5) echo "fm-send: doorbell delivery is unconfirmed (verdict=pending-unproven); the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
+      6) echo "fm-send: doorbell delivery is unconfirmed (verdict=unknown); the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
     esac
     if [ "$ring_rc" -eq 0 ] && [ -n "$RESOLVE_KEYS" ]; then
       fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1

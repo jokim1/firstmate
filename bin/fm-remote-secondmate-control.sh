@@ -272,9 +272,9 @@ cmd_send() {
   # best-effort (bin/fm-task-inbox-lib.sh owns the record and doorbell). The
   # write is idempotent - re-running the same request after an ambiguous
   # transport failure lands on the existing record instead of a duplicate - so
-  # the parent may safely repeat this leg. Exit 0 once the record durably
-  # exists; no ring outcome changes it, because the parent transport owns any
-  # retry or reply-tracking policy from here.
+  # the parent may safely repeat this leg. Exit 201-206 for a durable record
+  # whose ring returned 1-6, preserving that verdict across the remote process
+  # boundary while reserving 0 for confirmed delivery.
   if ! rec=$(fm_task_inbox_write_idempotent "$CONTROL_STATE" "$id" "$message" "$delivery_mode"); then
     fm_lock_release "$meta_lock"
     die "steering-inbox record could not be written under $CONTROL_STATE/$id.inbox"
@@ -293,7 +293,11 @@ cmd_send() {
     1) printf 'notice: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at %s\n' "$rec" >&2 ;;
     2) printf 'notice: doorbell did not reach %s; the steer is durably recorded at %s\n' "$REMOTE_ENDPOINT_TARGET" "$rec" >&2 ;;
     3) printf 'notice: doorbell not typed because the agent in %s has exited; the steer is durably recorded at %s for recovery\n' "$REMOTE_ENDPOINT_TARGET" "$rec" >&2 ;;
+    4) printf 'notice: doorbell delivery is unconfirmed (verdict=pending); the steer is durably recorded at %s\n' "$rec" >&2 ;;
+    5) printf 'notice: doorbell delivery is unconfirmed (verdict=pending-unproven); the steer is durably recorded at %s\n' "$rec" >&2 ;;
+    6) printf 'notice: doorbell delivery is unconfirmed (verdict=unknown); the steer is durably recorded at %s\n' "$rec" >&2 ;;
   esac
+  [ "$ring_rc" -eq 0 ] || return $((200 + ring_rc))
 }
 
 cmd_key() {

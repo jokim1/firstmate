@@ -11,11 +11,11 @@
 #   1. A remote text steer lands as a durable record in the remote home's
 #      steering inbox, marker and corr token in the body, exits 0, and marks
 #      the pending-reply expectation delivered at enqueue; a failed doorbell
-#      never fails the send.
+#      never fails the send but cannot close a decision.
 #   2. Re-running the identical leg is idempotent: an ambiguous transport
 #      (executed remotely, then ssh exit 255) makes fm-send retry the same
 #      leg once, and the remote inbox holds exactly ONE record afterwards.
-#   3. A remote --resolve-key answer closes its decision at enqueue.
+#   3. A remote --resolve-key answer closes only after a confirmed ring.
 #   4. A remote harness-native "/..." steer also rides the inbox: the deleted
 #      remote typed-payload plane is gone for every remote text.
 #   5. A real remote failure still fails loudly with the remote leg's own
@@ -97,6 +97,20 @@ SH
 exit 0
 SH
   chmod +x "$fb/sleep"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "${FM_FAKE_HERDR_CONFIRMED:-0}" = 1 ] || exit 127
+case "${1:-} ${2:-}" in
+  "status --json") printf '{"client":{"protocol":20},"server":{"running":true,"protocol":20}}\n' ;;
+  "pane get") printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}" ;;
+  "agent get") printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n' ;;
+  "pane read") printf '╭────╮\n│    │\n╰────╯\n' ;;
+  "pane run"|"pane send-keys") printf '{"result":{}}\n' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fb/herdr"
   cat > "$fb/fake-ssh" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -504,7 +518,7 @@ test_remote_expected_host_revalidates_final_route() {
   pass "fm-send remote: expected host is enforced by final route validation"
 }
 
-test_remote_resolve_key_closes_at_enqueue() {
+test_remote_unconfirmed_ring_leaves_decision_open() {
   local dir fb ssh_log home rhome rc out
   dir="$TMP_ROOT/remote-key"; mkdir -p "$dir"
   fb=$(make_stubs "$dir"); ssh_log="$dir/ssh.log"; : > "$ssh_log"
@@ -514,17 +528,85 @@ test_remote_resolve_key_closes_at_enqueue() {
 
   rc=0
   send_env "$fb" "$home" "$ssh_log" \
-    "$SEND" rsm --resolve-key upgrade-window "the weekend, freeze Friday" >/dev/null 2>&1 || rc=$?
+    "$SEND" rsm --resolve-key upgrade-window "the weekend, freeze Friday" >"$dir/out" 2>"$dir/err" || rc=$?
   expect_code 0 "$rc" "a durably recorded remote answer must exit 0"
-  grep -F 'resolved [key=upgrade-window]: answered: the weekend, freeze Friday' "$home/state/rsm.status" >/dev/null \
-    || fail "a recorded remote answer must close the decision at enqueue: $(cat "$home/state/rsm.status")"
-  out=$(drain_out "$home")
-  if printf '%s' "$out" | grep -F 'OPEN DECISIONS' >/dev/null; then
-    fail "the answered decision still lists as open after a recorded remote answer: $out"
+  assert_contains "$(cat "$dir/err")" "doorbell did not reach" \
+    "the remote leg should report its failed doorbell"
+  if grep -F 'resolved [key=upgrade-window]' "$home/state/rsm.status" >/dev/null; then
+    fail "an unconfirmed remote answer closed the decision: $(cat "$home/state/rsm.status")"
   fi
+  out=$(drain_out "$home")
+  printf '%s' "$out" | grep -F '[key=upgrade-window]' >/dev/null \
+    || fail "the decision vanished after an unconfirmed remote answer: $out"
   grep -rqF 'the weekend, freeze Friday' "$rhome/state/parent-route/rsm.inbox" \
     || fail "the remote answer must land in the remote steering inbox"
-  pass "fm-send remote: a --resolve-key answer closes its decision at enqueue"
+  pass "fm-send remote: an unconfirmed doorbell leaves a --resolve-key decision open"
+}
+
+test_remote_confirmed_ring_closes_decision() {
+  local dir fb ssh_log home rhome rc out
+  dir="$TMP_ROOT/remote-key-confirmed"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); ssh_log="$dir/ssh.log"; : > "$ssh_log"
+  rhome=$(setup_remote_secondmate_home remote-key-confirmed)
+  home=$(setup_remote_parent_home remote-key-confirmed "$rhome")
+  printf 'needs-decision [key=upgrade-window]: tonight or the weekend\n' > "$home/state/rsm.status"
+
+  rc=0
+  send_env "$fb" "$home" "$ssh_log" FM_FAKE_HERDR_CONFIRMED=1 \
+    FM_BACKEND_HERDR_SUBMIT_POLLS=1 FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0 \
+    "$SEND" rsm --resolve-key upgrade-window "the weekend, freeze Friday" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "a confirmed remote answer must exit 0"
+  grep -F 'resolved [key=upgrade-window]: answered: the weekend, freeze Friday' "$home/state/rsm.status" >/dev/null \
+    || fail "a confirmed remote answer did not close the decision: $(cat "$home/state/rsm.status")"
+  out=$(drain_out "$home")
+  if printf '%s' "$out" | grep -F 'OPEN DECISIONS' >/dev/null; then
+    fail "the decision stayed open after a confirmed remote answer: $out"
+  fi
+  pass "fm-send remote: a confirmed doorbell closes a --resolve-key decision"
+}
+
+test_remote_ring_verdict_gates_captain_hold() {
+  local dir fb ssh_log home rhome key confirmed rc
+  command -v tasks-axi >/dev/null 2>&1 || { pass "remote captain-held ring verdict (tasks-axi unavailable)"; return; }
+  for confirmed in 0 1; do
+    dir="$TMP_ROOT/remote-hold-$confirmed"; mkdir -p "$dir"
+    fb=$(make_stubs "$dir"); ssh_log="$dir/ssh.log"; : > "$ssh_log"
+    rhome=$(setup_remote_secondmate_home "remote-hold-$confirmed")
+    home=$(setup_remote_parent_home "remote-hold-$confirmed" "$rhome")
+    key="remote-hold-$confirmed"
+    mkdir -p "$home/config"
+    cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+    printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+    (cd "$home" && tasks-axi add "$key" "Choose the remote held option" --repo sample --start >/dev/null) \
+      || fail "could not create the remote captain-held fixture"
+    FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+      FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" hold "$key" \
+        --reason "waiting for the captain" >/dev/null \
+      || fail "could not hold the remote fixture for the captain"
+    printf 'captain-held [key=%s]: transferred\n' "$key" > "$home/state/rsm.status"
+
+    rc=0
+    if [ "$confirmed" = 1 ]; then
+      send_env "$fb" "$home" "$ssh_log" FM_FAKE_HERDR_CONFIRMED=1 \
+        FM_BACKEND_HERDR_SUBMIT_POLLS=1 FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0 \
+        "$SEND" rsm --resolve-key "$key" "approve it" >/dev/null 2>&1 || rc=$?
+    else
+      send_env "$fb" "$home" "$ssh_log" \
+        "$SEND" rsm --resolve-key "$key" "approve it" >/dev/null 2>&1 || rc=$?
+    fi
+    expect_code 0 "$rc" "a durable remote captain-held answer must exit 0"
+    if [ "$confirmed" = 1 ]; then
+      if FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+        FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" open "$key"; then
+        fail "a confirmed remote doorbell left captain-held work open"
+      fi
+    else
+      FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+        FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" open "$key" \
+        || fail "an unconfirmed remote doorbell closed captain-held work"
+    fi
+  done
+  pass "fm-send remote: ring confirmation gates captain-held closure"
 }
 
 test_remote_slash_rides_inbox() {
@@ -769,7 +851,7 @@ test_local_pending_does_not_close_resolve_key() {
   printf 'blocked [key=creds]: need the deploy token\n' > "$home/state/t2.status"
 
   # A harness-native slash answer keeps the typed plane, so the unconfirmed
-  # ladder still governs it; a plain-text answer would close at enqueue instead.
+  # ladder still governs it; a plain-text answer uses the inbox ring verdict.
   : > "$log"
   rc=0
   env PATH="$fb:$PATH" FM_FAKE_TMUX_PENDING=1 \
@@ -792,7 +874,9 @@ test_remote_fire_and_forget_never_arms_reply_recovery
 test_remote_send_revalidates_after_retirement_lock
 test_remote_send_revalidates_parent_route_after_retirement_lock
 test_remote_expected_host_revalidates_final_route
-test_remote_resolve_key_closes_at_enqueue
+test_remote_unconfirmed_ring_leaves_decision_open
+test_remote_confirmed_ring_closes_decision
+test_remote_ring_verdict_gates_captain_hold
 test_remote_slash_rides_inbox
 test_remote_real_failure_still_fails
 test_remote_exit3_no_longer_delivered
