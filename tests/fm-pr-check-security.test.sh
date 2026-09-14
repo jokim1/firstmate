@@ -2156,7 +2156,7 @@ drift_recorded_inode() {  # <file>
 }
 
 test_device_drift_does_not_disarm_pr_poll() {
-  local dir state rc
+  local dir state before after rc
   dir=$(make_case device-drift-not-disarmed)
   state="$dir/home/state"
   write_poll_meta "$state" task-a https://github.com/o/r/pull/1
@@ -2175,9 +2175,7 @@ test_device_drift_does_not_disarm_pr_poll() {
   ! grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
     || fail "an authenticated drifted poll was reported as disarmed: $(cat "$dir/watch.out")"
 
-  # The same drift on a pending retirement receipt must not strand its
-  # fixed-path removal across a restart either.
-  dir=$(make_case device-drift-receipt-recovery)
+  dir=$(make_case device-drift-receipt-refused)
   state="$dir/home/state"
   write_poll_meta "$state" task-a https://github.com/o/r/pull/2
   seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/2
@@ -2186,14 +2184,20 @@ test_device_drift_does_not_disarm_pr_poll() {
   fm_pr_poll_retirement_publish "$state" task-a "$POLL" merged \
     || fail "could not publish drifted-device receipt fixture"
   drift_recorded_device "$state/task-a.pr-poll-retirement"
-  add_stop_custom_check "$dir"
+  before=$(poll_artifact_snapshot "$state" task-a)
   set +e
   FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/restart.out" 2> "$dir/restart.err"
   rc=$?
   set -e
-  [ "$rc" -eq 0 ] || fail "device-drift receipt recovery watcher failed: $(cat "$dir/restart.err")"
-  assert_poll_absent "$state" task-a
-  pass "recorded device drift neither disarms a poll nor strands retirement removal"
+  [ "$rc" -eq 0 ] || fail "device-drift receipt refusal watcher failed: $(cat "$dir/restart.err")"
+  grep -F 'rejected unauthenticated PR poll retirement receipts' "$dir/restart.out" >/dev/null \
+    || fail "device-drifted receipt was not rejected: $(cat "$dir/restart.out")"
+  [ -f "$state/task-a.check.sh" ] && [ -f "$state/task-a.pr-poll" ] \
+    && [ -f "$state/task-a.pr-poll-registration" ] \
+    || fail "device-drifted receipt authorized canonical poll deletion"
+  after=$(poll_artifact_snapshot "$state" task-a)
+  [ "$after" = "$before" ] || fail "device-drifted receipt changed poll artifacts"
+  pass "recorded device drift keeps active polls armed but cannot authorize receipt recovery"
 }
 
 test_recorded_inode_drift_still_disarms_pr_poll() {
