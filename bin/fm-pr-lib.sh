@@ -797,7 +797,9 @@ fm_pr_github_read_record_with_gh_axi() {  # <owner> <repo> <number>
       FM_PR_RECORD_MERGED=false
       ;;
     CLOSED|closed)
+      # shellcheck disable=SC2034 # Output consumed by the sourced library's caller.
       FM_PR_RECORD_STATE=CLOSED
+      # shellcheck disable=SC2034 # Output consumed by the sourced library's caller.
       FM_PR_RECORD_MERGED=false
       ;;
     *)
