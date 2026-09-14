@@ -126,6 +126,7 @@ fm_utc_iso_to_epoch() {  # <timestamp>
 # below for the status-fold contract. The transfer verb is written only after
 # fm-captain-hold.sh has verified the corresponding captain-held backlog item.
 FM_CLASSIFY_RESOLVE_VERB_DEFAULT='resolved'
+FM_CLASSIFY_PENDING_DELIVERY_VERB_DEFAULT='pending-delivery'
 FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT='captain-held'
 
 # Return the last non-blank line of a status file (empty if missing/blank).
@@ -287,9 +288,10 @@ status_paused_until() {  # <status-line> -> epoch on stdout
 # after a later, unrelated event": a subsequent done/paused/working line silently
 # masks a still-open needs-decision. status_open_decisions is the ONE authoritative
 # statement of the status-fold contract that fixes this - a needs-decision/blocked
-# line OPENS a keyed decision, and only an explicit resolution or a verified
-# captain-held backlog transfer referencing that key CLOSES it; a later unrelated
-# terminal line never clears an open captain decision.
+# line OPENS a keyed decision, a pending-delivery answer keeps it open until the
+# worker's inbox acknowledgement catches up, and only an explicit resolution or
+# a verified captain-held backlog transfer referencing that key CLOSES it; a
+# later unrelated terminal line never clears an open captain decision.
 # Who WRITES the closing line is owned elsewhere: the answering firstmate closes
 # at answer time through fm-send's --resolve-key (bin/fm-send.sh header), and a
 # worker self-closes only a blocker that cleared without an answer (bin/fm-brief.sh
@@ -471,8 +473,9 @@ EOF
   printf '%s' "$out"
 }
 # Fold ONE status line into an existing "<key>\t<verb>\t<note>\n"-per-line open
-# set, applying the same needs-decision/blocked-opens, resolved/captain-held-closes
-# rule status_open_decisions documents above. Pure text transform, no file I/O.
+# set, applying the same needs-decision/blocked/pending-delivery opens and
+# resolved/captain-held closes rule status_open_decisions documents above. Pure
+# text transform, no file I/O.
 # This is the ONE place the per-line open/resolved rule is written; both the
 # whole-file fold (status_open_decisions) and the incremental cursor-backed fold
 # (status_open_decisions_incremental) below call this instead of re-deriving the
@@ -522,7 +525,8 @@ _fm_is_pending_reply_escalation() {  # <key> <note>
 }
 
 _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb>
-  local open=$1 line=$2 resolve=$3 held=$4 verb key note
+  local open=$1 line=$2 resolve=$3 held=$4 pending verb key note
+  pending=${FM_CLASSIFY_PENDING_DELIVERY_VERB:-$FM_CLASSIFY_PENDING_DELIVERY_VERB_DEFAULT}
   # Blank-line guard. A `case` glob answers "does this line hold any non-space
   # character" in one pattern match; the equivalent ${line//[[:space:]]/} costs
   # tens of milliseconds per line under bash 3.2's global bracket-class
@@ -537,7 +541,7 @@ _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb
   _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")" \
     || { printf '%s' "$open"; return 0; }
   case "$verb" in
-    needs-decision|blocked)
+    needs-decision|blocked|"$pending")
       note=$(status_line_note "$line")
       open=$(_fm_decision_drop "$open" "$key")
       [ -n "$open" ] && open="${open}"$'\n'

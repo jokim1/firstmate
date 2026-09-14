@@ -155,10 +155,11 @@
 # Decision closure (answerer-closes): pass --resolve-key <key> (repeatable,
 # before the message) when this send answers an open keyed needs-decision: or
 # blocked: record in the target task's state/<id>.status. fm-send itself
-# appends the closing resolved line to that status file, so the captain-facing
-# OPEN DECISIONS record closes at answer time and never depends on the busy
-# worker writing a matching resolved line. Ordinary keys close with
-# "resolved [key=<key>]: answered: <capped excerpt>". A reserved key
+# appends a delivery-state line to that status file. A proven typed-plane
+# delivery closes the captain-facing OPEN DECISIONS record with
+# "resolved [key=<key>]: answered: <capped excerpt>". An inbox-plane send writes
+# "pending-delivery [key=<key>]: answered: <capped excerpt>" instead, because the
+# worker has not acknowledged the durable inbox record yet. A reserved key
 # (pending-reply-* today; bin/fm-classify-lib.sh's reserved-key guard) is
 # closed with the owning library's vocabulary note
 # (fm_pending_reply_close_note_for_key / fm_pending_reply_resolved_note), so
@@ -166,12 +167,12 @@
 # transition and is never written for those keys. If this send cannot produce
 # a note the guard will accept, or the structural key would be lost to the
 # status-line cap, it refuses before sending and names the cause rather than
-# exiting 0 on a silent no-op. After a delivered close it also
-# re-folds and fails loudly if the named key is still open. On the inbox plane
-# the close happens at ENQUEUE time, because enqueue is durable delivery to
-# the task's record; the worker reading the answer late is covered by the
-# acknowledgement re-ring ladder. On the typed plane it still waits for the
-# confirmed submit. The close is a LOCAL append for every target kind -
+# exiting 0 on a silent no-op. After a delivered typed close it also re-folds and
+# fails loudly if the named key is still open. On the inbox plane the
+# pending-delivery line happens at ENQUEUE time, and the key stays visible to
+# OPEN DECISIONS until the asynchronous handled/ acknowledgement catches up. On
+# the typed plane it still waits for the confirmed submit. The append is LOCAL
+# for every target kind -
 # crewmate, scout, local secondmate, and remote secondmate alike - because the
 # open-decision ledger fm-wake-drain folds lives in this home's own state dir
 # (a remote mate's escalations reach it through the parent-replies ingest);
@@ -632,6 +633,13 @@ if [ -n "$RESOLVE_KEYS" ]; then
       echo "error: --resolve-key cannot close a decision key of length ${#k}: its ${#probe_line}-character close record exceeds the $FM_LINE_CAP_DEFAULT-character status-line cap, and truncation would remove the structural key delimiter. Refusing rather than writing an ineffective close; nothing was sent." >&2
       exit 1
     fi
+    probe_line="pending-delivery [key=$k]: $probe"
+    fm_cap_line_var "$probe_line"
+    probe_key=$(_fm_decision_key "$FM_LINE_CAP_LINE") || probe_key=
+    if [ "$(status_line_verb "$FM_LINE_CAP_LINE")" != pending-delivery ] || [ "$probe_key" != "$k" ]; then
+      echo "error: --resolve-key cannot mark pending delivery for decision key of length ${#k}: its ${#probe_line}-character pending-delivery record exceeds the $FM_LINE_CAP_DEFAULT-character status-line cap, and truncation would remove the structural key delimiter. Refusing rather than writing an ineffective pending-delivery state; nothing was sent." >&2
+      exit 1
+    fi
   done
 fi
 
@@ -664,6 +672,25 @@ fm_send_close_resolved_keys() {  # <answer-text>
         return 1
         ;;
     esac
+  done
+}
+
+# Mark each answered decision as delivered only to the steering inbox.
+# The worker has not acknowledged the record until it moves the message to
+# handled/, so the status fold keeps pending-delivery visible in OPEN DECISIONS.
+fm_send_mark_pending_delivery_keys() {  # <answer-text>
+  local note=$1 k line pending_note append_rc
+  note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
+  for k in $RESOLVE_STATUS_KEYS; do
+    pending_note=$(fm_send_resolve_close_note "$k" "$note")
+    line="pending-delivery [key=$k]: $pending_note"
+    fm_cap_line_var "$line"
+    append_rc=0
+    fm_wake_status_append_self_announced "$STATE" "$RESOLVE_STATUS_FILE" "$FM_LINE_CAP_LINE" || append_rc=$?
+    if [ "$append_rc" -eq 2 ]; then
+      echo "error: the answer was recorded for $T, but decision key '$k' could not be marked pending-delivery in $RESOLVE_STATUS_FILE. The decision remains open; do not resend without inspecting $STATE." >&2
+      return 1
+    fi
   done
 }
 
@@ -936,7 +963,8 @@ else
       echo "error: steer not sent to remote secondmate $TARGET_REMOTE_ID (the remote steering-inbox record could not be written; the remote leg's stderr above has the reason)" >&2
       exit 1
     fi
-    # The remote record is durable delivery, exactly as a local enqueue is.
+    # The remote record is durable delivery to the remote inbox, not a worker
+    # handled/ acknowledgement.
     if [ -n "$PENDING_REPLY_CORR" ]; then
       if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
         :
@@ -950,7 +978,7 @@ else
       fi
     fi
     if [ -n "$RESOLVE_KEYS" ]; then
-      fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1
+      fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" || exit 1
       fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
     fi
     exit 0
@@ -1024,10 +1052,10 @@ else
         fi
       fi
     fi
-    # The answer is durably sent: close each answered decision at enqueue time
-    # (answerer-closes; see the header contract).
+    # The answer is durably recorded, but the worker has not acknowledged the
+    # inbox record yet: keep each answered decision visible as pending delivery.
     if [ -n "$RESOLVE_KEYS" ]; then
-      fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1
+      fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" || exit 1
       fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
     fi
     # Ring the doorbell, best-effort: no ring outcome changes the exit status,
