@@ -1,0 +1,16 @@
+SCENARIO: captain-held records use the same real tmux delivery gate
+SKIPPED_PRECONDITION composer_state=pending
+SKIPPED_SEND_EXIT=0
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the requested message WILL still be sent.
+●  repair missing watcher supervision with a foreground checkpoint: bin/fm-watch-checkpoint.sh --seconds 180.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2G3D139GXNK0DZZTJENDCK5/.nm-live-hold.hZ3ruM/state/hold-skip.inbox/001.msg and the watcher will re-ring
+SKIPPED_HOLD_AFTER=open
+CONFIRMED_PRECONDITION composer_state=empty
+CONFIRMED_SEND_EXIT=0
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+CONFIRMED_HOLD_AFTER=closed

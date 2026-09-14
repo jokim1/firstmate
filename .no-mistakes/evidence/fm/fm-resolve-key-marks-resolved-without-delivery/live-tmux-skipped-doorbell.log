@@ -1,0 +1,17 @@
+SCENARIO: real fm-send against real tmux with a visibly pending composer
+PRECONDITION agent_state=alive composer_state=pending
+BEFORE OPEN DECISIONS:
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+live-task [key=live-choice] blocked: choose the safe deployment option
+OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
+FM_SEND_EXIT=0
+FM_SEND_STDERR:
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2G3D139GXNK0DZZTJENDCK5/.nm-live-skip.GgZ8cD/state/live-task.inbox/001.msg and the watcher will re-ring
+STATUS_LEDGER_AFTER:
+blocked [key=live-choice]: choose the safe deployment option
+INBOX_AFTER pending=1 handled=0
+AFTER OPEN DECISIONS:
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+live-task [key=live-choice] blocked: choose the safe deployment option
+OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
