@@ -1,12 +1,12 @@
 ---
 name: credential-handoff
 description: >-
-Captain's standing procedure for taking a credential/secret from him without chat exposure and depositing it where its production consumer reads it.
-Load before requesting, receiving, placing, or verifying any credential, token, or secret handover.
-Covers the one-home rule and the envelope handoff mechanics.
+  Captain's standing procedure for taking a credential/secret from him without chat exposure and depositing it where its production consumer reads it.
+  Load before requesting, receiving, placing, or verifying any credential, token, or secret handover.
+  Covers the one-home rule and the envelope handoff mechanics.
 user-invocable: false
 metadata:
-internal: true
+  internal: true
 ---
 
 # Credential handoff
