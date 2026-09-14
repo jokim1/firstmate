@@ -253,6 +253,23 @@ fm_pr_file_identity() {
   printf '%s:%s\n' "$device" "$inode"
 }
 
+# An active poll's recorded "device:inode" identity is matched by its inode component alone.
+# Device numbers are not stable across macOS mounts or reboots, so comparing
+# the recorded device disarmed byte-identical polls whose hashes and inodes
+# still matched, silently stopping merge watching for the task. The device
+# component stays in the record as provenance, but every membership guarantee
+# is enforced freshly instead: fm_pr_private_file_valid proves the live file
+# is a private single-link file on the state directory's current device, the
+# recorded inode pins the exact file instance against rename replacement, and
+# the recorded hash pins its content.
+fm_pr_recorded_identity_matches() {  # <file> <state-device> <recorded device:inode>
+  local file=$1 state_device=$2 recorded=$3 recorded_inode
+  [[ "$recorded" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  recorded_inode=${recorded#*:}
+  fm_pr_private_file_valid "$file" 600 "$state_device" || return 1
+  [ "$(fm_pr_file_inode "$file")" = "$recorded_inode" ]
+}
+
 fm_pr_sha256() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
@@ -318,7 +335,14 @@ fm_pr_metadata_identity_parse() {
       x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*)
         ;;
       *)
-        [ "$seen_pr" -eq 0 ] || post_pr_invalid=1
+        # Meta gains keys from many append-only writers (relaunch
+        # transactions, captain holds), so key order after pr= is not
+        # stable. Only well-formed key=value lines are tolerated there;
+        # the binding invariants above (exactly one canonical pr=, valid
+        # pr_head format) still carry the authentication check.
+        if [ "$seen_pr" -eq 1 ]; then
+          [[ "$line" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*= ]] || post_pr_invalid=1
+        fi
         ;;
     esac
   done < "$file"
@@ -578,7 +602,7 @@ fm_pr_poll_publish_prepared() {
 }
 
 fm_pr_poll_artifacts_valid() {
-  local state=$1 id=$2 template=$3 state_device check data registration meta data_hash template_hash data_identity check_identity
+  local state=$1 id=$2 template=$3 state_device check data registration meta data_hash template_hash
   fm_pr_task_id_valid "$id" || return 1
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
   state_device=$(fm_pr_file_device "$state") || return 1
@@ -595,8 +619,6 @@ fm_pr_poll_artifacts_valid() {
   fm_pr_poll_data_parse "$data" || return 1
   data_hash=$(fm_pr_sha256 "$data") || return 1
   template_hash=$(fm_pr_sha256 "$check") || return 1
-  data_identity=$(fm_pr_file_identity "$data") || return 1
-  check_identity=$(fm_pr_file_identity "$check") || return 1
   fm_pr_poll_registration_parse "$registration" || return 1
   [ "$FM_PR_REG_ID" = "$id" ] || return 1
   [ "$FM_PR_REG_PROVIDER" = "$FM_PR_DATA_PROVIDER" ] || return 1
@@ -606,8 +628,8 @@ fm_pr_poll_artifacts_valid() {
   [ "$FM_PR_REG_NUMBER" = "$FM_PR_DATA_NUMBER" ] || return 1
   [ "$FM_PR_REG_DATA_HASH" = "$data_hash" ] || return 1
   [ "$FM_PR_REG_TEMPLATE_HASH" = "$template_hash" ] || return 1
-  [ "$FM_PR_REG_DATA_IDENTITY" = "$data_identity" ] || return 1
-  [ "$FM_PR_REG_CHECK_IDENTITY" = "$check_identity" ] || return 1
+  fm_pr_recorded_identity_matches "$data" "$state_device" "$FM_PR_REG_DATA_IDENTITY" || return 1
+  fm_pr_recorded_identity_matches "$check" "$state_device" "$FM_PR_REG_CHECK_IDENTITY" || return 1
   fm_pr_metadata_identity_parse "$meta" || return 1
   [ "$FM_PR_META_PROVIDER" = "$FM_PR_DATA_PROVIDER" ] || return 1
   [ "$FM_PR_META_URL" = "$FM_PR_DATA_URL" ] || return 1
@@ -617,9 +639,11 @@ fm_pr_poll_artifacts_valid() {
 }
 
 fm_pr_poll_snapshot_capture() {
-  local state=$1 id=$2 template=$3 registration
+  local state=$1 id=$2 template=$3 registration data check
   fm_pr_poll_artifacts_valid "$state" "$id" "$template" || return 1
   registration="$state/$id.pr-poll-registration"
+  data="$state/$id.pr-poll"
+  check="$state/$id.check.sh"
   FM_PR_POLL_SNAPSHOT_REG_HASH=$(fm_pr_sha256 "$registration") || return 1
   FM_PR_POLL_SNAPSHOT_REG_IDENTITY=$(fm_pr_file_identity "$registration") || return 1
   FM_PR_POLL_SNAPSHOT_ID=$id
@@ -630,17 +654,19 @@ fm_pr_poll_snapshot_capture() {
   FM_PR_POLL_SNAPSHOT_NUMBER=$FM_PR_DATA_NUMBER
   FM_PR_POLL_SNAPSHOT_DATA_HASH=$FM_PR_REG_DATA_HASH
   FM_PR_POLL_SNAPSHOT_TEMPLATE_HASH=$FM_PR_REG_TEMPLATE_HASH
-  FM_PR_POLL_SNAPSHOT_DATA_IDENTITY=$FM_PR_REG_DATA_IDENTITY
-  FM_PR_POLL_SNAPSHOT_CHECK_IDENTITY=$FM_PR_REG_CHECK_IDENTITY
+  FM_PR_POLL_SNAPSHOT_DATA_IDENTITY=$(fm_pr_file_identity "$data") || return 1
+  FM_PR_POLL_SNAPSHOT_CHECK_IDENTITY=$(fm_pr_file_identity "$check") || return 1
 }
 
 fm_pr_poll_snapshot_matches() {
-  local state=$1 id=$2 template=$3 registration reg_hash reg_identity
+  local state=$1 id=$2 template=$3 registration reg_hash reg_identity data_identity check_identity
   [ -n "$FM_PR_POLL_SNAPSHOT_ID" ] && [ "$id" = "$FM_PR_POLL_SNAPSHOT_ID" ] || return 1
   fm_pr_poll_artifacts_valid "$state" "$id" "$template" || return 1
   registration="$state/$id.pr-poll-registration"
   reg_hash=$(fm_pr_sha256 "$registration") || return 1
   reg_identity=$(fm_pr_file_identity "$registration") || return 1
+  data_identity=$(fm_pr_file_identity "$state/$id.pr-poll") || return 1
+  check_identity=$(fm_pr_file_identity "$state/$id.check.sh") || return 1
   [ "$FM_PR_DATA_PROVIDER" = "$FM_PR_POLL_SNAPSHOT_PROVIDER" ] || return 1
   [ "$FM_PR_DATA_URL" = "$FM_PR_POLL_SNAPSHOT_URL" ] || return 1
   [ "$FM_PR_DATA_HOST" = "$FM_PR_POLL_SNAPSHOT_HOST" ] || return 1
@@ -648,8 +674,8 @@ fm_pr_poll_snapshot_matches() {
   [ "$FM_PR_DATA_NUMBER" = "$FM_PR_POLL_SNAPSHOT_NUMBER" ] || return 1
   [ "$FM_PR_REG_DATA_HASH" = "$FM_PR_POLL_SNAPSHOT_DATA_HASH" ] || return 1
   [ "$FM_PR_REG_TEMPLATE_HASH" = "$FM_PR_POLL_SNAPSHOT_TEMPLATE_HASH" ] || return 1
-  [ "$FM_PR_REG_DATA_IDENTITY" = "$FM_PR_POLL_SNAPSHOT_DATA_IDENTITY" ] || return 1
-  [ "$FM_PR_REG_CHECK_IDENTITY" = "$FM_PR_POLL_SNAPSHOT_CHECK_IDENTITY" ] || return 1
+  [ "$data_identity" = "$FM_PR_POLL_SNAPSHOT_DATA_IDENTITY" ] || return 1
+  [ "$check_identity" = "$FM_PR_POLL_SNAPSHOT_CHECK_IDENTITY" ] || return 1
   [ "$reg_hash" = "$FM_PR_POLL_SNAPSHOT_REG_HASH" ] || return 1
   [ "$reg_identity" = "$FM_PR_POLL_SNAPSHOT_REG_IDENTITY" ]
 }
@@ -771,8 +797,6 @@ fm_pr_poll_retirement_registration_valid() {
   [ "$FM_PR_REG_NUMBER" = "$FM_PR_RETIRE_NUMBER" ] || return 1
   [ "$FM_PR_REG_DATA_HASH" = "$FM_PR_RETIRE_DATA_HASH" ] || return 1
   [ "$FM_PR_REG_TEMPLATE_HASH" = "$FM_PR_RETIRE_TEMPLATE_HASH" ] || return 1
-  [ "$FM_PR_REG_DATA_IDENTITY" = "$FM_PR_RETIRE_DATA_IDENTITY" ] || return 1
-  [ "$FM_PR_REG_CHECK_IDENTITY" = "$FM_PR_RETIRE_CHECK_IDENTITY" ] || return 1
   [ "$reg_hash" = "$FM_PR_RETIRE_REG_HASH" ] || return 1
   [ "$reg_identity" = "$FM_PR_RETIRE_REG_IDENTITY" ]
 }
@@ -839,9 +863,7 @@ fm_pr_poll_retirement_discard_obsolete() {
   current_reg_hash=$(fm_pr_sha256 "$registration") || return 1
   current_reg_identity=$(fm_pr_file_identity "$registration") || return 1
   if [ "$current_reg_hash" = "$FM_PR_RETIRE_REG_HASH" ] \
-    && [ "$current_reg_identity" = "$FM_PR_RETIRE_REG_IDENTITY" ] \
-    && [ "$FM_PR_REG_DATA_IDENTITY" = "$FM_PR_RETIRE_DATA_IDENTITY" ] \
-    && [ "$FM_PR_REG_CHECK_IDENTITY" = "$FM_PR_RETIRE_CHECK_IDENTITY" ]; then
+    || [ "$current_reg_identity" = "$FM_PR_RETIRE_REG_IDENTITY" ]; then
     return 1
   fi
   fm_pr_poll_retirement_remove_exact "$receipt" "$state_device" \
