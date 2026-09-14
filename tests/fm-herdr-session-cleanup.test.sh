@@ -71,7 +71,14 @@ fm_backend_herdr_session() { printf test; }
 fm_backend_herdr_presentation_session_lock_path() { printf '%s/presentation.lock' "$TMP_ROOT"; }
 fm_lock_try_acquire() {
   printf '%s\n' "$1" >> "$LOCK_LOG"
-  mkdir "$1" 2>/dev/null
+  mkdir "$1" 2>/dev/null || return 1
+  if [ "$1" = "$FM_STATE_OVERRIDE/.spawn-$ID.lock" ]; then
+    if [ -e "$FIXTURE_DIR/journal-session-race" ]; then
+      write_v2 "$FM_HOME" w9 "$TAB" "$PANE" other
+    elif [ -e "$FIXTURE_DIR/journal-home-race" ]; then
+      write_v2 "$TMP_ROOT/other-home" w9 "$TAB" "$PANE"
+    fi
+  fi
 }
 fm_lock_release() { rm -rf -- "$1"; }
 fm_backend_herdr_pane_idle_shell_pid() { [ ! -e "$FIXTURE_DIR/process-unsafe" ] && printf '67\n'; }
@@ -147,7 +154,11 @@ fm_backend_herdr_cli() {
   panes=$(cat "$FIXTURE_DIR/panes")
   case "$first $second" in
     "workspace list")
-      printf '{"result":{"workspaces":'; fixture_workspaces; printf '}}\n'
+      if [ -e "$FIXTURE_DIR/empty-workspaces" ]; then
+        printf '%s\n' '{"result":{"workspaces":[]}}'
+      else
+        printf '{"result":{"workspaces":'; fixture_workspaces; printf '}}\n'
+      fi
       ;;
     "workspace get")
       printf '{"result":{"workspace":'; fixture_workspace_json "$title" "$tabs" "$panes"; printf '}}\n'
@@ -202,14 +213,14 @@ write_v1() { # <id> [token]
   } > "$FM_STATE_OVERRIDE/$id.herdr-presentation"
 }
 
-write_v2() { # <home> <workspace> <tab> <pane>
-  local home=$1 workspace=$2 tab=$3 pane=$4
+write_v2() { # <home> <workspace> <tab> <pane> [session]
+  local home=$1 workspace=$2 tab=$3 pane=$4 session=${5:-test}
   {
     printf 'version=2\n'
     printf 'task_id=%s\n' "$ID"
     printf 'projection_id=%s\n' "$TOKEN"
     printf 'home=%s\n' "$home"
-    printf 'session=test\nworkspace_id=%s\ntab_id=%s\npane_id=%s\n' "$workspace" "$tab" "$pane"
+    printf 'session=%s\nworkspace_id=%s\ntab_id=%s\npane_id=%s\n' "$session" "$workspace" "$tab" "$pane"
     printf 'parent_workspace_id=w1\nparent_label=firstmate\nworkspace_label=%s\ntask_label=fm-%s\n' "$TITLE" "$ID"
   } > "$FM_STATE_OVERRIDE/$ID.herdr-presentation"
 }
@@ -312,6 +323,39 @@ write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
 fm_herdr_session_cleanup >/dev/null 2>&1
 [ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "gone sweep retired a live task's journal"
 pass "gone sweep never touches a journal whose task record still exists"
+
+gone_sweep_failures=
+reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
+write_v2 "$FM_HOME" w9 "$TAB" "$PANE" other
+fm_herdr_session_cleanup >/dev/null 2>&1
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
+  || gone_sweep_failures="${gone_sweep_failures} cross-session"
+
+reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
+: > "$FIXTURE_DIR/journal-session-race"
+write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
+fm_herdr_session_cleanup >/dev/null 2>&1
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
+  || gone_sweep_failures="${gone_sweep_failures} locked-session-race"
+
+reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
+mkdir -p "$TMP_ROOT/other-home"
+: > "$FIXTURE_DIR/journal-home-race"
+write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
+fm_herdr_session_cleanup >/dev/null 2>&1
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
+  || gone_sweep_failures="${gone_sweep_failures} locked-home-race"
+
+reset_fixture
+: > "$FIXTURE_DIR/empty-workspaces"
+write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
+fm_herdr_session_cleanup >/dev/null 2>&1
+[ ! -e "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
+  || gone_sweep_failures="${gone_sweep_failures} empty-workspace-list"
+
+[ -z "$gone_sweep_failures" ] \
+  || fail "gone sweep ownership and empty-list regressions:$gone_sweep_failures"
+pass "gone sweep stays session/home scoped and accepts an empty workspace list"
 
 INTEGRATION_ROOT="$TMP_ROOT/bootstrap-integration"
 mkdir -p "$INTEGRATION_ROOT/home/state" "$INTEGRATION_ROOT/home/data" "$INTEGRATION_ROOT/home/config"

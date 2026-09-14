@@ -318,12 +318,13 @@ fm_herdr_cleanup_gone_sweep() { # <session> <home-real> <list-json>
     [ ! -e "$STATE/$id.meta" ] && [ ! -L "$STATE/$id.meta" ] || continue
     fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || continue
     [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] || continue
+    [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] || continue
     journal_home=$(fm_backend_herdr_projection_home_identity \
       "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null) || continue
     [ "$journal_home" = "$home_real" ] || continue
     token=$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID
     token_count=$(printf '%s' "$list_json" | jq -r --arg token "$token" '
-      [ .result.workspaces[]?.label? // "" |
+      [ .result.workspaces[]? | (.label? // "") |
         ((split("p:" + $token) | length) - 1) ] | add // 0
     ' 2>/dev/null) || token_count=
     [ "$token_count" = 0 ] || continue
@@ -339,6 +340,9 @@ fm_herdr_cleanup_gone_sweep() { # <session> <home-real> <list-json>
        && [ ! -e "$STATE/$id.meta" ] && [ ! -L "$STATE/$id.meta" ] \
        && fm_backend_herdr_projection_journal_snapshot "$journal" "$id" \
        && [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] \
+       && [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] \
+       && [ "$(fm_backend_herdr_projection_home_identity \
+         "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null)" = "$home_real" ] \
        && [ "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID" = "$token" ] \
        && [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" = "$bound_workspace" ] \
        && [ "$(fm_backend_herdr_workspace_presence_state "$session" "$bound_workspace")" = dead ]; then
@@ -372,10 +376,14 @@ fm_herdr_session_cleanup() {
     fm_herdr_cleanup_warn "session '$session' workspace discovery failed; preserving every candidate"
     return 0
   }
-  candidates=$(printf '%s' "$list" | jq -er '
-    .result.workspaces
-    | select(type == "array")
-    | .[]
+  printf '%s' "$list" | jq -e '
+    (.result.workspaces | type) == "array"
+  ' >/dev/null 2>&1 || {
+    fm_herdr_cleanup_warn "session '$session' workspace discovery was unreadable; preserving every candidate"
+    return 0
+  }
+  candidates=$(printf '%s' "$list" | jq -r '
+    .result.workspaces[]
     | select((.workspace_id | type) == "string" and (.workspace_id | length) > 0)
     | select((.label | type) == "string" and (.label | length) > 0)
     | [.workspace_id, .label] | @tsv
