@@ -2159,8 +2159,9 @@ test_device_drift_does_not_disarm_pr_poll() {
   local dir state before after rc
   dir=$(make_case device-drift-not-disarmed)
   state="$dir/home/state"
-  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
-  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/1 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm device-drift poll: $(cat "$dir/seed.err")"
   drift_recorded_device "$state/task-a.pr-poll-registration"
   fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
     || fail "recorded device drift disarmed a byte-identical poll"
@@ -2177,8 +2178,9 @@ test_device_drift_does_not_disarm_pr_poll() {
 
   dir=$(make_case device-drift-receipt-refused)
   state="$dir/home/state"
-  write_poll_meta "$state" task-a https://github.com/o/r/pull/2
-  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/2
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/2 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm receipt-refusal poll: $(cat "$dir/seed.err")"
   fm_pr_poll_snapshot_capture "$state" task-a "$POLL" \
     || fail "could not snapshot drifted-device receipt fixture"
   fm_pr_poll_retirement_publish "$state" task-a "$POLL" merged \
@@ -2204,8 +2206,9 @@ test_recorded_inode_drift_still_disarms_pr_poll() {
   local dir state rc
   dir=$(make_case inode-drift-disarms)
   state="$dir/home/state"
-  write_poll_meta "$state" task-a https://github.com/o/r/pull/3
-  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/3
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/3 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm inode-drift poll: $(cat "$dir/seed.err")"
   drift_recorded_inode "$state/task-a.pr-poll-registration"
   if fm_pr_poll_artifacts_valid "$state" task-a "$POLL"; then
     fail "recorded inode drift left a replaced file authenticated"
@@ -2265,16 +2268,21 @@ test_rejected_poll_families_keep_the_merge_loss_warning() {
     for shape in regular symlink directory; do
       dir=$(make_case "rejected-${suffix}-${shape}")
       state="$dir/home/state"
-      cp "$POLL" "$state/task-a.check.sh"
-      chmod 0600 "$state/task-a.check.sh"
+      write_task_meta "$dir" task-a
+      run_check_entry "$dir" task-a https://github.com/o/r/pull/1 >/dev/null 2>"$dir/seed.err" \
+        || fail "could not arm $suffix $shape poll: $(cat "$dir/seed.err")"
       case "$shape" in
         regular) printf 'invalid\n' > "$state/task-a.$suffix" ;;
         symlink)
           external="$dir/$suffix-target"
           printf 'invalid\n' > "$external"
+          rm -f "$state/task-a.$suffix"
           ln -s "$external" "$state/task-a.$suffix"
           ;;
-        directory) mkdir "$state/task-a.$suffix" ;;
+        directory)
+          rm -f "$state/task-a.$suffix"
+          mkdir "$state/task-a.$suffix"
+          ;;
       esac
       set +e
       run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
@@ -2292,8 +2300,9 @@ test_rejected_poll_families_keep_the_merge_loss_warning() {
 
   dir=$(make_case rejected-poll-with-custom-check)
   state="$dir/home/state"
-  write_poll_meta "$state" task-a https://github.com/o/r/pull/4
-  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/4
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/4 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm combined-rejection poll: $(cat "$dir/seed.err")"
   drift_recorded_inode "$state/task-a.pr-poll-registration"
   printf '#!/usr/bin/env bash\nprintf "unsafe\\n"\n' > "$state/z-custom.check.sh"
   chmod 0700 "$state/z-custom.check.sh"
