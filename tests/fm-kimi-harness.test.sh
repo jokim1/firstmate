@@ -370,6 +370,107 @@ test_kimi_hook_install_refuses_without_jq() {
   pass "Kimi hook install refuses without jq before any config write"
 }
 
+test_kimi_hook_install_adopts_unmarked_identical_block() {
+  local home config fresh stripped out rc count
+  home="$TMP_ROOT/config-adopt"
+  config="$home/.kimi-code/config.toml"
+  fresh="$home/fresh.toml"
+  stripped="$home/stripped.toml"
+  mkdir -p "$home/.kimi-code"
+  printf '# Captain config\ndefault_model = "test"\n' > "$config"
+
+  HOME="$home" "$KIMI_HOOK" install || fail "initial Kimi hook install failed"
+  cp "$config" "$fresh"
+  # Simulate the Kimi login rewrite: strip the marker comments, keep the block bytes.
+  sed '/^# BEGIN FIRSTMATE KIMI TURN-END HOOK/d; /^# END FIRSTMATE KIMI TURN-END HOOK/d' "$config" > "$stripped"
+  cp "$stripped" "$config"
+
+  out=$(HOME="$home" "$KIMI_HOOK" install 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "install did not adopt the unmarked byte-identical Stop hook block"
+  assert_contains "$out" "adopted" "adopting install did not report its adoption"
+  cmp -s "$fresh" "$config" \
+    || fail "adopted config was not byte-identical to a fresh guarded install"
+  count=$(grep -c '^# BEGIN FIRSTMATE KIMI TURN-END HOOK' "$config")
+  [ "$count" -eq 1 ] || fail "adopting install left $count Firstmate regions"
+  "$PYTHON_BIN" - "$config" <<'PY' || fail "adopted config did not parse"
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as stream:
+    tomllib.load(stream)
+PY
+  pass "Kimi hook install adopts an unmarked byte-identical Stop hook block"
+}
+
+test_kimi_hook_install_refuses_differing_unmarked_stop_block() {
+  local home config before out rc
+  home="$TMP_ROOT/config-differ"
+  config="$home/.kimi-code/config.toml"
+  before="$home/before.toml"
+  mkdir -p "$home/.kimi-code"
+
+  cat > "$config" <<'EOF'
+default_model = "test"
+
+[[hooks]]
+event = "Stop"
+matcher = "^$"
+command = "bash \"$HOME/.kimi-code/fm-turn-end.sh\" >/dev/null 2>&1 || true"
+timeout = 5
+EOF
+  cp "$config" "$before"
+  rc=0
+  out=$(HOME="$home" "$KIMI_HOOK" install 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "install accepted an unmarked Stop hook block with a different timeout"
+  assert_contains "$out" "differs" "altered-value refusal did not name the difference"
+  assert_contains "$out" "timeout = 5" "altered-value refusal did not name the differing line"
+  cmp -s "$before" "$config" || fail "altered-value refusal changed config bytes"
+  assert_absent "$home/.kimi-code/fm-turn-end.sh" "altered-value refusal wrote the hook script"
+
+  cat > "$config" <<'EOF'
+default_model = "test"
+
+[[hooks]]
+event = "Stop"
+matcher = "^$"
+command = "bash \"$HOME/.kimi-code/fm-turn-end.sh\" >/dev/null 2>&1 || true"
+timeout = 1
+silent = true
+EOF
+  cp "$config" "$before"
+  rc=0
+  out=$(HOME="$home" "$KIMI_HOOK" install 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "install accepted an unmarked Stop hook block with an extra key"
+  assert_contains "$out" "unexpected extra line" "extra-key refusal did not name the extra line"
+  cmp -s "$before" "$config" || fail "extra-key refusal changed config bytes"
+  pass "Kimi hook install refuses a differing unmarked Stop block and names the difference"
+}
+
+test_kimi_hook_clean_install_and_idempotent_reinstall() {
+  local home config once count
+  home="$TMP_ROOT/config-clean-install"
+  config="$home/.kimi-code/config.toml"
+  once="$home/once.toml"
+  mkdir -p "$home/.kimi-code"
+  printf '# Captain config\ndefault_model = "test"\n' > "$config"
+
+  HOME="$home" "$KIMI_HOOK" install || fail "clean Kimi hook install into a hookless config failed"
+  count=$(grep -c '^# BEGIN FIRSTMATE KIMI TURN-END HOOK' "$config")
+  [ "$count" -eq 1 ] || fail "clean install left $count Firstmate regions"
+  cp "$config" "$once"
+  HOME="$home" "$KIMI_HOOK" install || fail "idempotent Kimi hook reinstall failed"
+  cmp -s "$once" "$config" || fail "idempotent reinstall changed config bytes"
+  "$PYTHON_BIN" - "$config" <<'PY' || fail "clean installed config did not parse"
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as stream:
+    tomllib.load(stream)
+PY
+  pass "Kimi hook clean install and idempotent reinstall hold config bytes fixed"
+}
+
 test_kimi_hook_is_silent_and_requires_registered_workspace_token() {
   local id rec out rc hook target token no_token snapshot_before snapshot_after fakebin
   id=kimi-hook-auth-z6
@@ -719,6 +820,9 @@ test_kimi_hook_install_is_surgical_idempotent_and_removable
 test_kimi_hook_remove_preserves_owned_newline_boundary
 test_kimi_hook_fails_closed_on_missing_malformed_or_partial_config
 test_kimi_hook_install_refuses_without_jq
+test_kimi_hook_install_adopts_unmarked_identical_block
+test_kimi_hook_install_refuses_differing_unmarked_stop_block
+test_kimi_hook_clean_install_and_idempotent_reinstall
 test_kimi_launch_then_send_is_verified
 test_kimi_hook_is_silent_and_requires_registered_workspace_token
 test_kimi_spawn_refuses_unsafe_global_config_before_pane_creation

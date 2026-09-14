@@ -4,7 +4,9 @@
 # This command is the sole owner of the text-level edit to
 # $HOME/.kimi-code/config.toml. It validates the existing TOML but never
 # serializes it: install adds or replaces one marker-delimited Firstmate region,
-# and remove excises only that region. Missing, malformed, symlinked, partially
+# and remove excises only that region. Install adopts an unmarked Stop hook
+# block that is byte-identical to the block it would write, re-wrapping it in
+# the markers instead of refusing. Missing, malformed, symlinked, partially
 # marked, or otherwise surprising config is refused without a config write.
 #
 # The installed Stop hook always exits 0 and stays silent. It reads cwd from the
@@ -170,6 +172,93 @@ def block(marker: bytes) -> bytes:
     )
 
 
+def canonical_body() -> bytes:
+    # The exact hook table install writes between its markers. A Kimi login
+    # rewrite that strips only the markers leaves these bytes behind; install
+    # adopts them instead of refusing.
+    return b"\n".join(block(BEGIN).split(b"\n")[1:6]) + b"\n"
+
+
+ADOPTED_NOTICE = (
+    "fm-kimi-turnend-hook: adopted an existing byte-identical Stop hook block"
+    " and re-wrapped it in the Firstmate region."
+)
+
+
+def describe_foreign_hook(data: bytes) -> str:
+    """Name the first way an unmarked fm-turn-end.sh reference differs from the canonical block."""
+    canonical = canonical_body().rstrip(b"\n").split(b"\n")
+    lines = data.split(b"\n")
+    for index, line in enumerate(lines):
+        if HOOK_NAME not in line:
+            continue
+        number = index + 1
+        header = index
+        while header > 0:
+            previous = lines[header - 1]
+            if previous == b"[[hooks]]":
+                header -= 1
+                break
+            if previous.startswith(b"["):
+                break
+            header -= 1
+        if lines[header] != b"[[hooks]]":
+            return f"line {number} references fm-turn-end.sh outside a [[hooks]] block."
+        block_lines = []
+        cursor = header
+        while cursor < len(lines) and (cursor == header or not lines[cursor].startswith(b"[")):
+            block_lines.append(lines[cursor])
+            cursor += 1
+        for offset, want in enumerate(canonical):
+            at = header + offset + 1
+            if offset >= len(block_lines):
+                return f"missing expected line {at}: {want.decode()}."
+            if block_lines[offset] != want:
+                return f"line {at} is {block_lines[offset].decode()!r}, expected {want.decode()!r}."
+        for offset in range(len(canonical), len(block_lines)):
+            if block_lines[offset].strip():
+                at = header + offset + 1
+                return f"unexpected extra line {at}: {block_lines[offset].decode()}."
+        return f"the Stop hook block at line {header + 1} does not match the Firstmate block."
+    return "no fm-turn-end.sh reference located."
+
+
+def block_tail_is_clean(data: bytes, end: int) -> bool:
+    # After the canonical block, only blank or comment lines may precede the
+    # next table header or EOF; another key line would still belong to the
+    # hook element, so the block genuinely differs.
+    for line in data[end:].split(b"\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(b"#"):
+            continue
+        return stripped.startswith(b"[")
+    return True
+
+
+def adopt_unmarked_block(data: bytes) -> bytes:
+    """Re-wrap one unmarked byte-identical Stop hook block in Firstmate markers."""
+    body = canonical_body()
+    spans = []
+    at = data.find(body)
+    while at >= 0:
+        if at == 0 or data[at - 1 : at] == b"\n":
+            spans.append((at, at + len(body)))
+        at = data.find(body, at + 1)
+    if len(spans) > 1:
+        refuse(f"config.toml holds {len(spans)} unmarked byte-identical Firstmate Stop hook blocks.")
+    if spans and block_tail_is_clean(data, spans[0][1]):
+        start, end = spans[0]
+        for match in re.finditer(re.escape(HOOK_NAME), data):
+            if match.start() < start or match.end() > end:
+                line = data.count(b"\n", 0, match.start()) + 1
+                refuse(f"config.toml references fm-turn-end.sh at line {line} outside the identical unmarked Stop hook block.")
+        return data[:start] + block(BEGIN) + data[end:]
+    refuse(
+        "config.toml has an unmarked Stop hook block referencing fm-turn-end.sh "
+        f"that differs from the Firstmate block: {describe_foreign_hook(data)}"
+    )
+
+
 def without_region(data: bytes, region) -> bytes:
     prefix = data[: region[0]]
     suffix = data[region[1] :]
@@ -226,8 +315,13 @@ try:
     parse_toml(original, "config.toml")
     region = locate_region(original)
     outside = original if region is None else without_region(original, region)
+    adopted = False
+    adopted_candidate = None
     if HOOK_NAME in outside:
-        refuse("config.toml references fm-turn-end.sh outside the Firstmate-owned region.")
+        if region is not None or ACTION != "install":
+            refuse("config.toml references fm-turn-end.sh outside the Firstmate-owned region.")
+        adopted_candidate = adopt_unmarked_block(outside)
+        adopted = True
 
     if ACTION == "install":
         if os.path.lexists(REGISTRY):
@@ -242,7 +336,9 @@ try:
                 b"#!/usr/bin/env bash\n# Firstmate Kimi turn-end hook."
             ):
                 refuse(f"Firstmate hook path has unexpected content at {HOOK}.")
-        if region is None:
+        if adopted:
+            candidate = adopted_candidate
+        elif region is None:
             marker = BEGIN if original.endswith(b"\n") else BEGIN_OWNS_NEWLINE
             addition = block(marker)
             candidate = original + (b"" if original.endswith(b"\n") else b"\n") + addition
@@ -261,6 +357,8 @@ try:
             atomic_write(HOOK, HOOK_BYTES, 0o700)
         if candidate != original:
             atomic_write(CONFIG, candidate, stat.S_IMODE(config_info.st_mode))
+        if adopted:
+            print(ADOPTED_NOTICE)
     else:
         validate_firstmate_files_for_remove()
         candidate = outside
