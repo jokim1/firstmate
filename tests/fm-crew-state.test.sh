@@ -1074,7 +1074,10 @@ test_terminal_passed_without_readable_pr_identity_reports_unknown() {
   local d; d=$(new_case passed-no-pr)
   make_repo_on_branch "$d/wt" fm/feat-dnopr
   make_fakebin "$d" >/dev/null
-  fm_write_meta "$d/state/feat-dnopr.meta" "window=fm:fm-feat-dnopr" "worktree=$d/wt" "kind=ship"
+  fm_write_meta "$d/state/feat-dnopr.meta" "window=fm:fm-feat-dnopr" \
+    "worktree=$d/wt" "kind=ship" "pr=https://github.com/o/r/pull/47"
+  FM_FAKE_PR_47_STATE=MERGED
+  FM_FAKE_PR_47_MERGED=true
   FM_FAKE_AXI_STATUS="$(run_passed_no_pr fm/feat-dnopr)"
   local out; out=$(run_crew_state "$d" feat-dnopr)
   assert_contains "$out" "state: done" "passed run without PR identity -> done"

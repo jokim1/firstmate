@@ -305,12 +305,6 @@ passed_pr_detail() {
     host=$FM_PR_HOST
     path=$FM_PR_PATH
     number=$FM_PR_NUMBER
-  elif fm_pr_metadata_identity_parse "$META"; then
-    provider=$FM_PR_META_PROVIDER
-    url=$FM_PR_META_URL
-    host=$FM_PR_META_HOST
-    path=$FM_PR_META_PATH
-    number=$FM_PR_META_NUMBER
   else
     printf 'run passed: PR state unknown (no PR identity)'
     return
