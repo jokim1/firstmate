@@ -2225,6 +2225,40 @@ test_recorded_inode_drift_still_disarms_pr_poll() {
   pass "recorded inode drift still disarms, and the wake names the stopped merge watching"
 }
 
+# fm-spawn --relaunch re-materialises meta with control_relaunch_tx after the
+# preserved pr= lines, and fm-captain-hold appends decisions_reviewed= and
+# decision_keys= after them. Poll authentication must not depend on the order
+# keys appear in meta; only lines that are not well-formed key=value may fail
+# the identity parse once pr= has been seen.
+test_meta_key_order_does_not_disarm_pr_poll() {
+  local dir state rc
+  dir=$(make_case meta-key-order-not-disarmed)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/1 >/dev/null 2>/dev/null \
+    || fail "could not arm poll for the meta key-order fixture"
+  printf 'control_relaunch_tx=1234.20260914T090000Z.99\n' >> "$state/task-a.meta"
+  printf 'decisions_reviewed=1\ndecision_keys=nm-1\n' >> "$state/task-a.meta"
+  fm_pr_metadata_identity_parse "$state/task-a.meta" \
+    || fail "meta with relaunch and captain-hold keys after pr= failed the poll identity parse"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "meta key order after pr= disarmed a byte-identical poll"
+  add_stop_custom_check "$dir"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "meta key-order watcher cycle failed: $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in check:*task-a.check.sh:*merged) ;; *) fail "meta key-order poll did not surface its merge: $(cat "$dir/watch.out")" ;; esac
+  assert_poll_absent "$state" task-a
+
+  printf 'not-a-key-line\n' >> "$state/task-a.meta"
+  if fm_pr_metadata_identity_parse "$state/task-a.meta"; then
+    fail "junk without a key was accepted after pr="
+  fi
+  pass "poll authentication does not depend on meta key order"
+}
+
 test_rejected_poll_families_keep_the_merge_loss_warning() {
   local dir state suffix shape external rc
   for suffix in pr-poll-registration pr-poll; do
@@ -2297,6 +2331,7 @@ test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
 test_device_drift_does_not_disarm_pr_poll
 test_recorded_inode_drift_still_disarms_pr_poll
+test_meta_key_order_does_not_disarm_pr_poll
 test_rejected_poll_families_keep_the_merge_loss_warning
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation

@@ -335,7 +335,14 @@ fm_pr_metadata_identity_parse() {
       x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*)
         ;;
       *)
-        [ "$seen_pr" -eq 0 ] || post_pr_invalid=1
+        # Meta gains keys from many append-only writers (relaunch
+        # transactions, captain holds), so key order after pr= is not
+        # stable. Only well-formed key=value lines are tolerated there;
+        # the binding invariants above (exactly one canonical pr=, valid
+        # pr_head format) still carry the authentication check.
+        if [ "$seen_pr" -eq 1 ]; then
+          [[ "$line" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*= ]] || post_pr_invalid=1
+        fi
         ;;
     esac
   done < "$file"
