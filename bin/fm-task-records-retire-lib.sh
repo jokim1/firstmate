@@ -187,8 +187,9 @@ fm_task_records_validate_busy_cleanup() {  # <state-dir> <id> <gen>
   fi
 }
 
-fm_task_records_validate_pr_poll_cleanup() {  # <state-dir> <id>
-  local state_dir=$1 id=$2 state_device artifact has_artifact=0
+fm_task_records_validate_pr_poll_cleanup() {  # <state-dir> <id> [meta-bound|meta-less]
+  local state_dir=$1 id=$2 validation=${3:-meta-bound}
+  local state_device artifact has_artifact=0 validator
   fm_task_id_path_safe "$id" || return 0
   for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
     "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
@@ -212,18 +213,23 @@ fm_task_records_validate_pr_poll_cleanup() {  # <state-dir> <id>
   done
   if [ -e "$state_dir/$id.pr-poll-retirement" ] \
     || [ -L "$state_dir/$id.pr-poll-retirement" ]; then
-    fm_pr_poll_retirement_state_valid "$state_dir" "$id" || {
+    case "$validation" in
+      meta-bound) validator=fm_pr_poll_retirement_state_valid ;;
+      meta-less) validator=fm_pr_poll_retirement_state_valid_without_meta ;;
+      *) return 1 ;;
+    esac
+    "$validator" "$state_dir" "$id" || {
       echo "REFUSED: invalid PR-poll retirement receipt; preserving task state." >&2
       return 1
     }
   fi
 }
 
-fm_task_records_remove_pr_poll_artifacts() {  # <state-dir> <id>
-  local state_dir=$1 id=$2
-  fm_task_records_validate_pr_poll_cleanup "$state_dir" "$id" || return 1
+fm_task_records_remove_pr_poll_artifacts() {  # <state-dir> <id> [meta-bound|meta-less]
+  local state_dir=$1 id=$2 validation=${3:-meta-bound}
+  fm_task_records_validate_pr_poll_cleanup "$state_dir" "$id" "$validation" || return 1
   fm_pr_poll_retirement_recover_one "$state_dir" "$id" \
-    "$FM_TASK_RECORDS_RETIRE_BIN/fm-pr-poll.sh" || return 1
+    "$FM_TASK_RECORDS_RETIRE_BIN/fm-pr-poll.sh" "$validation" || return 1
   fm_pr_poll_merge_notified_remove "$state_dir" "$id" || return 1
   rm -f "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
     "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \

@@ -59,6 +59,24 @@ seed_all_watcher_markers() {  # <state> <id> <tag>
   ' _ "$ROOT" "$2" "$3"
 }
 
+seed_pr_retirement_receipt() {  # <state> <id> <url>
+  FM_ROOT_OVERRIDE="$ROOT" bash -c '
+    set -u
+    . "$1/bin/fm-pr-lib.sh"
+    state=$2
+    id=$3
+    url=$4
+    printf "pr=%s\n" "$url" > "$state/$id.meta"
+    fm_pr_url_parse "$url" || exit 1
+    fm_pr_poll_prepare "$state" "$id" "$FM_PR_PROVIDER" "$url" \
+      "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" "$1/bin/fm-pr-poll.sh" || exit 1
+    fm_pr_poll_publish_prepared || exit 1
+    fm_pr_poll_snapshot_capture "$state" "$id" "$1/bin/fm-pr-poll.sh" || exit 1
+    fm_pr_poll_retirement_publish "$state" "$id" "$1/bin/fm-pr-poll.sh" merged || exit 1
+    rm -f "$state/$id.meta"
+  ' _ "$ROOT" "$1" "$2" "$3"
+}
+
 # The adversarial-review regressions below answer the four blocking findings
 # of the 2026-09-14 review of this change (report: data/fm-advreview-53-codex).
 
@@ -565,6 +583,43 @@ test_finish_cleanup_preflights_late_pr_refusal() {
   [ -f "$token_auth" ] || fail "late PR refusal deregistered the turn-end hook"
   [ -L "$state/partial.check.sh" ] || fail "late PR refusal removed the unsafe artifact"
   pass "finish-cleanup preflights late writer refusals before any mutation"
+}
+
+test_finish_cleanup_retires_meta_less_pr_retirement_receipt() {
+  local dir state rc suffix
+  dir=$(make_case finish-cleanup-pr-retirement)
+  state="$dir/state"
+  printf 'done: merged\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+  seed_pr_retirement_receipt "$state" partial https://github.com/o/r/pull/42 \
+    || fail "could not seed a valid meta-less PR retirement receipt"
+
+  rc=0
+  run_gc "$state" partial --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "finish-cleanup refused a valid meta-less PR retirement receipt: $(cat "$dir/gc.err")"
+  for suffix in status turn-ended check.sh pr-poll pr-poll-registration pr-poll-retirement; do
+    [ ! -e "$state/partial.$suffix" ] \
+      || fail "finish-cleanup left the validated partial.$suffix record"
+  done
+
+  dir=$(make_case finish-cleanup-cross-task-pr-retirement)
+  state="$dir/state"
+  printf 'done: merged\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+  seed_pr_retirement_receipt "$state" other https://github.com/o/r/pull/43 \
+    || fail "could not seed the cross-task PR retirement receipt"
+  for suffix in check.sh pr-poll pr-poll-registration pr-poll-retirement; do
+    mv "$state/other.$suffix" "$state/partial.$suffix"
+  done
+
+  rc=0
+  run_gc "$state" partial --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup accepted a cross-task PR retirement receipt (rc=$rc)"
+  for suffix in status turn-ended check.sh pr-poll pr-poll-registration pr-poll-retirement; do
+    [ -e "$state/partial.$suffix" ] \
+      || fail "cross-task receipt refusal removed partial.$suffix"
+  done
+  pass "finish-cleanup retires bound meta-less PR receipts and refuses cross-task receipts"
 }
 
 test_finish_cleanup_refuses_symlinked_turnend_token_without_mutation() {
@@ -1215,6 +1270,7 @@ test_other_surviving_records_refuse
 test_invalid_and_absent_ids_refuse
 test_finish_cleanup_retires_partial_records_through_their_writers
 test_finish_cleanup_preflights_late_pr_refusal
+test_finish_cleanup_retires_meta_less_pr_retirement_receipt
 test_finish_cleanup_refuses_symlinked_turnend_token_without_mutation
 test_finish_cleanup_preflights_turnend_auth_target
 test_finish_cleanup_refuses_hardlinked_turnend_auth_target

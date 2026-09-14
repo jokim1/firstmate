@@ -508,7 +508,7 @@ gc_finish_interrupted_cleanup() {
       || { echo "error: unsafe task $ID grok turn-end token record; preserving task state" >&2; exit 1; }
   fi
   if [ "$prpoll" = 1 ]; then
-    fm_task_records_validate_pr_poll_cleanup "$STATE" "$ID" \
+    fm_task_records_validate_pr_poll_cleanup "$STATE" "$ID" meta-less \
       || { echo "error: unsafe task $ID PR-check artifacts; preserving task state" >&2; exit 1; }
   fi
   if [ "$busy" = 1 ]; then
@@ -540,7 +540,7 @@ gc_finish_interrupted_cleanup() {
       || { echo "error: could not retire task $ID's busy-state record through bin/fm-busy-event.sh" >&2; exit 1; }
   fi
   if [ "$prpoll" = 1 ]; then
-    fm_task_records_remove_pr_poll_artifacts "$STATE" "$ID" \
+    fm_task_records_remove_pr_poll_artifacts "$STATE" "$ID" meta-less \
       || { echo "error: could not retire task $ID's PR-check artifacts through bin/fm-pr-lib.sh" >&2; exit 1; }
   fi
   if [ "$residue" = 1 ]; then
