@@ -2337,10 +2337,37 @@ test_rejected_poll_families_keep_the_merge_loss_warning() {
   rc=$?
   set -e
   [ "$rc" -eq 0 ] || fail "actionable-check rejection watcher failed: $(cat "$dir/watch.err")"
-  grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
-    || fail "actionable custom check starved the lost merge warning: $(cat "$dir/watch.out")"
+  grep -F 'actionable-check' "$dir/watch.out" >/dev/null \
+    || fail "rejection warning prevented the actionable custom check from executing: $(cat "$dir/watch.out")"
   grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
     || fail "actionable custom check starved the durable PR-poll wake row"
+  grep -F 'merge watching stopped' "$state/.wake-queue" >/dev/null \
+    || fail "actionable custom check stripped the lost merge warning from its durable row"
+
+  dir=$(make_case rejected-poll-with-valid-merge)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  write_task_meta "$dir" task-b
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/6 >/dev/null 2>"$dir/task-a.err" \
+    || fail "could not arm rejected poll beside valid merge: $(cat "$dir/task-a.err")"
+  run_check_entry "$dir" task-b https://github.com/o/r/pull/7 >/dev/null 2>"$dir/task-b.err" \
+    || fail "could not arm valid merge beside rejected poll: $(cat "$dir/task-b.err")"
+  drift_recorded_inode "$state/task-a.pr-poll-registration"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "valid-merge rejection watcher failed: $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in
+    check:*task-b.check.sh:*merged) ;;
+    *) fail "rejected poll starved the valid merge notification: $(cat "$dir/watch.out")" ;;
+  esac
+  assert_poll_absent "$state" task-b
+  [ -e "$state/task-a.check.sh" ] || fail "rejected poll was removed while the valid poll ran"
+  grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+    || fail "valid merged poll dropped the durable rejection row"
+  grep -F 'merge watching stopped' "$state/.wake-queue" >/dev/null \
+    || fail "valid merged poll stripped the lost merge warning from its durable row"
   pass "all malformed poll families warn of merge loss without rejection starvation"
 }
 
