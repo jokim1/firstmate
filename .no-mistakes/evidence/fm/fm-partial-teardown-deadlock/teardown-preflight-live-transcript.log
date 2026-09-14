@@ -1,0 +1,7 @@
+ok - teardown refuses hard-linked turn-end auth before runtime mutation
+ok - teardown preflights status presentation records before runtime mutation
+ok - teardown preflights busy-state shape before runtime mutation
+ok - teardown preflights residue shape before runtime mutation
+ok - forced secondmate teardown preflights descendant records before mutation
+ok - forced secondmate teardown preflights descendant status presentation records
+ok - forced secondmate teardown refuses FIFO busy generations promptly

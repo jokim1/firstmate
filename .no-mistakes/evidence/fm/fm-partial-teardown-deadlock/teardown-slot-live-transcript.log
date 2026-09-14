@@ -1,0 +1,5 @@
+ok - a slot collision whose other record is the proven live owner retires the stale record without touching the slot
+ok - the slot-collision refusal stands without --force even when the owner is provable
+ok - the forward path refuses when the other record cannot be proven the live owner
+ok - the forward path refuses while this record's own endpoint may still be live
+ok - --retire-foreign-worktree is a usage error without --force and without a real collision

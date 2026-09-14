@@ -1,0 +1,6 @@
+ok - finish-cleanup retires a partial cleanup through each record's own writer, kimi hook auth included
+ok - finish-cleanup refuses hard-linked turn-end auth targets atomically
+ok - finish-cleanup preflights every residue before any mutation
+ok - finish-cleanup preflights both busy-state files before any mutation
+ok - finish-cleanup preflights status presentation retirement before mutation
+ok - finish-cleanup never retires records of unfinished work
