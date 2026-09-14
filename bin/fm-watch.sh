@@ -78,6 +78,11 @@
 #                          stays queued and never once it is acknowledged
 #   check: rejected unauthenticated state checks: <paths>
 #                          unsafe state checks were refused without execution
+#   check: merge watching stopped - PR poll rejected as unauthenticated: <ids> ...
+#                          a task's armed PR merge poll failed authentication and
+#                          was refused without execution, so merge notifications
+#                          for those tasks are lost until each poll is re-armed
+#                          with bin/fm-pr-check.sh <task-id> <pr-url>
 #   check: rejected unauthenticated PR poll retirement receipts: <paths>
 #                          invalid pending retirements were preserved without
 #                          running a check or removing poll artifacts
@@ -2058,6 +2063,7 @@ EOF
   # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
   if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
     rejected_checks=
+    rejected_pr_polls=
     for c in "$STATE"/*.check.sh; do
       [ -e "$c" ] || continue
       is_pr_poll=0
@@ -2089,7 +2095,11 @@ EOF
           fm_custom_check_snapshot_cleanup
         else
           fm_custom_check_snapshot_cleanup
-          rejected_checks="$rejected_checks $c"
+          if [ -f "$STATE/$id.pr-poll-registration" ] && [ ! -L "$STATE/$id.pr-poll-registration" ]; then
+            rejected_pr_polls="$rejected_pr_polls $id"
+          else
+            rejected_checks="$rejected_checks $c"
+          fi
           continue
         fi
       fi
@@ -2123,6 +2133,12 @@ EOF
     if [ -n "$rejected_checks" ]; then
       reason="check: rejected unauthenticated state checks:$rejected_checks"
       fm_wake_append check unauthenticated-state-checks "$reason" || exit 1
+      touch "$STATE/.last-check"
+      wake "$reason"
+    fi
+    if [ -n "$rejected_pr_polls" ]; then
+      reason="check: merge watching stopped - PR poll rejected as unauthenticated:$rejected_pr_polls - merge notifications for these tasks are lost until each is re-armed with bin/fm-pr-check.sh <task-id> <pr-url>"
+      fm_wake_append check unauthenticated-pr-polls "$reason" || exit 1
       touch "$STATE/.last-check"
       wake "$reason"
     fi

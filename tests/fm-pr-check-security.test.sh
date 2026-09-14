@@ -2129,6 +2129,98 @@ test_gitlab_merged_poll_retires() {
   pass "GitHub and GitLab exact merged results share one retirement path"
 }
 
+# Simulate a macOS remount by rewriting only the recorded device component of
+# a registration or retirement receipt in place. Rewriting through cat keeps
+# the file's inode, so exactly one thing drifts, matching the 2026-09-14
+# incident where live device numbers changed and every recorded byte matched.
+drift_recorded_device() {  # <file>
+  local file=$1 tmp
+  tmp="$file.drift-tmp"
+  awk '$0 ~ /^[0-9]+:[0-9]+$/ { sub(/^[0-9]+:/, "99999999:") } { print }' "$file" > "$tmp" \
+    || { rm -f "$tmp"; return 1; }
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+  chmod 0600 "$file"
+}
+
+# Rewrite the recorded inode component instead, simulating a file that was
+# actually replaced and must lose authentication.
+drift_recorded_inode() {  # <file>
+  local file=$1 tmp
+  tmp="$file.drift-tmp"
+  awk '$0 ~ /^[0-9]+:[0-9]+$/ { sub(/:[0-9]+$/, ":1") } { print }' "$file" > "$tmp" \
+    || { rm -f "$tmp"; return 1; }
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+  chmod 0600 "$file"
+}
+
+test_device_drift_does_not_disarm_pr_poll() {
+  local dir state rc
+  dir=$(make_case device-drift-not-disarmed)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  drift_recorded_device "$state/task-a.pr-poll-registration"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "recorded device drift disarmed a byte-identical poll"
+  add_stop_custom_check "$dir"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "device-drift watcher cycle failed: $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in check:*task-a.check.sh:*merged) ;; *) fail "device-drift poll did not surface its merge: $(cat "$dir/watch.out")" ;; esac
+  assert_poll_absent "$state" task-a
+  ! grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+    || fail "an authenticated drifted poll was reported as disarmed: $(cat "$dir/watch.out")"
+
+  # The same drift on a pending retirement receipt must not strand its
+  # fixed-path removal across a restart either.
+  dir=$(make_case device-drift-receipt-recovery)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/2
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/2
+  fm_pr_poll_snapshot_capture "$state" task-a "$POLL" \
+    || fail "could not snapshot drifted-device receipt fixture"
+  fm_pr_poll_retirement_publish "$state" task-a "$POLL" merged \
+    || fail "could not publish drifted-device receipt fixture"
+  drift_recorded_device "$state/task-a.pr-poll-retirement"
+  add_stop_custom_check "$dir"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/restart.out" 2> "$dir/restart.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "device-drift receipt recovery watcher failed: $(cat "$dir/restart.err")"
+  assert_poll_absent "$state" task-a
+  pass "recorded device drift neither disarms a poll nor strands retirement removal"
+}
+
+test_recorded_inode_drift_still_disarms_pr_poll() {
+  local dir state rc
+  dir=$(make_case inode-drift-disarms)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/3
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/3
+  drift_recorded_inode "$state/task-a.pr-poll-registration"
+  if fm_pr_poll_artifacts_valid "$state" task-a "$POLL"; then
+    fail "recorded inode drift left a replaced file authenticated"
+  fi
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "inode-drift watcher cycle failed: $(cat "$dir/watch.err")"
+  grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+    || fail "rejected PR poll did not name its lost merge watching: $(cat "$dir/watch.out")"
+  grep -F 'task-a' "$dir/watch.out" >/dev/null \
+    || fail "rejected PR poll wake did not name the affected task: $(cat "$dir/watch.out")"
+  grep -F 'bin/fm-pr-check.sh' "$dir/watch.out" >/dev/null \
+    || fail "rejected PR poll wake did not name the re-arm path: $(cat "$dir/watch.out")"
+  [ -e "$state/task-a.check.sh" ] || fail "rejected PR poll lost its runnable check"
+  pass "recorded inode drift still disarms, and the wake names the stopped merge watching"
+}
+
 test_parser_matrix
 test_gitlab_merge_watch
 test_merged_poll_retires_once
@@ -2143,6 +2235,8 @@ test_external_merge_transition_retires_only_terminal_poll
 test_retirement_refuses_replacement_and_nonterminal_results
 test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
+test_device_drift_does_not_disarm_pr_poll
+test_recorded_inode_drift_still_disarms_pr_poll
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
 test_rejected_metacharacter_bytes_are_inert
