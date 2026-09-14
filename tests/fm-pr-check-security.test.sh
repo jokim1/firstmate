@@ -2368,6 +2368,27 @@ test_rejected_poll_families_keep_the_merge_loss_warning() {
     || fail "valid merged poll dropped the durable rejection row"
   grep -F 'merge watching stopped' "$state/.wake-queue" >/dev/null \
     || fail "valid merged poll stripped the lost merge warning from its durable row"
+
+  dir=$(make_case poll-shape-overrides-custom-trust)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/8 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm custom-trust rejection poll: $(cat "$dir/seed.err")"
+  chmod 0700 "$state/task-a.check.sh"
+  FM_HOME="$dir/home" "$REGISTER" task-a >/dev/null \
+    || fail "could not register poll-shaped check as a custom check"
+  set +e
+  run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "custom-trust rejection watcher failed: $(cat "$dir/watch.err")"
+  grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+    || fail "custom trust masked the rejected PR poll warning: $(cat "$dir/watch.out")"
+  grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+    || fail "custom trust diverted a poll-shaped check from the PR-poll wake row"
+  ! grep "$(printf '\tcheck\tunauthenticated-state-checks\t')" "$state/.wake-queue" >/dev/null \
+    || fail "custom trust misclassified a rejected poll as a generic check"
+  [ -e "$state/task-a.check.sh" ] || fail "custom-trust rejection removed the poll check"
   pass "all malformed poll families warn of merge loss without rejection starvation"
 }
 

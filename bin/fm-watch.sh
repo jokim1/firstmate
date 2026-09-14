@@ -2074,16 +2074,18 @@ EOF
         continue
       fi
       id=$(basename "$c" .check.sh)
-      if fm_pr_poll_artifacts_valid "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
-        || fm_custom_check_registered "$STATE" "$id"; then
-        continue
-      fi
       if [ -e "$STATE/$id.pr-poll-registration" ] || [ -L "$STATE/$id.pr-poll-registration" ] \
         || [ -e "$STATE/$id.pr-poll" ] || [ -L "$STATE/$id.pr-poll" ]; then
+        if fm_pr_poll_artifacts_valid "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
+          continue
+        fi
         rejected_pr_polls="$rejected_pr_polls $id"
-      else
-        rejected_checks="$rejected_checks $c"
+        continue
       fi
+      if fm_custom_check_registered "$STATE" "$id"; then
+        continue
+      fi
+      rejected_checks="$rejected_checks $c"
     done
     rejection_reason=
     if [ -n "$rejected_checks" ]; then
@@ -2114,16 +2116,21 @@ EOF
         fi
       else
         id=$(basename "$c" .check.sh)
-        if fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
-          is_pr_poll=1
-          provider=$FM_PR_POLL_SNAPSHOT_PROVIDER
-          url=$FM_PR_POLL_SNAPSHOT_URL
-          host=$FM_PR_POLL_SNAPSHOT_HOST
-          path=$FM_PR_POLL_SNAPSHOT_PATH
-          number=$FM_PR_POLL_SNAPSHOT_NUMBER
-          run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
-            "$provider" "$url" "$host" "$path" "$number" || exit 1
-          out=$FM_CHECK_RESULT
+        if [ -e "$STATE/$id.pr-poll-registration" ] || [ -L "$STATE/$id.pr-poll-registration" ] \
+          || [ -e "$STATE/$id.pr-poll" ] || [ -L "$STATE/$id.pr-poll" ]; then
+          if fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
+            is_pr_poll=1
+            provider=$FM_PR_POLL_SNAPSHOT_PROVIDER
+            url=$FM_PR_POLL_SNAPSHOT_URL
+            host=$FM_PR_POLL_SNAPSHOT_HOST
+            path=$FM_PR_POLL_SNAPSHOT_PATH
+            number=$FM_PR_POLL_SNAPSHOT_NUMBER
+            run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
+              "$provider" "$url" "$host" "$path" "$number" || exit 1
+            out=$FM_CHECK_RESULT
+          else
+            continue
+          fi
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
           custom_snapshot=$FM_CUSTOM_CHECK_SNAPSHOT
           run_check_capture "$custom_snapshot" || exit 1
