@@ -35,6 +35,10 @@
 #   schema=fm-task-inbox.v1
 #   at=<utc timestamp>
 #   delivery=fire-and-forget   present only when the re-ring ladder must ignore it
+#   resolve-status-file=<absolute status file>  optional --resolve-key ledger
+#   resolve-status-line=<resolved status line>  repeatable, written on handled/
+#   resolve-hold-key=<captain-held task id>     repeatable, answered on handled/
+#   resolve-answer=<single-line answer text>    paired with resolve-hold-key
 #   --
 #   <exact message text; newlines are legal; a marked secondmate request keeps
 #    its from-firstmate marker and corr token verbatim in this body>
@@ -75,6 +79,8 @@ _FM_TASK_INBOX_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # recursively duplicate the full backend graph for every inbox consumer.
 # shellcheck source=/dev/null
 . "$_FM_TASK_INBOX_LIB_DIR/fm-wake-lib.sh"
+# shellcheck source=/dev/null
+. "$_FM_TASK_INBOX_LIB_DIR/fm-classify-lib.sh"
 # shellcheck source=/dev/null
 . "$_FM_TASK_INBOX_LIB_DIR/fm-backend.sh"
 
@@ -152,6 +158,10 @@ _fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode]
     printf 'schema=%s\n' "$FM_TASK_INBOX_SCHEMA"
     printf 'at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     [ "$delivery_mode" != fire-and-forget ] || printf 'delivery=fire-and-forget\n'
+    [ -z "${FM_TASK_INBOX_RESOLVE_STATUS_FILE:-}" ] || printf 'resolve-status-file=%s\n' "$FM_TASK_INBOX_RESOLVE_STATUS_FILE"
+    [ -z "${FM_TASK_INBOX_RESOLVE_STATUS_LINES:-}" ] || printf '%s' "$FM_TASK_INBOX_RESOLVE_STATUS_LINES"
+    [ -z "${FM_TASK_INBOX_RESOLVE_HOLD_KEYS:-}" ] || printf '%s' "$FM_TASK_INBOX_RESOLVE_HOLD_KEYS"
+    [ -z "${FM_TASK_INBOX_RESOLVE_ANSWER:-}" ] || printf 'resolve-answer=%s\n' "$FM_TASK_INBOX_RESOLVE_ANSWER"
     printf -- '--\n'
     printf '%s' "$text"
   } > "$tmp" && mv "$tmp" "$rec" || status=1
@@ -248,6 +258,67 @@ fm_task_inbox_body() {  # <record-path>
     fi
   done < "$1"
   return 1
+}
+
+fm_task_inbox_header_values() {  # <record-path> <name>
+  local rec=$1 name=$2 line
+  [ -f "$rec" ] || return 1
+  while IFS= read -r line; do
+    [ "$line" != -- ] || return 0
+    case "$line" in
+      "$name="*) printf '%s\n' "${line#*=}" ;;
+    esac
+  done < "$rec"
+}
+
+fm_task_inbox_resolve_marker() {  # <state-dir> <task-id> <record-path>
+  printf '%s/%s.inbox/.resolved/%s\n' "$1" "$2" "${3##*/}"
+}
+
+fm_task_inbox_resolve_acknowledged() {  # <state-dir> <task-id> <handled-record>
+  local state=$1 task=$2 rec=$3 marker status_file answer line key lines='' rc=0
+  marker=$(fm_task_inbox_resolve_marker "$state" "$task" "$rec")
+  [ ! -e "$marker" ] || return 0
+  status_file=$(fm_task_inbox_header_values "$rec" resolve-status-file | head -1)
+  if [ -n "$status_file" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      key=$(_fm_decision_key "$line") || return 1
+      case "$(status_open_decisions "$status_file")" in
+        "$key"$'\t'*|*$'\n'"$key"$'\t'*) ;;
+        *) continue ;;
+      esac
+      fm_wake_status_append_self_announced "${status_file%/*}" "$status_file" "$line" || rc=$?
+      [ "$rc" -ne 2 ] || return 1
+    done <<EOF
+$(fm_task_inbox_header_values "$rec" resolve-status-line)
+EOF
+  fi
+  answer=$(fm_task_inbox_header_values "$rec" resolve-answer | head -1)
+  if [ -n "$answer" ]; then
+    while IFS= read -r key; do
+      [ -n "$key" ] || continue
+      lines="${lines}${key}"$'\t'"${answer}"$'\t'$'\n'
+    done <<EOF
+$(fm_task_inbox_header_values "$rec" resolve-hold-key)
+EOF
+    if [ -n "$lines" ]; then
+      printf '%s' "$lines" | "$_FM_TASK_INBOX_LIB_DIR/fm-captain-hold.sh" answers \
+        --source "a firstmate answer acknowledged from $task inbox" >/dev/null 2>&1 || return 1
+    fi
+  fi
+  mkdir -p "${marker%/*}" || return 1
+  : > "$marker" || return 1
+}
+
+fm_task_inbox_resolve_handled() {  # <state-dir> <task-id>
+  local state=$1 task=$2 dir rec
+  dir=$(fm_task_inbox_handled_dir "$state" "$task")
+  [ -d "$dir" ] || return 0
+  for rec in "$dir"/*.msg; do
+    [ -e "$rec" ] || continue
+    fm_task_inbox_resolve_acknowledged "$state" "$task" "$rec" || return 1
+  done
 }
 
 # The constant self-describing doorbell line for the inbox containing a record.

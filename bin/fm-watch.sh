@@ -422,6 +422,12 @@ inbox_steer_escalate_unavailable() {  # <window> <task> <record>
 # while an unacknowledged instruction past the ladder is a stuck steer.
 inbox_steer_check() {  # <window> <task>
   local w=$1 task=$2 action verb rec count tail40 reason ring_rc backend agent_state
+  fm_task_inbox_resolve_handled "$STATE" "$task" || {
+    reason="stale: $w (steering-inbox handled acknowledgement could not close its recorded decision metadata; inspect $STATE/$task.inbox/handled)"
+    fm_wake_append stale "$w" "$reason" || exit 1
+    wake "$reason"
+    return 0
+  }
   action=$(fm_task_inbox_due_action "$STATE" "$task") || return 0
   verb=${action%% *}
   [ "$verb" != quiet ] || return 0

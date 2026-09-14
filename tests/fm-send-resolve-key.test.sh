@@ -4,10 +4,10 @@
 # A captain decision opened by a keyed needs-decision:/blocked: status line
 # historically stayed open forever when the answer kicked off work: the worker's
 # next line is working [key=<workstream>], never resolved [key=<decision>].
-# fm-send's --resolve-key removes that writer-dependency at its source: the
-# ANSWERING firstmate closes the decision in this home's own ledger at answer
-# time - for a local target that is ENQUEUE time, because the durable inbox
-# write is delivery to the task's record. These tests drive the real fm-send
+# fm-send's --resolve-key removes that writer-dependency at its source for a
+# confirmed typed answer, while inbox-plane answers stay pending until the
+# worker acknowledges the durable record by moving it into handled/. These tests
+# drive the real fm-send
 # executable over stubbed transports and assert closure through the real
 # consumer (fm-wake-drain.sh's OPEN DECISIONS section), never through source
 # text:
@@ -16,12 +16,12 @@
 #   2. A routine steer without the flag never closes anything, and a working:/
 #      done: line still cannot clear a captain decision.
 #   3. A key that is not open refuses BEFORE anything is sent (mistype safety).
-#   4. The close happens at enqueue: a failed doorbell ring still closes the
-#      answered key (the record is durably sent), while a failed ENQUEUE - the
+#   4. A failed doorbell leaves the answered key pending and visible, then the
+#      handled/ acknowledgement closes it exactly once; a failed ENQUEUE - the
 #      real local failure - closes nothing and leaves the decision open.
-#   5. A local secondmate answer is marked+corr'd in its record yet closes the
-#      same way, and the closing line carries the plain answer, not marker or
-#      corr bytes.
+#   5. A local secondmate answer is marked+corr'd in its record yet remains
+#      pending the same way, and the pending line carries the plain answer, not
+#      marker or corr bytes.
 #   6. A remote secondmate answer differs only at the transport layer: the
 #      message crosses the stubbed ssh transport while the close is the same
 #      local ledger append; a failed transport closes nothing.
@@ -115,6 +115,13 @@ setup_home() {  # <name> -> echoes a fresh home dir with an empty state/
 
 drain_out() {  # <home>
   FM_STATE_OVERRIDE="$1/state" "$DRAIN" 2>/dev/null
+}
+
+resolve_handled() {  # <home> <task>
+  FM_STATE_OVERRIDE="$1/state" bash -c '
+    . "$1"
+    fm_task_inbox_resolve_handled "$2" "$3"
+  ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$1/state" "$2"
 }
 
 test_answer_send_closes_open_decision() {
@@ -303,6 +310,14 @@ test_failed_ring_keeps_decision_pending_delivery() {
     || fail "the blocker vanished after a failed doorbell pending-delivery state: $out"
   printf '%s' "$out" | grep -F 'pending-delivery' >/dev/null \
     || fail "the open decision should identify pending delivery: $out"
+  mkdir -p "$home/state/t5.inbox/handled"
+  mv "$home/state/t5.inbox/001.msg" "$home/state/t5.inbox/handled/"
+  resolve_handled "$home" t5 || fail "handled acknowledgement should resolve the pending-delivery decision"
+  resolve_handled "$home" t5 || fail "handled acknowledgement resolution should be idempotent"
+  out=$(drain_out "$home")
+  if printf '%s' "$out" | grep -F '[key=creds]' >/dev/null; then
+    fail "the acknowledged blocker still lists as open: $out"
+  fi
   pass "fm-send --resolve-key: a failed doorbell keeps the decision visible as pending delivery"
 }
 

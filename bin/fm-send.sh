@@ -603,6 +603,13 @@ if [ -n "$RESOLVE_KEYS" ]; then
   for k in $RESOLVE_KEYS; do
     case "$resolve_open_set" in
       "$k"$'\t'*|*$'\n'"$k"$'\t'*)
+        resolve_open_line=$(printf '%s' "$resolve_open_set" | awk -F '\t' -v key="$k" '$1 == key { print; exit }')
+        case "$resolve_open_line" in
+          "$k"$'\t'"pending-delivery"$'\t'*)
+            echo "error: --resolve-key '$k' is already pending delivery in $RESOLVE_STATUS_FILE; do not resend the answer. Wait for the worker to acknowledge the existing inbox record, or inspect the task inbox if it is stuck." >&2
+            exit 1
+            ;;
+        esac
         RESOLVE_STATUS_KEYS="${RESOLVE_STATUS_KEYS}${RESOLVE_STATUS_KEYS:+ }$k"
         continue
         ;;
@@ -692,6 +699,33 @@ fm_send_mark_pending_delivery_keys() {  # <answer-text>
       return 1
     fi
   done
+}
+
+fm_send_prepare_inbox_resolve_metadata() {  # <answer-text>
+  local note=$1 k close_note line hold lines='' holds=''
+  FM_TASK_INBOX_RESOLVE_STATUS_FILE=
+  FM_TASK_INBOX_RESOLVE_STATUS_LINES=
+  FM_TASK_INBOX_RESOLVE_HOLD_KEYS=
+  FM_TASK_INBOX_RESOLVE_ANSWER=
+  [ -n "$RESOLVE_KEYS" ] || return 0
+  note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
+  if [ -n "$RESOLVE_STATUS_KEYS" ]; then
+    FM_TASK_INBOX_RESOLVE_STATUS_FILE=$RESOLVE_STATUS_FILE
+    for k in $RESOLVE_STATUS_KEYS; do
+      close_note=$(fm_send_resolve_close_note "$k" "$note")
+      line="resolved [key=$k]: $close_note"
+      fm_cap_line_var "$line"
+      lines="${lines}resolve-status-line=${FM_LINE_CAP_LINE}"$'\n'
+    done
+    FM_TASK_INBOX_RESOLVE_STATUS_LINES=$lines
+  fi
+  if [ -n "$RESOLVE_HOLD_KEYS" ]; then
+    for hold in $RESOLVE_HOLD_KEYS; do
+      holds="${holds}resolve-hold-key=${hold}"$'\n'
+    done
+    FM_TASK_INBOX_RESOLVE_HOLD_KEYS=$holds
+    FM_TASK_INBOX_RESOLVE_ANSWER=$note
+  fi
 }
 
 # Feed the answered captain-held tasks to the ONE keyed-answer intake, as keyed
@@ -909,6 +943,9 @@ else
     fi
     remote_rc=0
     remote_completion_unknown=0
+    fm_send_prepare_inbox_resolve_metadata "$RESOLVE_ANSWER_TEXT"
+    export FM_TASK_INBOX_RESOLVE_STATUS_FILE FM_TASK_INBOX_RESOLVE_STATUS_LINES
+    export FM_TASK_INBOX_RESOLVE_HOLD_KEYS FM_TASK_INBOX_RESOLVE_ANSWER
     REMOTE_SEND_ARGS=("$TARGET_REMOTE_ID" "$MESSAGE")
     [ -z "$FIRE_AND_FORGET_ID" ] || REMOTE_SEND_ARGS+=(fire-and-forget)
     # Each transport attempt is bounded by FM_SEND_REMOTE_BUDGET seconds.
@@ -979,7 +1016,6 @@ else
     fi
     if [ -n "$RESOLVE_KEYS" ]; then
       fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" || exit 1
-      fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
     fi
     exit 0
   fi
@@ -1013,6 +1049,7 @@ else
       echo "error: steer not sent to $INBOX_TASK_ID: the task retired or changed endpoint during target resolution" >&2
       exit 1
     fi
+    fm_send_prepare_inbox_resolve_metadata "$RESOLVE_ANSWER_TEXT"
     if [ "${FM_SEND_IDEMPOTENT:-0}" = 1 ]; then
       INBOX_RECORD=$(fm_task_inbox_write_idempotent "$STATE" "$INBOX_TASK_ID" "$MESSAGE" \
         "${FIRE_AND_FORGET_ID:+fire-and-forget}") || inbox_write_rc=$?
@@ -1056,7 +1093,6 @@ else
     # inbox record yet: keep each answered decision visible as pending delivery.
     if [ -n "$RESOLVE_KEYS" ]; then
       fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" || exit 1
-      fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
     fi
     # Ring the doorbell, best-effort: no ring outcome changes the exit status,
     # because the watcher owns loss detection from here, either through its
