@@ -1059,13 +1059,18 @@ test_marker_ambiguous_ids_refuse_while_a_colliding_sibling_is_live() {
     [ -f "$state/$marker" ] || fail "the reverse-direction refusal removed the sibling marker $marker"
   done
 
+  : > "$state/a.b.turn-ended"
+  printf '!\n' > "$state/a.b.kimi-turnend-token"
   rc=0
   PATH="$dir/fakebin:$PATH" \
     run_gc "$state" a.b --finish-cleanup > "$dir/gc3.out" 2> "$dir/gc3.err" || rc=$?
   [ "$rc" -eq 1 ] || fail "finish-cleanup retired a.b while a_b was live (rc=$rc)"
   [ -f "$state/a_b.status" ] || fail "finish-cleanup ambiguity refusal removed the sibling status"
+  [ -f "$state/a.b.status" ] || fail "finish-cleanup ambiguity refusal removed the target status"
+  [ -f "$state/a.b.turn-ended" ] || fail "finish-cleanup ambiguity refusal removed target residue before retirement"
+  [ -f "$state/a.b.kimi-turnend-token" ] || fail "finish-cleanup ambiguity refusal removed the target token before retirement"
 
-  rm -f "$state/a_b.meta" "$state/a_b.status"
+  rm -f "$state/a_b.meta" "$state/a_b.status" "$state/a.b.turn-ended" "$state/a.b.kimi-turnend-token"
   rc=0
   PATH="$dir/fakebin:$PATH" \
     run_gc "$state" a.b > "$dir/gc4.out" 2> "$dir/gc4.err" || rc=$?
@@ -1075,6 +1080,27 @@ test_marker_ambiguous_ids_refuse_while_a_colliding_sibling_is_live() {
     [ ! -e "$state/$marker" ] || fail "the stale sibling markers survived after the sibling disappeared: $marker"
   done
   pass "marker-ambiguous ids refuse while a colliding sibling is live, in both directions and both paths"
+}
+
+test_marker_collision_check_is_linear_in_task_id_length() {
+  local dir state task sibling rc
+  dir=$(make_case marker-ambiguity-linear)
+  state="$dir/state"
+  task=a______________________________b
+  sibling=a..............................b
+  printf 'done: underscored task complete\n' > "$state/$task.status"
+  printf 'working: dotted sibling alive\n' > "$state/$sibling.status"
+
+  rc=0
+  FM_STATE_OVERRIDE="$state" FM_ROOT_OVERRIDE="$ROOT" \
+    perl -e 'alarm 3; exec @ARGV' "$GC" "$task" \
+    > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "long marker collision did not refuse promptly (rc=$rc)"
+  grep -F "$sibling" "$dir/gc.err" >/dev/null \
+    || fail "long marker collision did not name its sibling: $(cat "$dir/gc.err")"
+  [ -f "$state/$task.status" ] || fail "long collision refusal removed the target status"
+  [ -f "$state/$sibling.status" ] || fail "long collision refusal removed the sibling status"
+  pass "marker collision checks scan live anchors without exponential id expansion"
 }
 
 # Review finding 4: the old ordering removed the status anchor and then ran a
@@ -1204,4 +1230,5 @@ test_finish_cleanup_refuses_a_live_tmux_endpoint_and_recovers_after_it_dies
 test_finish_cleanup_refuses_a_real_live_tmux_window
 test_finish_cleanup_refuses_a_turnend_auth_record_naming_a_live_sibling
 test_marker_ambiguous_ids_refuse_while_a_colliding_sibling_is_live
+test_marker_collision_check_is_linear_in_task_id_length
 test_gc_killed_during_marker_retirement_converges_on_the_next_run

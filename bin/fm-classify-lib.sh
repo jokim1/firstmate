@@ -1146,26 +1146,30 @@ status_daemon_seen_marker_path() {  # <state> <task-id>
 # '.' or '_' and therefore no possible collision. A full injective re-encoding
 # of the marker namespace is out of scope; instead every ambiguous collision
 # is treated as a refusal by the retirement writer below.
-status_marker_collision_siblings() {  # <task-id>
-  local task=$1
-  local len=${#task} i ch v out
-  local variants
+status_marker_collision_siblings() {  # <state> <task-id>
+  local state=$1 task=$2 task_key candidate path
   case "$task" in *.*|*_*) ;; *) return 0 ;; esac
-  variants=$task
-  for ((i = 0; i < len; i++)); do
-    ch=${task:i:1}
-    case "$ch" in .|_) ;; *) continue ;; esac
-    out=''
-    for v in $variants; do
-      out="$out ${v:0:i}.${v:i+1} ${v:0:i}_${v:i+1}"
-    done
-    variants=$out
+  task_key=${task//./_}
+  for path in "$state"/*.meta "$state"/*.status; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    candidate=${path##*/}
+    case "$candidate" in
+      *.meta) candidate=${candidate%.meta} ;;
+      *.status) candidate=${candidate%.status} ;;
+    esac
+    [ "$candidate" != "$task" ] || continue
+    [ "${candidate//./_}" = "$task_key" ] || continue
+    printf '%s\n' "$candidate"
   done
-  for v in $variants; do
-    [ -n "$v" ] && [ "$v" != "$task" ] || continue
-    case "$v" in .*) continue ;; esac
-    printf '%s\n' "$v"
-  done | sort -u
+}
+
+status_validate_marker_collision() {  # <state> <task-id>
+  local state=$1 task=$2 sibling
+  while IFS= read -r sibling; do
+    [ -n "$sibling" ] || continue
+    echo "REFUSED: task id $task is marker-ambiguous with live task $sibling (. and _ normalize to the same watcher marker names); reconcile $sibling first, then retry." >&2
+    return 1
+  done < <(status_marker_collision_siblings "$state" "$task")
 }
 
 _status_presentation_signature_valid() {
@@ -1290,7 +1294,7 @@ status_presentation_marker_commit() {
 
 status_retire_presentation_task() {  # <state> <task-id>
   local state=$1 task=$2 lock manifest tmp data row_task ident offset backstop extra rc=0 found=0
-  local signal_marker heartbeat_marker daemon_marker turn_ended_signal_marker sibling
+  local signal_marker heartbeat_marker daemon_marker turn_ended_signal_marker
   lock="$state/.status-presentation-lock"
   manifest="$state/.status-presentation-cursor"
   tmp="$manifest.tmp.$$"
@@ -1334,18 +1338,10 @@ EOF
   fi
 
   fm_lock_acquire_wait "$lock" || return 1
-  # Marker-ambiguous task ids refuse while a colliding sibling is live: the
-  # sibling's status/meta anchors prove its watcher still owns the shared
-  # marker names, and this retirement cannot tell its markers from ours.
-  while IFS= read -r sibling; do
-    [ -n "$sibling" ] || continue
-    if [ -e "$state/$sibling.meta" ] || [ -L "$state/$sibling.meta" ] \
-      || [ -e "$state/$sibling.status" ] || [ -L "$state/$sibling.status" ]; then
-      echo "REFUSED: task id $task is marker-ambiguous with live task $sibling (. and _ normalize to the same watcher marker names); reconcile $sibling first, then retry." >&2
-      fm_lock_release "$lock" || true
-      return 1
-    fi
-  done < <(status_marker_collision_siblings "$task")
+  if ! status_validate_marker_collision "$state" "$task"; then
+    fm_lock_release "$lock" || true
+    return 1
+  fi
   if [ -e "$manifest" ] || [ -L "$manifest" ]; then
     if [ ! -f "$manifest" ] || [ ! -r "$manifest" ] || [ -L "$manifest" ]; then
       rc=1
@@ -1400,6 +1396,10 @@ status_validate_retire_presentation_task() {  # <state> <task-id>
   turn_ended_signal_marker="$state/.seen-$(printf '%s' "$task.turn-ended" | tr '.' '_')"
 
   fm_lock_try_acquire "$lock" || return 1
+  if ! status_validate_marker_collision "$state" "$task"; then
+    fm_lock_release "$lock" || true
+    return 1
+  fi
   for path in "$manifest" "$tmp" "$state/$task.status" \
     "$state/.$task.open-decisions-cursor" "$signal_marker" \
     "$heartbeat_marker" "$daemon_marker" "$turn_ended_signal_marker"; do
