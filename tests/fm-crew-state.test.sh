@@ -100,6 +100,31 @@ case "${1:-}" in
 esac
 exit 0
 SH
+  cat > "$fb/gh" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-} ${2:-}" in
+  "api graphql")
+    state=${FM_FAKE_PR_STATE:-MERGED}
+    merged=${FM_FAKE_PR_MERGED:-true}
+    queued=${FM_FAKE_PR_QUEUED:-false}
+    [ "${FM_FAKE_PR_READ_FAIL:-0}" = 1 ] && exit 1
+    printf 'state=%s\nmerged=%s\nqueued=%s\n' "$state" "$merged" "$queued"
+    exit 0 ;;
+esac
+exit 1
+SH
+  cat > "$fb/gh-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-} ${2:-}" in
+  "pr view")
+    [ "${FM_FAKE_PR_READ_FAIL:-0}" = 1 ] && exit 1
+    printf 'pull_request:\n  number: %s\n  state: %s\n' "${3:-1}" "${FM_FAKE_PR_STATE_AXI:-merged}"
+    exit 0 ;;
+esac
+exit 1
+SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -170,7 +195,7 @@ case "${1:-}" in
 esac
 exit 0
 SH
-  chmod +x "$fb/no-mistakes" "$fb/tmux" "$fb/herdr"
+  chmod +x "$fb/no-mistakes" "$fb/gh" "$fb/gh-axi" "$fb/tmux" "$fb/herdr"
   printf '%s\n' "$fb"
 }
 
@@ -227,9 +252,15 @@ reset_fakes() {
   FM_FAKE_HERDR_AGENT_STATUS=""
   FM_FAKE_CI_LOGS=""
   FM_FAKE_DAEMON_DOWN=0
+  FM_FAKE_PR_STATE=MERGED
+  FM_FAKE_PR_MERGED=true
+  FM_FAKE_PR_QUEUED=false
+  FM_FAKE_PR_READ_FAIL=0
+  FM_FAKE_PR_STATE_AXI=merged
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BUSY_TEXT FM_FAKE_TMUX_MISSING FM_FAKE_TMUX_UNREADABLE
   export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_READ_FAIL FM_FAKE_HERDR_HUSK FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS
   export FM_FAKE_DAEMON_DOWN
+  export FM_FAKE_PR_STATE FM_FAKE_PR_MERGED FM_FAKE_PR_QUEUED FM_FAKE_PR_READ_FAIL FM_FAKE_PR_STATE_AXI
 }
 
 # --- run-object fixtures (TOON, as `no-mistakes axi status` emits) -----------
@@ -368,6 +399,19 @@ run:
   status: completed
   head: "${FM_FAKE_RUN_HEAD:-abc1234}"
   pr: "https://github.com/o/r/pull/1"
+  findings: none
+outcome: passed
+EOF
+}
+
+run_passed_no_pr() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: completed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: ""
   findings: none
 outcome: passed
 EOF
@@ -962,7 +1006,41 @@ test_terminal_passed() {
   local out; out=$(run_crew_state "$d" feat-d)
   assert_contains "$out" "state: done" "passed run -> done"
   assert_contains "$out" "source: run-step" "passed -> run-step source"
+  assert_contains "$out" "run passed: PR merged" "passed run reports merged only after the PR record says merged"
   pass "terminal passed run is authoritative"
+}
+
+test_terminal_passed_with_open_pr_does_not_claim_merged() {
+  reset_fakes
+  local d; d=$(new_case passed-open-pr)
+  make_repo_on_branch "$d/wt" fm/feat-dopen
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dopen.meta" "window=fm:fm-feat-dopen" \
+    "worktree=$d/wt" "kind=ship" "pr=https://github.com/o/r/pull/1"
+  FM_FAKE_PR_STATE=OPEN
+  FM_FAKE_PR_MERGED=false
+  FM_FAKE_AXI_STATUS="$(run_passed fm/feat-dopen)"
+  local out; out=$(run_crew_state "$d" feat-dopen)
+  assert_contains "$out" "state: done" "passed run with open PR -> done"
+  assert_contains "$out" "run passed: PR open" "open PR state is named"
+  assert_not_contains "$out" "merged/closed" "open PR must not get the old merged/closed label"
+  assert_not_contains "$out" "PR merged" "open PR must not be reported merged"
+  pass "terminal passed run with open PR does not claim merged"
+}
+
+test_terminal_passed_without_readable_pr_identity_reports_unknown() {
+  reset_fakes
+  local d; d=$(new_case passed-no-pr)
+  make_repo_on_branch "$d/wt" fm/feat-dnopr
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dnopr.meta" "window=fm:fm-feat-dnopr" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_passed_no_pr fm/feat-dnopr)"
+  local out; out=$(run_crew_state "$d" feat-dnopr)
+  assert_contains "$out" "state: done" "passed run without PR identity -> done"
+  assert_contains "$out" "run passed: PR state unknown (no PR identity)" "missing PR identity is honest unknown"
+  assert_not_contains "$out" "merged/closed" "unknown PR state must not get the old merged/closed label"
+  assert_not_contains "$out" "PR merged" "unknown PR state must not be reported merged"
+  pass "terminal passed run without readable PR identity reports unknown"
 }
 
 test_terminal_failed() {
@@ -2498,6 +2576,8 @@ test_ci_fixing_after_green_stays_working
 test_top_level_fixing_ci_running_after_green_stays_working
 test_top_level_fixing_done_log_stays_working
 test_terminal_passed
+test_terminal_passed_with_open_pr_does_not_claim_merged
+test_terminal_passed_without_readable_pr_identity_reports_unknown
 test_terminal_failed
 test_terminal_failed_ci_orphan_after_green_reads_done
 test_terminal_failed_ci_orphan_status_only_reads_done
