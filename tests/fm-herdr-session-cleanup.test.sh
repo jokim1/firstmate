@@ -293,69 +293,72 @@ reset_fixture; : > "$FIXTURE_DIR/race"; assert_preserved "revalidation race"
 reset_fixture; printf '%s\n' "$TAB" > "$FIXTURE_DIR/active-tab"; assert_preserved "active target"
 reset_fixture; : > "$FIXTURE_DIR/focus-refuse"; assert_preserved "focus refusal"
 
-# The gone sweep: a version 2 journal whose projection title matches no live
-# workspace is residue only when the projection reads authoritatively gone -
-# its label token appears on zero live workspaces and its bound workspace id
-# reads dead. Anything less preserves it, and no pane is ever closed.
+reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
+write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
+fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1
+[ ! -e "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "task cleanup kept a journal whose bound projection is authoritatively gone"
+[ ! -s "$CLOSE_LOG" ] || fail "task cleanup closed a pane it never proved present"
+pass "task-scoped cleanup retires its authoritatively gone v2 journal without closing anything"
+
 reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
 write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
 fm_herdr_session_cleanup >/dev/null 2>&1
-[ ! -e "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "gone sweep kept a journal whose bound projection is authoritatively gone"
-[ ! -s "$CLOSE_LOG" ] || fail "gone sweep closed a pane it never proved present"
-pass "gone sweep retires a v2 journal whose bound projection is authoritatively gone, without closing anything"
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "session cleanup retired an unmatched gone journal"
+[ ! -s "$CLOSE_LOG" ] || fail "session cleanup closed an unmatched gone journal"
+pass "session cleanup does not retire unmatched gone journals home-wide"
 
 reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
 write_v2 "$FM_HOME" "$WS" "$TAB" "$PANE"
-fm_herdr_session_cleanup >/dev/null 2>&1
-[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "gone sweep retired a journal whose bound workspace is still present under a renamed label"
+fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1 || true
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "task cleanup retired a journal whose bound workspace is still present under a renamed label"
 [ ! -s "$CLOSE_LOG" ] || fail "the preserved workspace's pane was closed"
-pass "gone sweep preserves a v2 journal whose bound workspace still exists, even without its label token"
+pass "task cleanup preserves a v2 journal whose bound workspace still exists"
 
 reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
-fm_herdr_session_cleanup >/dev/null 2>&1
-[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "gone sweep retired a v1 journal it cannot bind to any workspace"
+fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1 || true
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "task cleanup retired a v1 journal it cannot bind to any workspace"
 [ ! -s "$CLOSE_LOG" ] || fail "the preserved v1 journal's pane was closed"
-pass "gone sweep preserves a v1 journal, which binds no workspace id to prove gone"
+pass "task cleanup preserves a v1 journal that cannot prove a workspace gone"
 
 reset_fixture; : > "$FM_STATE_OVERRIDE/$ID.meta"
 printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
 write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
-fm_herdr_session_cleanup >/dev/null 2>&1
-[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "gone sweep retired a live task's journal"
-pass "gone sweep never touches a journal whose task record still exists"
+fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1 || true
+[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] || fail "task cleanup retired a live task's journal"
+pass "task cleanup never touches a journal whose task record still exists"
 
-gone_sweep_failures=
+task_cleanup_failures=
 reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
 write_v2 "$FM_HOME" w9 "$TAB" "$PANE" other
-fm_herdr_session_cleanup >/dev/null 2>&1
+fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1 || true
 [ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
-  || gone_sweep_failures="${gone_sweep_failures} cross-session"
+  || task_cleanup_failures="${task_cleanup_failures} cross-session"
 
 reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
 : > "$FIXTURE_DIR/journal-session-race"
 write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
-fm_herdr_session_cleanup >/dev/null 2>&1
+fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1 || true
 [ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
-  || gone_sweep_failures="${gone_sweep_failures} locked-session-race"
+  || task_cleanup_failures="${task_cleanup_failures} locked-session-race"
 
 reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
 mkdir -p "$TMP_ROOT/other-home"
 : > "$FIXTURE_DIR/journal-home-race"
 write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
-fm_herdr_session_cleanup >/dev/null 2>&1
+fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1 || true
 [ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
-  || gone_sweep_failures="${gone_sweep_failures} locked-home-race"
+  || task_cleanup_failures="${task_cleanup_failures} locked-home-race"
 
 reset_fixture
 : > "$FIXTURE_DIR/empty-workspaces"
 write_v2 "$FM_HOME" w9 "$TAB" "$PANE"
-fm_herdr_session_cleanup >/dev/null 2>&1
+fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1
 [ ! -e "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
-  || gone_sweep_failures="${gone_sweep_failures} empty-workspace-list"
+  || task_cleanup_failures="${task_cleanup_failures} empty-workspace-list"
 
-[ -z "$gone_sweep_failures" ] \
-  || fail "gone sweep ownership and empty-list regressions:$gone_sweep_failures"
-pass "gone sweep stays session/home scoped and accepts an empty workspace list"
+[ -z "$task_cleanup_failures" ] \
+  || fail "task cleanup ownership and empty-list regressions:$task_cleanup_failures"
+pass "task cleanup stays session/home scoped and accepts an empty workspace list"
 
 INTEGRATION_ROOT="$TMP_ROOT/bootstrap-integration"
 mkdir -p "$INTEGRATION_ROOT/home/state" "$INTEGRATION_ROOT/home/data" "$INTEGRATION_ROOT/home/config"

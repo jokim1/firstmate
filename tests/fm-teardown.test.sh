@@ -4965,6 +4965,37 @@ test_slot_collision_foreign_worktree_retires_stale_record_without_touching_the_s
   pass "a slot collision whose other record is the proven live owner retires the stale record without touching the slot"
 }
 
+test_slot_collision_deduplicates_secondmate_owner_fields() {
+  local case_dir live=fm-coll-live dead=fm-coll-dead rc slot
+  if [ -z "$REAL_TMUX_FOR_COLLISION" ]; then
+    pass "slot-collision-secondmate-owner: tmux not installed; live-socket case skipped"
+    return 0
+  fi
+  case_dir=$(make_slot_case slot-collision-secondmate-owner)
+  slot="$case_dir/pool/7/firstmate"
+  slot_start_agent_window "$case_dir" fmcoll "fm-$live" \
+    || fail "the live secondmate owner's agent window never came up"
+  fm_write_meta "$case_dir/state/$live.meta" \
+    "window=fmcoll:fm-$live" "endpoint_task_id=$live" "worktree=$slot" \
+    "home=$slot" "project=$case_dir/project" "kind=secondmate" "spawn_gen=coll-live-1"
+  fm_write_meta "$case_dir/state/$dead.meta" \
+    "window=fmcoll:fm-$dead" "endpoint_task_id=$dead" "worktree=$slot" \
+    "project=$case_dir/project" "kind=scout" "spawn_gen=coll-dead-1"
+  printf 'done: abandoned\n' > "$case_dir/state/$dead.status"
+
+  rc=0
+  FM_HOME="$case_dir" run_teardown_for_id "$case_dir" "$dead" --force --retire-foreign-worktree \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "duplicate secondmate owner fields blocked the forward path: $(cat "$case_dir/stderr")"
+  [ ! -e "$case_dir/state/$dead.meta" ] || fail "the stale record survived secondmate owner proof"
+  assert_present "$case_dir/state/$live.meta" "the forward path removed the secondmate owner"
+  assert_present "$slot" "the forward path returned the secondmate owner's slot"
+  pgrep -f 'kimi-agent' >/dev/null 2>&1 \
+    || fail "the forward path killed the secondmate owner's agent process"
+  slot_cleanup "$case_dir"
+  pass "one secondmate owner counts once when home and worktree name the same slot"
+}
+
 test_slot_collision_refuses_without_force_even_with_a_provable_owner() {
   local case_dir live=fm-coll-live dead=fm-coll-dead rc
   if [ -z "$REAL_TMUX_FOR_COLLISION" ]; then
@@ -5197,6 +5228,7 @@ test_run_abort_precedes_process_reap_precedes_worktree_removal
 test_process_reap_mutation_refuses_before_worktree_return
 test_playbot_archive_mutation_refuses_before_workspace_deletion
 test_slot_collision_foreign_worktree_retires_stale_record_without_touching_the_slot
+test_slot_collision_deduplicates_secondmate_owner_fields
 test_slot_collision_refuses_without_force_even_with_a_provable_owner
 test_slot_collision_refuses_when_the_other_record_is_not_a_live_owner
 test_slot_collision_refuses_when_this_record_is_not_proven_stale

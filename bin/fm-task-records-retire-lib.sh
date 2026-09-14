@@ -108,7 +108,19 @@ fm_task_records_retire_busy() {  # <state-dir> <id> <gen>
 }
 
 fm_task_records_validate_busy_cleanup() {  # <state-dir> <id> <gen>
-  local state_dir=$1 id=$2 gen=${3:-} current
+  local state_dir=$1 id=$2 gen=${3:-} current state_device artifact
+  fm_task_id_path_safe "$id" || return 1
+  [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 1
+  state_device=$(fm_pr_file_device "$state_dir") || return 1
+  for artifact in "$state_dir/$id.busy-gen" "$state_dir/$id.busy-state"; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    if [ ! -f "$artifact" ] || [ -L "$artifact" ] \
+      || [ "$(fm_pr_file_device "$artifact")" != "$state_device" ] \
+      || [ "$(fm_pr_file_link_count "$artifact")" != 1 ]; then
+      echo "REFUSED: unsafe task busy-state record; preserving task state." >&2
+      return 1
+    fi
+  done
   if [ -e "$state_dir/$id.busy-gen" ] || [ -L "$state_dir/$id.busy-gen" ]; then
     current=$(fm_busy_current_gen "$state_dir" "$id") || return 1
     [ "$gen" = "$current" ]

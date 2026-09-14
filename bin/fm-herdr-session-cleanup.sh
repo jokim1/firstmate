@@ -357,15 +357,6 @@ fm_herdr_cleanup_gone_journal() { # <session> <home-real> <list-json> <journal> 
   return "$retired"
 }
 
-fm_herdr_cleanup_gone_sweep() { # <session> <home-real> <list-json>
-  local session=$1 home_real=$2 list_json=$3 journal id
-  for journal in "$STATE"/*"$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX"; do
-    [ -f "$journal" ] && [ ! -L "$journal" ] || continue
-    id=$(basename "$journal" "$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX")
-    fm_herdr_cleanup_gone_journal "$session" "$home_real" "$list_json" "$journal" "$id" || true
-  done
-}
-
 fm_herdr_cleanup_task_journal() { # <task-id>
   local id=$1 journal home_real session list title candidates workspace
   fm_task_id_creation_valid "$id" || return 1
@@ -443,7 +434,6 @@ fm_herdr_session_cleanup() {
     [ -n "$workspace" ] && [ -n "$title" ] || continue
     fm_herdr_cleanup_one "$session" "$workspace" "$title" "$home_real"
   done <<< "$candidates"
-  fm_herdr_cleanup_gone_sweep "$session" "$home_real" "$list"
   return 0
 }
 

@@ -3179,6 +3179,7 @@ teardown_worktree_slot_collisions() {  # <record-meta> <record-id> <record-state
         other_slot=$(canonical_existing_dir "$other_path") || continue
         [ "$other_slot" = "$slot" ] || continue
         printf '%s\t%s\t%s\t%s\n' "$state_dir" "$other" "$other_id" "$field"
+        break
       done
     done
   done
