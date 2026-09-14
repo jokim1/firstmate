@@ -443,7 +443,8 @@ EOF
 # common case.
 print_open_decisions_section() {
   local snapshot=${1:-} open task key verb note line item_bytes=220 global_bytes=4000
-  local output='' used=0 shown=0 omitted=0 bytes
+  local output='' pending='' remote_pending='' used=0 shown=0 omitted=0 bytes
+  local answerable=0 pending_count=0 remote_count=0
 
   if [ -n "$snapshot" ]; then
     open=$(scan_open_decisions_snapshot "$STATE" "$snapshot") || return 1
@@ -467,8 +468,24 @@ print_open_decisions_section() {
       omitted=$((omitted + 1))
       continue
     fi
-    output="$output$line
+    if [ "$verb" = pending-delivery ]; then
+      case "$note" in
+        *remote-limited:*)
+          remote_pending="$remote_pending$line
 "
+          remote_count=$((remote_count + 1))
+          ;;
+        *)
+          pending="$pending$line
+"
+          pending_count=$((pending_count + 1))
+          ;;
+      esac
+    else
+      output="$output$line
+"
+      answerable=$((answerable + 1))
+    fi
     used=$((used + bytes))
     shown=$((shown + 1))
   done <<EOF
@@ -476,16 +493,22 @@ $open
 EOF
 
   [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
-  printf 'OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):\n' || return 1
-  printf '%s' "$output" || return 1
+  if [ "$answerable" -gt 0 ]; then
+    printf 'OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):\n' || return 1
+    printf '%s' "$output" || return 1
+  fi
   if [ "$omitted" -gt 0 ]; then
     printf 'OPEN DECISIONS: %d more omitted (byte cap)\n' "$omitted" || return 1
   fi
-  # Answerer-closes hint, printed at exactly the moment an answer gets written:
-  # the send that answers a listed decision also closes it, so closure never
-  # depends on the busy worker writing a matching resolved line (contract:
-  # bin/fm-send.sh header).
-  printf "OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'\n" || return 1
+  if [ "$answerable" -gt 0 ]; then
+    printf "OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'\n" || return 1
+  fi
+  if [ "$pending_count" -gt 0 ]; then
+    printf 'PENDING DELIVERIES (answers already sent; awaiting worker acknowledgement - do not resend):\n%s' "$pending" || return 1
+  fi
+  if [ "$remote_count" -gt 0 ]; then
+    printf 'REMOTE PENDING DELIVERIES (answers already sent; automatic acknowledgement is unavailable - reconcile the local ledger only after the remote mate reports):\n%s' "$remote_pending" || return 1
+  fi
 }
 
 # Print the RECORD DIVERGENCE section: every captain call whose two records

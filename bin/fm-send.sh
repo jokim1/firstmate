@@ -618,6 +618,10 @@ if [ -n "$RESOLVE_KEYS" ]; then
     # captain-held task is exactly this case, and it is answerable - just
     # through the other ledger - so check there before refusing.
     if resolved_hold_id=$(fm_send_hold_resolved_id "$RESOLVE_TASK_ID" "$k"); then
+      if fm_task_inbox_hold_resolution_pending "$STATE" "$RESOLVE_TASK_ID" "$resolved_hold_id"; then
+        echo "error: --resolve-key '$k' already has an answer pending acknowledgement in $STATE/$RESOLVE_TASK_ID.inbox; do not resend it." >&2
+        exit 1
+      fi
       RESOLVE_HOLD_KEYS="${RESOLVE_HOLD_KEYS}${RESOLVE_HOLD_KEYS:+ }$resolved_hold_id"
       continue
     fi
@@ -685,11 +689,12 @@ fm_send_close_resolved_keys() {  # <answer-text>
 # Mark each answered decision as delivered only to the steering inbox.
 # The worker has not acknowledged the record until it moves the message to
 # handled/, so the status fold keeps pending-delivery visible in OPEN DECISIONS.
-fm_send_mark_pending_delivery_keys() {  # <answer-text>
-  local note=$1 k line pending_note append_rc
+fm_send_mark_pending_delivery_keys() {  # <answer-text> [remote]
+  local note=$1 mode=${2:-} k line pending_note append_rc
   note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
   for k in $RESOLVE_STATUS_KEYS; do
     pending_note=$(fm_send_resolve_close_note "$k" "$note")
+    [ "$mode" != remote ] || pending_note="$pending_note; remote-limited: answer sent; automatic acknowledgement is unavailable"
     line="pending-delivery [key=$k]: $pending_note"
     fm_cap_line_var "$line"
     append_rc=0
@@ -702,8 +707,9 @@ fm_send_mark_pending_delivery_keys() {  # <answer-text>
 }
 
 fm_send_prepare_inbox_resolve_metadata() {  # <answer-text>
-  local note=$1 k close_note line hold lines='' holds=''
+  local note=$1 k close_note line pending_line hold lines='' pending_lines='' holds=''
   FM_TASK_INBOX_RESOLVE_STATUS_FILE=
+  FM_TASK_INBOX_RESOLVE_STATUS_PENDING_LINES=
   FM_TASK_INBOX_RESOLVE_STATUS_LINES=
   FM_TASK_INBOX_RESOLVE_HOLD_KEYS=
   FM_TASK_INBOX_RESOLVE_ANSWER=
@@ -714,9 +720,13 @@ fm_send_prepare_inbox_resolve_metadata() {  # <answer-text>
     for k in $RESOLVE_STATUS_KEYS; do
       close_note=$(fm_send_resolve_close_note "$k" "$note")
       line="resolved [key=$k]: $close_note"
+      pending_line="pending-delivery [key=$k]: $close_note"
       fm_cap_line_var "$line"
       lines="${lines}resolve-status-line=${FM_LINE_CAP_LINE}"$'\n'
+      fm_cap_line_var "$pending_line"
+      pending_lines="${pending_lines}resolve-status-pending-line=${FM_LINE_CAP_LINE}"$'\n'
     done
+    FM_TASK_INBOX_RESOLVE_STATUS_PENDING_LINES=$pending_lines
     FM_TASK_INBOX_RESOLVE_STATUS_LINES=$lines
   fi
   if [ -n "$RESOLVE_HOLD_KEYS" ]; then
@@ -943,9 +953,6 @@ else
     fi
     remote_rc=0
     remote_completion_unknown=0
-    fm_send_prepare_inbox_resolve_metadata "$RESOLVE_ANSWER_TEXT"
-    export FM_TASK_INBOX_RESOLVE_STATUS_FILE FM_TASK_INBOX_RESOLVE_STATUS_LINES
-    export FM_TASK_INBOX_RESOLVE_HOLD_KEYS FM_TASK_INBOX_RESOLVE_ANSWER
     REMOTE_SEND_ARGS=("$TARGET_REMOTE_ID" "$MESSAGE")
     [ -z "$FIRE_AND_FORGET_ID" ] || REMOTE_SEND_ARGS+=(fire-and-forget)
     # Each transport attempt is bounded by FM_SEND_REMOTE_BUDGET seconds.
@@ -1015,7 +1022,9 @@ else
       fi
     fi
     if [ -n "$RESOLVE_KEYS" ]; then
-      fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" || exit 1
+      # fm-on starts the remote command with an empty environment, so
+      # parent-local acknowledgement metadata cannot cross this boundary.
+      fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" remote || exit 1
     fi
     exit 0
   fi
@@ -1062,7 +1071,11 @@ else
       if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
         fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
       fi
-      echo "error: steer not sent to $INBOX_TASK_ID: its inbox record could not be written under $STATE/$INBOX_TASK_ID.inbox" >&2
+      if [ "${inbox_write_rc:-0}" -eq 2 ]; then
+        echo "error: the answer was recorded at $INBOX_RECORD, but its pending-delivery transition could not be published. Do not resend; inspect $RESOLVE_STATUS_FILE and the inbox record." >&2
+      else
+        echo "error: steer not sent to $INBOX_TASK_ID: its inbox record could not be written under $STATE/$INBOX_TASK_ID.inbox" >&2
+      fi
       exit 1
     fi
     fm_lock_release "$INBOX_META_LOCK"
@@ -1089,11 +1102,8 @@ else
         fi
       fi
     fi
-    # The answer is durably recorded, but the worker has not acknowledged the
-    # inbox record yet: keep each answered decision visible as pending delivery.
-    if [ -n "$RESOLVE_KEYS" ]; then
-      fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" || exit 1
-    fi
+    # The inbox writer publishes pending-delivery before releasing its sequence
+    # lock, so acknowledgement cannot overtake the matching transition.
     # Ring the doorbell, best-effort: no ring outcome changes the exit status,
     # because the watcher owns loss detection from here, either through its
     # bounded re-ring ladder or direct unavailable-endpoint recovery.

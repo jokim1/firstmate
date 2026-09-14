@@ -310,6 +310,9 @@ test_failed_ring_keeps_decision_pending_delivery() {
     || fail "the blocker vanished after a failed doorbell pending-delivery state: $out"
   printf '%s' "$out" | grep -F 'pending-delivery' >/dev/null \
     || fail "the open decision should identify pending delivery: $out"
+  assert_contains "$out" "PENDING DELIVERIES" "pending answers should render separately"
+  assert_not_contains "$out" "fm-send.sh <task> --resolve-key" \
+    "a pending answer must not invite a duplicate send"
   mkdir -p "$home/state/t5.inbox/handled"
   mv "$home/state/t5.inbox/001.msg" "$home/state/t5.inbox/handled/"
   resolve_handled "$home" t5 || fail "handled acknowledgement should resolve the pending-delivery decision"
@@ -319,6 +322,61 @@ test_failed_ring_keeps_decision_pending_delivery() {
     fail "the acknowledged blocker still lists as open: $out"
   fi
   pass "fm-send --resolve-key: a failed doorbell keeps the decision visible as pending delivery"
+}
+
+test_acknowledgement_does_not_close_newer_same_key_decision() {
+  local dir fb log home rc out
+  dir="$TMP_ROOT/newer-same-key"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_home newer-same-key)
+  fm_write_meta "$home/state/t5.meta" "window=sess:fm-t5" "kind=ship"
+  printf 'needs-decision [key=choice]: choose the first API\n' > "$home/state/t5.status"
+
+  env PATH="$fb:$PATH" FM_FAKE_TMUX_SEND_FAIL=1 \
+    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" t5 --resolve-key choice "use v1" >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "the inbox answer should be recorded"
+  printf 'needs-decision [key=choice]: choose the follow-up API\n' >> "$home/state/t5.status"
+  mv "$home/state/t5.inbox/001.msg" "$home/state/t5.inbox/handled/"
+  resolve_handled "$home" t5 || fail "the old acknowledgement should reconcile without closing newer work"
+
+  out=$(drain_out "$home")
+  assert_contains "$out" "choose the follow-up API" "the newer same-key decision was closed by the old acknowledgement"
+  [ "$(grep -c 'resolved \[key=choice\]' "$home/state/t5.status" || true)" -eq 0 ] \
+    || fail "the old acknowledgement appended a resolved transition over the newer decision"
+  pass "inbox acknowledgement closes only its matching pending transition"
+}
+
+test_captain_hold_answer_cannot_be_resent_before_acknowledgement() {
+  local dir fb log home rc err
+  command -v tasks-axi >/dev/null 2>&1 || { pass "captain hold pending retry guard (tasks-axi unavailable)"; return; }
+  dir="$TMP_ROOT/hold-pending"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"; err="$dir/send.err"
+  home=$(setup_home hold-pending)
+  mkdir -p "$home/data" "$home/config"
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  (cd "$home" && tasks-axi add hold-choice "Choose the held option" --repo sample --start >/dev/null) \
+    || fail "could not create the captain-held fixture"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" hold hold-choice \
+      --reason "waiting for the captain" >/dev/null \
+    || fail "could not hold the fixture for the captain"
+  fm_write_meta "$home/state/t5.meta" "window=sess:fm-t5" "kind=ship"
+  printf 'captain-held [key=hold-choice]: transferred\n' > "$home/state/t5.status"
+
+  env PATH="$fb:$PATH" FM_FAKE_TMUX_SEND_FAIL=1 \
+    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" t5 --resolve-key hold-choice "approve it" >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "the first held answer should be recorded"
+  env PATH="$fb:$PATH" FM_FAKE_TMUX_SEND_FAIL=1 \
+    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" t5 --resolve-key hold-choice "approve it again" >/dev/null 2>"$err"; rc=$?
+  [ "$rc" -ne 0 ] || fail "a captain-held answer was accepted twice before acknowledgement"
+  assert_contains "$(cat "$err")" "pending acknowledgement" "the duplicate held answer refusal should name its state"
+  [ "$(find "$home/state/t5.inbox" -maxdepth 1 -name '*.msg' | wc -l | tr -d ' ')" -eq 1 ] \
+    || fail "the duplicate held answer created another inbox record"
+  pass "captain-held inbox answers are not retryable before acknowledgement"
 }
 
 # The real local failure - an unwritable record - is the case that must never
@@ -447,6 +505,10 @@ test_remote_secondmate_answer_marks_pending_locally() {
   out=$(drain_out "$home")
   printf '%s' "$out" | grep -F '[key=upgrade-window]' >/dev/null \
     || fail "the remote-secondmate decision vanished before acknowledgement: $out"
+  assert_contains "$out" "REMOTE PENDING DELIVERIES" "remote pending should name its acknowledgement limitation"
+  assert_contains "$out" "automatic acknowledgement is unavailable" "remote pending should explain the limitation"
+  assert_not_contains "$out" "fm-send.sh <task> --resolve-key" \
+    "remote pending must not invite a duplicate answer"
   pass "fm-send --resolve-key: a remote-secondmate answer stays pending in the same local ledger"
 }
 
@@ -737,6 +799,8 @@ test_answer_starts_work_never_orphans
 test_routine_steer_never_closes
 test_not_open_key_refuses_before_send
 test_failed_ring_keeps_decision_pending_delivery
+test_acknowledgement_does_not_close_newer_same_key_decision
+test_captain_hold_answer_cannot_be_resent_before_acknowledgement
 test_failed_enqueue_does_not_close
 test_multiple_keys_close_together
 test_local_secondmate_answer_marked_and_pending
