@@ -65,6 +65,7 @@ assert_refused_without_mutation() {  # <case> <id> <description>
   assert_present "$dir/home/state/$id.meta" "$description: metadata changed before refusal"
   assert_present "$dir/worktree/sentinel" "$description: worktree changed before refusal"
   [ ! -s "$dir/runtime.log" ] || fail "$description: runtime command ran before refusal: $(cat "$dir/runtime.log")"
+  assert_absent "$dir/home/state/.task-set.lock" "$description: teardown left its task-set lock behind"
 }
 
 test_invalid_endpoint_records_refuse_before_mutation() {
@@ -151,8 +152,8 @@ test_control_lock_contention_refuses_before_mutation() {
   pass "fm-teardown: a concurrent lifecycle action refuses before mutation"
 }
 
-test_non_pool_teardown_ignores_task_set_lock() {
-  local dir id=non-pool-task lock ready holder i=0
+test_non_pool_teardown_serializes_on_task_set_lock() {
+  local dir id=non-pool-task lock ready holder i=0 rc
   dir=$(make_case non-pool-task-set-lock)
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=isolated:fm-$id" "endpoint_task_id=$id" \
@@ -178,13 +179,25 @@ test_non_pool_teardown_ignores_task_set_lock() {
     fail "could not stage an in-progress task publication"
   }
 
-  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
-    || fail "non-pool teardown was blocked by an unrelated task publication: $(cat "$dir/stderr")"
-  assert_absent "$dir/home/state/$id.meta" "non-pool teardown left task metadata"
-  assert_present "$lock" "non-pool teardown removed the publisher's lock"
+  set +e
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "non-pool teardown proceeded during task publication"
+  assert_present "$dir/home/state/$id.meta" "contended non-pool teardown removed task metadata"
+  assert_present "$lock" "contended non-pool teardown removed the publisher's lock"
+  [ ! -s "$dir/runtime.log" ] \
+    || fail "contended non-pool teardown reached the runtime: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "task set is locked" \
+    "contended non-pool teardown did not name task-set ownership"
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
-  pass "fm-teardown: non-pool cleanup ignores unrelated task publication locks"
+
+  run_case "$dir" "$id" > "$dir/retry.stdout" 2> "$dir/retry.stderr" \
+    || fail "non-pool teardown failed after task publication completed: $(cat "$dir/retry.stderr")"
+  assert_absent "$dir/home/state/$id.meta" "retried non-pool teardown left task metadata"
+  assert_absent "$lock" "successful non-pool teardown left its task-set lock behind"
+  pass "fm-teardown: non-pool cleanup serializes against task publication and releases ownership"
 }
 
 test_metadata_lock_serializes_destructive_cleanup() {
@@ -827,7 +840,7 @@ test_remote_layout_homes_serialize_on_one_project_lock() {
 
 test_invalid_endpoint_records_refuse_before_mutation
 test_control_lock_contention_refuses_before_mutation
-test_non_pool_teardown_ignores_task_set_lock
+test_non_pool_teardown_serializes_on_task_set_lock
 test_metadata_lock_serializes_destructive_cleanup
 test_supported_backend_endpoint_records_validate
 test_tmux_empty_target_refuses_without_invocation
