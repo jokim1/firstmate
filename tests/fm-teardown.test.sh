@@ -2422,6 +2422,39 @@ test_teardown_refuses_hardlinked_turnend_auth_before_mutation() {
   pass "teardown refuses hard-linked turn-end auth before runtime mutation"
 }
 
+test_teardown_preflights_status_presentation_before_mutation() {
+  local case_dir rc head
+  case_dir=$(make_case status-presentation-preflight)
+  write_meta "$case_dir" local-only ship
+  printf 'done: trial ok\n' > "$case_dir/state/task-x1.status"
+  printf 'malformed\n' > "$case_dir/state/.status-presentation-cursor"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  : > "$case_dir/treehouse.log"
+  : > "$case_dir/tmux.log"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/treehouse.log'" \
+    'exit 0' > "$case_dir/fakebin/treehouse"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/tmux.log'" \
+    'exit 0' > "$case_dir/fakebin/tmux"
+  chmod +x "$case_dir/fakebin/treehouse" "$case_dir/fakebin/tmux"
+
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "teardown accepted a malformed status presentation cursor"
+  [ ! -s "$case_dir/treehouse.log" ] || fail "status presentation refusal returned the worktree"
+  ! grep -Eq '^kill-(window|pane)' "$case_dir/tmux.log" \
+    || fail "status presentation refusal killed the task endpoint"
+  [ -d "$case_dir/wt" ] || fail "status presentation refusal removed the worktree"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD 2>/dev/null)" = "$head" ] \
+    || fail "status presentation refusal changed the worktree branch"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "status presentation refusal removed task metadata"
+  [ -f "$case_dir/state/task-x1.status" ] || fail "status presentation refusal removed task status"
+  [ -f "$case_dir/state/.status-presentation-cursor" ] \
+    || fail "status presentation refusal removed the malformed cursor"
+  pass "teardown preflights status presentation records before runtime mutation"
+}
+
 assert_teardown_preflights_unsafe_record_shape() {  # <suffix>
   local suffix=$1 case_dir rc head
   case_dir=$(make_case "record-shape-preflight-$suffix")
@@ -2969,6 +3002,42 @@ test_forced_secondmate_preflights_child_records_before_mutation() {
   [ -f "$case_dir/state/task-x1.meta" ] && [ -d "$home" ] \
     || fail "child record refusal removed parent state"
   pass "forced secondmate teardown preflights descendant records before mutation"
+}
+
+test_forced_secondmate_preflights_child_status_presentation_before_mutation() {
+  local case_dir home rc
+  case_dir=$(make_case child-status-presentation-preflight)
+  write_meta "$case_dir" local-only secondmate
+  configure_secondmate_with_tmux_children "$case_dir"
+  home="$case_dir/secondmate-home"
+  printf 'malformed\n' > "$home/state/.status-presentation-cursor"
+  : > "$case_dir/treehouse.log"
+  : > "$case_dir/tmux.log"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/treehouse.log'" \
+    'exit 0' > "$case_dir/fakebin/treehouse"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/tmux.log'" \
+    'exit 0' > "$case_dir/fakebin/tmux"
+  chmod +x "$case_dir/fakebin/treehouse" "$case_dir/fakebin/tmux"
+
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "forced teardown accepted a malformed child status presentation cursor"
+  [ ! -s "$case_dir/treehouse.log" ] || fail "child status presentation refusal returned a worktree"
+  ! grep -Eq '^kill-(window|pane)' "$case_dir/tmux.log" \
+    || fail "child status presentation refusal killed a child endpoint"
+  [ -d "$case_dir/child-a-wt" ] && [ -d "$case_dir/child-b-wt" ] \
+    || fail "child status presentation refusal removed a child worktree"
+  [ -f "$home/state/child-a.meta" ] && [ -f "$home/state/child-b.meta" ] \
+    || fail "child status presentation refusal removed child metadata"
+  [ -f "$home/state/child-a.status" ] && [ -f "$home/state/child-b.status" ] \
+    || fail "child status presentation refusal removed child status"
+  [ -f "$home/state/.status-presentation-cursor" ] \
+    || fail "child status presentation refusal removed the malformed cursor"
+  [ -f "$case_dir/state/task-x1.meta" ] && [ -d "$home" ] \
+    || fail "child status presentation refusal removed parent state"
+  pass "forced secondmate teardown preflights descendant status presentation records"
 }
 
 test_forced_secondmate_refuses_fifo_busy_generation_without_hanging() {
@@ -5286,6 +5355,7 @@ test_secondmate_home_teardown_delivers_final_line_or_refuses
 test_teardown_missing_busy_sidecar_completes
 test_teardown_preflights_turnend_records_before_mutation
 test_teardown_refuses_hardlinked_turnend_auth_before_mutation
+test_teardown_preflights_status_presentation_before_mutation
 test_teardown_preflights_busy_shape_before_mutation
 test_teardown_preflights_residue_shape_before_mutation
 test_teardown_enqueues_refill_wake
@@ -5296,6 +5366,7 @@ test_herdr_flat_teardown_preflight_refuses_before_changes
 test_forced_secondmate_herdr_child_preflight_refuses_before_changes
 test_forced_secondmate_teardown_holds_descendant_lifecycle_locks
 test_forced_secondmate_preflights_child_records_before_mutation
+test_forced_secondmate_preflights_child_status_presentation_before_mutation
 test_forced_secondmate_refuses_fifo_busy_generation_without_hanging
 test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed
 test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconfirmed

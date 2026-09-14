@@ -3871,6 +3871,7 @@ validate_firstmate_home_children_removal() {
     child_busy_gen=$(fm_task_records_read_busy_gen \
       "$sub_state" "$child_id" "$(meta_value "$child_meta" busy_gen)") || return 1
     fm_task_records_validate_cleanup "$sub_state" "$child_id" "$child_busy_gen" || return 1
+    status_validate_retire_presentation_task "$sub_state" "$child_id" || return 1
     child_wt=$(meta_value "$child_meta" worktree)
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
@@ -4159,6 +4160,7 @@ elif [ "$RETIRE_FOREIGN_WORKTREE" = 1 ]; then
 fi
 
 fm_task_records_validate_cleanup "$STATE" "$ID" "$BUSY_GEN" || exit 1
+status_validate_retire_presentation_task "$STATE" "$ID" || exit 1
 
 if [ "$KIND" = secondmate ]; then
   LOCAL_REGISTRY_LOCK=$(secondmate_registry_lock_path "$STATE")
