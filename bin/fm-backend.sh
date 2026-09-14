@@ -768,9 +768,10 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
   esac
 }
 
-# fm_backend_send_text_submit: type text once, then submit and verify,
-# retrying only the submission (never retyping). Echoes the backend's
-# proof-carrying verdict; callers require exact empty for confirmed delivery.
+# fm_backend_send_text_submit: submit text once, then verify and retry only the
+# submission action (never retyping). A backend may make the initial text plus
+# submit atomic. Echoes its proof-carrying verdict; callers require exact empty
+# for confirmed delivery.
 fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sleep> <settle> [expected-label]
   local backend=$1
   shift

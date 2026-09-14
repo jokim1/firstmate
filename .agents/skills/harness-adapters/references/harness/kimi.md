@@ -1,7 +1,8 @@
 # Kimi Code
 
 Verified on 2026-07-25 with Kimi Code CLI 0.29.1.
-A Kimi Code 0.41.0 Herdr failure capture was pinned on 2026-09-09, and corrected live submission was verified the same day with the installed Kimi Code 0.42.0 on Herdr 0.8.0.
+Kimi Code 0.42.0 on tmux submitted both idle input and `/exit` on 2026-09-14, while the same harness exposed Herdr's backend-wide split-submission defect.
+The corrected Herdr adapter was reverified with Kimi Code 0.42.0 on Herdr 0.8.0.
 
 ## Operating facts
 
@@ -16,7 +17,7 @@ A Kimi Code 0.41.0 Herdr failure capture was pinned on 2026-09-09, and corrected
 | Skill invocation | `/<skill>`, for example `/no-mistakes`; Firstmate skills are discovered. |
 | Autonomy | `--auto`; `-y` and `--yolo` are weaker and are not used. |
 | Trust dialog | Kimi 0.42.0 shows a one-time `Trust this folder?` selector for an unseen root before the welcome banner; Enter selects `Trust this folder`, the decision persists per root under `~/.kimi-code/workspace-trust/`, and `fm-spawn` has no Kimi trust automation, so an untrusted root times out at readiness. |
-| Slash submission | One Enter submits, with no popup swallow or settle hazard. |
+| Slash submission | One logical submit, with no popup swallow or settle hazard; the backend owns whether text plus submit is atomic. |
 | Environment marker | None; detection uses process ancestry command name `kimi`. |
 | Composer | Bordered box with a bare `>` prompt glyph and no observed ghost or placeholder text; Kimi 0.41.0 and 0.42.0 render `thinking` and `context` status rows immediately below the box. |
 | Effort | No verified reasoning-effort flag; `references/common/model-and-effort.md` owns unsupported-value handling. |
@@ -31,10 +32,11 @@ Sending before readiness was reproduced as a silent drop with zero exit status, 
 The startup input-readiness window is the established cause; the banner is not.
 An early Enter can expand the composer to multiple content rows, leaving pointer text on the first row and the cursor on an empty later row.
 The shared tmux reader therefore locates the complete bordered composer and treats real text on any content row as positive evidence that submission remains pending.
-In the pinned Kimi 0.41.0 Herdr capture, an Enter left the pointer pending in that boxed composer above Kimi's `thinking` and `context` footer, and a later Enter submitted it.
+In the pinned Kimi 0.41.0 Herdr capture, a split text-plus-Enter path left the pointer pending in that boxed composer above Kimi's `thinking` and `context` footer.
+Herdr now uses one atomic first submission, then retains Enter-only retries for a genuinely pending composer.
 The shared reader treats that structured footer as furniture only after a bordered box, so real text remains `pending`, an empty box reads `empty`, and a left-bar or nonmatching footer remains `unknown`.
 No rendering signal proves Kimi will accept input during this window, so delivery retries Enter through the shared submit core and retains the postcondition verification rather than relaxing readiness.
-The default three-attempt submit budget sends its Enters within about two seconds and the following delivery wait only observes; if a future failure leaves the pointer pending after that budget, raise `FM_KIMI_SUBMIT_RETRIES` rather than broadening the classifier.
+The default three-attempt submit budget spends its atomic attempt and any Enter retries within about two seconds, while the following delivery wait only observes; if a future failure leaves the pointer pending after that budget, raise `FM_KIMI_SUBMIT_RETRIES` rather than broadening the classifier.
 The footer proof deliberately requires the lowercase `thinking` label; every configured model observed on Kimi 0.42.0 was `always_thinking`, so a future footer without that label falls back to `unknown`.
 
 Observed spinner captures had optional leading whitespace, a moon-phase glyph, whitespace around `·`, and rotating tip text, including during tool execution.

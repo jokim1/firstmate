@@ -4,10 +4,12 @@
 # This is opt-in because it launches a real interactive Pi process and a real
 # isolated Herdr lab session.
 # It exercises the end-user command shape against metadata written by a real
-# fm-spawn.sh --secondmate launch, captures Pi's before_agent_start prompt bytes,
+# fm-spawn.sh --secondmate launch, captures Pi's submitted input bytes,
 # and proves both sides of the routing boundary:
 #   - exact task id through explicit FM_HOME receives exactly one marker;
-#   - direct terminal input remains unmarked.
+#   - direct terminal input remains unmarked;
+#   - fm-control relaunch replaces the idle agent in the same endpoint;
+#   - fm-control exit stops the replacement without removing its endpoint.
 #
 # Every Herdr call, including calls made inside the production backend adapter,
 # is routed through bin/fm-herdr-lab.sh. The PATH shim strips only the adapter's
@@ -21,6 +23,8 @@ set -u
 . "$ROOT/bin/fm-marker-lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-backend.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-task-inbox-lib.sh"
 
 fm_live_gate opt-in FM_SEND_MARKER_HERDR_E2E git herdr jq pi
 
@@ -29,7 +33,7 @@ SESSION=$("$LAB_HELPER" name fm-send-secondmate-marker-v7)
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-send-marker-herdr-e2e.XXXXXX")
 SENDER_HOME="$TMP_ROOT/sender-home"
 SECOND_HOME="$TMP_ROOT/secondmate-home"
-CAPTURE="$TMP_ROOT/pi-before-agent.jsonl"
+CAPTURE="$TMP_ROOT/pi-input.jsonl"
 FAKEBIN="$TMP_ROOT/fakebin"
 ORIGINAL_PATH=$PATH
 REAL_PI=$(command -v pi)
@@ -88,7 +92,7 @@ Stay idle and do not initiate work.
 EOF
 
 # A separate explicit Pi extension grants session-only project trust, records
-# before_agent_start prompt bytes, and aborts before any provider request.
+# input bytes, and handles them before any provider request.
 # The PATH wrapper adds only that test resource while preserving the production
 # secondmate launch and its own extension arguments unchanged.
 CAPTURE_JSON=$(printf '%s' "$CAPTURE" | jq -Rs .)
@@ -98,9 +102,10 @@ import { appendFileSync } from "node:fs";
 const capturePath = $CAPTURE_JSON;
 export default function (pi: any) {
   pi.on("project_trust", () => ({ trusted: "yes", remember: false }));
-  pi.on("before_agent_start", (event, ctx) => {
-    appendFileSync(capturePath, \`\${JSON.stringify({ prompt: event.prompt, hex: Buffer.from(event.prompt, "utf8").toString("hex") })}\\n\`);
-    ctx.abort();
+  pi.on("input", (event) => {
+    appendFileSync(capturePath, \`\${JSON.stringify({ prompt: event.text, hex: Buffer.from(event.text, "utf8").toString("hex") })}\\n\`);
+    if (event.text === "/quit") return { action: "continue" };
+    return { action: "handled" };
   });
 }
 EOF
@@ -133,14 +138,20 @@ wait_for_prompt() { # <needle>
 }
 
 wait_for_idle() {
-  local status _ stable=0
+  local status composer _ stable=0
   for _ in $(seq 1 240); do
     status=$("$LAB_HELPER" run "$SESSION" agent get "$PANE" 2>/dev/null \
       | jq -r '.result.agent.agent_status // empty' 2>/dev/null || true)
     case "$status" in
       idle|done)
-        stable=$((stable + 1))
-        [ "$stable" -ge 4 ] && return 0
+        composer=$(PATH="$FAKEBIN:$ORIGINAL_PATH" \
+          fm_backend_composer_state herdr "$TARGET" 2>/dev/null || true)
+        if [ "$composer" = empty ]; then
+          stable=$((stable + 1))
+          [ "$stable" -ge 4 ] && return 0
+        else
+          stable=0
+        fi
         ;;
       *) stable=0 ;;
     esac
@@ -149,27 +160,44 @@ wait_for_idle() {
   return 1
 }
 
-# The startup charter proves the CLI extension loaded. Wait until ctx.abort()
-# has remained idle long enough for the Pi composer to fully settle before
-# exercising it. A single native idle sample can precede Pi's final redraw.
+# The startup charter proves the CLI extension loaded. Wait until the handled
+# input has remained idle long enough for the Pi composer to fully settle
+# before exercising it. A single native idle sample can precede Pi's final redraw.
 wait_for_prompt 'Isolated marker capture secondmate' \
-  || fail "real Pi before_agent_start capture did not load for the startup charter"
+  || fail "real Pi input capture did not load for the startup charter"
 wait_for_idle || fail "real Pi did not become idle after the startup capture"
 
 PATH="$FAKEBIN:$ORIGINAL_PATH" FM_GATE_REFUSE_BYPASS=1 FM_HOME="$SENDER_HOME" \
   "$ROOT/bin/fm-send.sh" "$ID" "$REQUEST" >/dev/null
-wait_for_prompt "$REQUEST" || fail "real Pi did not receive the exact-id fm-send request"
-GOT=$(jq -r --arg needle "$REQUEST" 'select(.prompt | contains($needle)) | .prompt' "$CAPTURE" | tail -1)
-[ "$GOT" = "${FM_FROMFIRST_MARK}${REQUEST}" ] \
-  || fail "real Pi exact-id prompt did not contain exactly one terminal-safe marker"$'\n'"--- bytes ---"$'\n'"$(printf '%s' "$GOT" | od -An -tx1)"
-printf 'evidence: exact-id received-hex=%s\n' "$(printf '%s' "$GOT" | od -An -tx1 | tr -d ' \n')"
-pass "real Pi/Herdr: exact-id FM_HOME send delivers exactly one from-firstmate marker"
-wait_for_idle || fail "real Pi did not become idle after the exact-id capture"
+if ! wait_for_prompt 'Firstmate instruction waiting:'; then
+  printf '%s\n' '--- Pi capture ---' >&2
+  sed -n '1,20p' "$CAPTURE" >&2
+  printf '%s\n' '--- Herdr pane tail ---' >&2
+  "$LAB_HELPER" run "$SESSION" pane read "$PANE" --source recent --lines 200 2>&1 \
+    | tail -n 30 >&2
+  fail "real Pi did not receive the exact-id fm-send doorbell"
+fi
+RECORD=$(find "$SENDER_HOME/state/$ID.inbox" -maxdepth 1 -type f -name '*.msg' -print | head -1)
+[ -n "$RECORD" ] || fail "exact-id fm-send did not write a durable inbox record"
+GOT=$(fm_task_inbox_body "$RECORD") \
+  || fail "exact-id fm-send record had no body"
+fm_message_from_firstmate "$GOT" \
+  || fail "real Pi exact-id record did not begin with the terminal-safe marker"
+ROUTED=''
+fm_operational_input_body "$GOT" ROUTED \
+  || fail "real Pi exact-id record marker could not be parsed"
+printf '%s\n' "$ROUTED" | grep -Eq "^corr=[a-f0-9]{16} ${REQUEST}$" \
+  || fail "real Pi exact-id record did not contain one correlation plus the exact request"$'\n'"--- bytes ---"$'\n'"$(printf '%s' "$GOT" | od -An -tx1)"
+case "$ROUTED" in
+  *"$FM_FROMFIRST_MARK"*) fail "real Pi exact-id record repeated the terminal-safe marker" ;;
+esac
+printf 'evidence: exact-id record-body-hex=%s\n' "$(printf '%s' "$GOT" | od -An -tx1 | tr -d ' \n')"
+pass "real Pi/Herdr: exact-id FM_HOME send delivers its atomic doorbell and records exactly one from-firstmate marker"
+wait_for_idle || fail "real Pi did not become idle after the exact-id doorbell capture"
 
 # Direct terminal input bypasses fm-send's metadata-routed transformation and
 # therefore remains conversational captain input.
-"$LAB_HELPER" run "$SESSION" pane send-text "$PANE" "$DIRECT" >/dev/null
-"$LAB_HELPER" run "$SESSION" pane send-keys "$PANE" enter >/dev/null
+"$LAB_HELPER" run "$SESSION" pane run "$PANE" "$DIRECT" >/dev/null
 wait_for_prompt "$DIRECT" || fail "real Pi did not receive direct terminal input"
 GOT=$(jq -r --arg needle "$DIRECT" 'select(.prompt | contains($needle)) | .prompt' "$CAPTURE" | tail -1)
 [ "$GOT" = "$DIRECT" ] || fail "direct captain input was changed or marked"$'\n'"--- bytes ---"$'\n'"$(printf '%s' "$GOT" | od -An -tx1)"
@@ -178,3 +206,39 @@ if fm_message_from_firstmate "$GOT"; then
 fi
 printf 'evidence: direct-input received-hex=%s\n' "$(printf '%s' "$GOT" | od -An -tx1 | tr -d ' \n')"
 pass "real Pi/Herdr: direct captain terminal input stays unmarked"
+
+CHARTER_BEFORE=$(jq -s --arg needle 'Isolated marker capture secondmate' \
+  '[.[] | select(.prompt | contains($needle))] | length' "$CAPTURE")
+RELAUNCH_OUT=$(PATH="$FAKEBIN:$ORIGINAL_PATH" FM_GATE_REFUSE_BYPASS=1 \
+  FM_HOME="$SENDER_HOME" FM_CONTROL_POLL=0.25 FM_CONTROL_EXIT_WAIT=30 \
+  "$ROOT/bin/fm-control.sh" "$ID" relaunch --harness pi 2>&1) \
+  || fail "real Pi lifecycle relaunch did not replace the idle agent: $RELAUNCH_OUT"
+case "$RELAUNCH_OUT" in
+  *"relaunched $ID harness=pi from=pi"*) : ;;
+  *) fail "real Pi lifecycle relaunch did not report its verified replacement postcondition: $RELAUNCH_OUT" ;;
+esac
+[ "$(fm_backend_target_of_meta "$META")" = "$TARGET" ] \
+  || fail "real Pi lifecycle relaunch changed the secondmate endpoint"
+restarted=0
+for _ in $(seq 1 240); do
+  CHARTER_AFTER=$(jq -s --arg needle 'Isolated marker capture secondmate' \
+    '[.[] | select(.prompt | contains($needle))] | length' "$CAPTURE")
+  if [ "$CHARTER_AFTER" -gt "$CHARTER_BEFORE" ]; then
+    restarted=1
+    break
+  fi
+  sleep 0.25
+done
+[ "$restarted" = 1 ] || fail "real Pi replacement did not receive its startup charter"
+wait_for_idle || fail "real Pi replacement did not become idle after relaunch"
+pass "real Pi/Herdr: fm-control relaunch replaces the idle agent in the same endpoint"
+
+CONTROL_OUT=$(PATH="$FAKEBIN:$ORIGINAL_PATH" FM_GATE_REFUSE_BYPASS=1 \
+  FM_HOME="$SENDER_HOME" FM_CONTROL_POLL=0.25 FM_CONTROL_EXIT_WAIT=30 \
+  "$ROOT/bin/fm-control.sh" "$ID" exit 2>&1) \
+  || fail "real Pi lifecycle exit did not stop the idle agent: $CONTROL_OUT"
+case "$CONTROL_OUT" in
+  *"stopped $ID harness=pi backend=herdr"*) : ;;
+  *) fail "real Pi lifecycle exit did not report its verified stopped postcondition: $CONTROL_OUT" ;;
+esac
+pass "real Pi/Herdr: fm-control submits /quit atomically and verifies the idle agent stopped"

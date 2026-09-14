@@ -23,7 +23,7 @@ The decision persists for the repository, so later worktrees of the same project
 
 A `$<skill>` invocation opens a `$` autocomplete popup.
 Submitting too fast lets the popup swallow Enter, so the invocation never lands.
-`../../../bin/fm-send.sh` gives a leading `$` a 1.2-second settle before the first Enter only when the exact task metadata records `harness=codex`, with the target backend's submit retry as the safety net.
+`../../../bin/fm-send.sh` gives a leading `$` a 1.2-second backend-specific settle around the first submit only when the exact task metadata records `harness=codex`, with the target backend's submit retry as the safety net.
 That scope is load-bearing because a leading `$` commonly starts ordinary text such as `$5/month` or `$HOME`.
 An explicit `session:window` target has no metadata, so its harness is unknown and uses the non-Codex fast path.
 This is why `$no-mistakes` reaches a Codex worker instead of being consumed by the popup.
