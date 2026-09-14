@@ -1,0 +1,32 @@
+SCENARIO 0 - regression reproduction on base commit
+exit=1
+fm-kimi-turnend-hook: refused: config.toml references fm-turn-end.sh outside the Firstmate-owned region.
+config_sha_before=67918ab349394f05c6b411ca1ddb0cc868c2ab4e25289b5994f6c44de0a10139
+config_sha_after=67918ab349394f05c6b411ca1ddb0cc868c2ab4e25289b5994f6c44de0a10139
+
+SCENARIO 1 - target adopts marker-less byte-identical block
+exit=0
+fm-kimi-turnend-hook: adopted an existing byte-identical Stop hook block and re-wrapped it in the Firstmate region.
+restored_byte_identical_to_fresh_install=yes
+parsed_stop_hooks=1
+# BEGIN FIRSTMATE KIMI TURN-END HOOK
+[[hooks]]
+event = "Stop"
+matcher = "^$"
+command = "bash \"$HOME/.kimi-code/fm-turn-end.sh\" >/dev/null 2>&1 || true"
+timeout = 1
+# END FIRSTMATE KIMI TURN-END HOOK
+
+SCENARIO 2 - marked reinstall is idempotent
+exit=0
+stdout=''
+config_sha_before=970adeae5fbd5aa87564ccfac7af52f55f1d53aa18c26d6862789cbe62fe3198
+config_sha_after=970adeae5fbd5aa87564ccfac7af52f55f1d53aa18c26d6862789cbe62fe3198
+
+SCENARIO 3 - differing block refuses and preserves state
+exit=1
+fm-kimi-turnend-hook: refused: config.toml has an unmarked Stop hook block referencing fm-turn-end.sh that differs from the Firstmate block: line 7 is 'timeout = 5', expected 'timeout = 1'.
+config_sha_before=abad1fa5527fd8b3598e3dbd5be54a5cd777564c904c88fa4bc388fd185a79c5
+config_sha_after=abad1fa5527fd8b3598e3dbd5be54a5cd777564c904c88fa4bc388fd185a79c5
+hook_script_created=no
+registry_created=no
