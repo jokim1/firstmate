@@ -92,7 +92,8 @@ while [ "$i" -lt 45 ]; do
     screen=$(lab pane read "$PANE" --source recent --lines 200 2>/dev/null || true)
     if printf '%s\n' "$screen" | grep -F 'Yes, I trust this folder' >/dev/null; then
       lab pane send-keys "$PANE" down >/dev/null \
-        && lab pane send-keys "$PANE" enter >/dev/null \
+        || fail "could not accept Claude Code's session-local workspace trust prompt"
+      lab pane send-keys "$PANE" enter >/dev/null \
         || fail "could not accept Claude Code's session-local workspace trust prompt"
       trusted=1
     fi
