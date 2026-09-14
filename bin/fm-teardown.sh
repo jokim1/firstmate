@@ -3864,14 +3864,18 @@ preflight_descendant_treehouse_slots() {
 }
 
 validate_firstmate_home_children_removal() {
-  local home=$1 sub_state child_meta child_id child_wt child_proj child_kind child_home child_backend child_orca_worktree_id
+  local home=$1 sub_state child_meta child_id child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_busy_gen
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
     [ -e "$child_meta" ] || continue
     child_id=$(basename "$child_meta" .meta)
     fm_backend_validate_task_endpoint "$child_meta" "$child_id" || return 1
-    fm_task_records_validate_pr_poll_cleanup "$sub_state" "$child_id" || return 1
+    child_busy_gen=$(meta_value "$child_meta" busy_gen)
+    if [ -z "$child_busy_gen" ]; then
+      child_busy_gen=$(cat "$sub_state/$child_id.busy-gen" 2>/dev/null || true)
+    fi
+    fm_task_records_validate_cleanup "$sub_state" "$child_id" "$child_busy_gen" || return 1
     child_wt=$(meta_value "$child_meta" worktree)
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
@@ -4161,9 +4165,7 @@ elif [ "$RETIRE_FOREIGN_WORKTREE" = 1 ]; then
   exit 2
 fi
 
-fm_task_records_validate_turnend grok "$STATE" "$ID" || exit 1
-fm_task_records_validate_turnend kimi "$STATE" "$ID" || exit 1
-fm_task_records_validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
+fm_task_records_validate_cleanup "$STATE" "$ID" "$BUSY_GEN" || exit 1
 
 if [ "$KIND" = secondmate ]; then
   LOCAL_REGISTRY_LOCK=$(secondmate_registry_lock_path "$STATE")

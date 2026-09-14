@@ -2379,6 +2379,47 @@ test_teardown_preflights_turnend_records_before_mutation() {
   pass "teardown preflights both turn-end records before runtime mutation"
 }
 
+assert_teardown_preflights_unsafe_record_shape() {  # <suffix>
+  local suffix=$1 case_dir rc head
+  case_dir=$(make_case "record-shape-preflight-$suffix")
+  write_meta "$case_dir" local-only ship
+  printf 'done: trial ok\n' > "$case_dir/state/task-x1.status"
+  mkdir "$case_dir/state/task-x1.$suffix"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  : > "$case_dir/treehouse.log"
+  : > "$case_dir/tmux.log"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/treehouse.log'" \
+    'exit 0' > "$case_dir/fakebin/treehouse"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/tmux.log'" \
+    'exit 0' > "$case_dir/fakebin/tmux"
+  chmod +x "$case_dir/fakebin/treehouse" "$case_dir/fakebin/tmux"
+
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "teardown accepted a directory at task-x1.$suffix"
+  [ ! -s "$case_dir/treehouse.log" ] || fail "$suffix refusal returned the worktree"
+  ! grep -Eq '^kill-(window|pane)' "$case_dir/tmux.log" \
+    || fail "$suffix refusal killed the task endpoint"
+  [ -d "$case_dir/wt" ] || fail "$suffix refusal removed the worktree"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD 2>/dev/null)" = "$head" ] \
+    || fail "$suffix refusal changed the worktree branch"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "$suffix refusal removed task metadata"
+  [ -f "$case_dir/state/task-x1.status" ] || fail "$suffix refusal removed task status"
+  [ -d "$case_dir/state/task-x1.$suffix" ] || fail "$suffix refusal changed the unsafe record"
+}
+
+test_teardown_preflights_busy_shape_before_mutation() {
+  assert_teardown_preflights_unsafe_record_shape busy-state
+  pass "teardown preflights busy-state shape before runtime mutation"
+}
+
+test_teardown_preflights_residue_shape_before_mutation() {
+  assert_teardown_preflights_unsafe_record_shape turn-ended
+  pass "teardown preflights residue shape before runtime mutation"
+}
+
 # Phase 2: successful teardown enqueues one advisory fleet refill wake so
 # firstmate re-evaluates ready work against free capacity. Drain clears it.
 test_teardown_enqueues_refill_wake() {
@@ -2842,6 +2883,49 @@ SH
   [ -s "$case_dir/kill.log" ] && [ -s "$case_dir/treehouse.log" ] \
     || fail "descendant-locks: uncontended retry did not perform endpoint and worktree cleanup"
   pass "forced secondmate teardown holds every descendant lifecycle and metadata lock"
+}
+
+test_forced_secondmate_preflights_child_records_before_mutation() {
+  local case_dir home child=child-a grok_auth rc
+  case_dir=$(make_case child-record-preflight)
+  write_meta "$case_dir" local-only secondmate
+  configure_secondmate_with_tmux_children "$case_dir"
+  home="$case_dir/secondmate-home"
+  : > "$home/state/$child.turn-ended"
+  printf 'fm.child-grok\n' > "$home/state/$child.grok-turnend-token"
+  printf 'fm.other-kimi\n' > "$home/state/other.kimi-turnend-token"
+  ln -s "$home/state/other.kimi-turnend-token" "$home/state/$child.kimi-turnend-token"
+  grok_auth="$case_dir/fake-grok/hooks/fm-turn-end.d/fm.child-grok"
+  mkdir -p "$(dirname "$grok_auth")"
+  printf 'child hook\n' > "$grok_auth"
+  : > "$case_dir/treehouse.log"
+  : > "$case_dir/tmux.log"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/treehouse.log'" \
+    'exit 0' > "$case_dir/fakebin/treehouse"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/tmux.log'" \
+    'exit 0' > "$case_dir/fakebin/tmux"
+  chmod +x "$case_dir/fakebin/treehouse" "$case_dir/fakebin/tmux"
+
+  rc=0
+  GROK_HOME="$case_dir/fake-grok" HOME="$case_dir/fakehome" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "forced teardown accepted a symlinked child kimi token"
+  [ ! -s "$case_dir/treehouse.log" ] || fail "child record refusal returned a worktree"
+  ! grep -Eq '^kill-(window|pane)' "$case_dir/tmux.log" \
+    || fail "child record refusal killed a child endpoint"
+  [ -d "$case_dir/child-a-wt" ] && [ -d "$case_dir/child-b-wt" ] \
+    || fail "child record refusal removed a child worktree"
+  [ -f "$home/state/$child.meta" ] || fail "child record refusal removed child metadata"
+  [ -f "$home/state/$child.status" ] || fail "child record refusal removed child status"
+  [ -f "$home/state/$child.turn-ended" ] || fail "child record refusal removed child residue"
+  [ -f "$home/state/$child.grok-turnend-token" ] || fail "child record refusal removed the grok token"
+  [ -L "$home/state/$child.kimi-turnend-token" ] || fail "child record refusal removed the kimi token"
+  [ -f "$grok_auth" ] || fail "child record refusal removed the grok registration"
+  [ -f "$case_dir/state/task-x1.meta" ] && [ -d "$home" ] \
+    || fail "child record refusal removed parent state"
+  pass "forced secondmate teardown preflights descendant records before mutation"
 }
 
 test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed() {
@@ -5118,6 +5202,8 @@ test_secondmate_pr_registration_publishes_ready_line
 test_secondmate_home_teardown_delivers_final_line_or_refuses
 test_teardown_missing_busy_sidecar_completes
 test_teardown_preflights_turnend_records_before_mutation
+test_teardown_preflights_busy_shape_before_mutation
+test_teardown_preflights_residue_shape_before_mutation
 test_teardown_enqueues_refill_wake
 test_herdr_teardown_clears_escalation_marker
 test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes
@@ -5125,6 +5211,7 @@ test_herdr_flat_teardown_refuses_records_on_unparseable_presence
 test_herdr_flat_teardown_preflight_refuses_before_changes
 test_forced_secondmate_herdr_child_preflight_refuses_before_changes
 test_forced_secondmate_teardown_holds_descendant_lifecycle_locks
+test_forced_secondmate_preflights_child_records_before_mutation
 test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed
 test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconfirmed
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close

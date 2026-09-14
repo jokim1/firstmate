@@ -125,7 +125,7 @@ fm_task_records_validate_busy_cleanup() {  # <state-dir> <id> <gen>
     current=$(fm_busy_current_gen "$state_dir" "$id") || return 1
     [ "$gen" = "$current" ]
   else
-    [ -z "$gen" ]
+    return 0
   fi
 }
 
@@ -211,6 +211,15 @@ fm_task_records_validate_residue() {  # <state-dir> <id>
     echo "REFUSED: unsafe task steering inbox; preserving task state." >&2
     return 1
   fi
+}
+
+fm_task_records_validate_cleanup() {  # <state-dir> <id> <busy-gen>
+  local state_dir=$1 id=$2 busy_gen=${3:-}
+  fm_task_records_validate_turnend grok "$state_dir" "$id" || return 1
+  fm_task_records_validate_turnend kimi "$state_dir" "$id" || return 1
+  fm_task_records_validate_busy_cleanup "$state_dir" "$id" "$busy_gen" || return 1
+  fm_task_records_validate_pr_poll_cleanup "$state_dir" "$id" || return 1
+  fm_task_records_validate_residue "$state_dir" "$id"
 }
 
 fm_task_records_retire_residue() {  # <state-dir> <id>
