@@ -4578,19 +4578,21 @@ if [ "$KIND" = secondmate ]; then
     || { echo "error: receiver wake cleanup failed; preserving the secondmate route for retry" >&2; exit 1; }
   remove_secondmate_registry_entry "$ID"
 fi
-fm_task_records_retire_turnend grok "$STATE" "$ID" || exit 1
-fm_task_records_retire_turnend kimi "$STATE" "$ID" || exit 1
-fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
-# Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
-# Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
-[ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
-fm_task_records_remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
-fm_task_records_retire_busy "$STATE" "$ID" "$BUSY_GEN" || exit 1
-status_retire_presentation_task "$STATE" "$ID" || exit 1
-# The steering inbox (bin/fm-task-inbox-lib.sh) is runtime state for the
-# retired endpoint; teardown only runs after landing is confirmed, so any
-# leftover unhandled steer here is moot rather than unlanded work.
-fm_task_records_retire_residue "$STATE" "$ID" || exit 1
+if [ "$KIND" != secondmate ] || [ -e "$STATE" ] || [ -L "$STATE" ]; then
+  fm_task_records_retire_turnend grok "$STATE" "$ID" || exit 1
+  fm_task_records_retire_turnend kimi "$STATE" "$ID" || exit 1
+  fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
+  # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
+  # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
+  [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
+  fm_task_records_remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
+  fm_task_records_retire_busy "$STATE" "$ID" "$BUSY_GEN" || exit 1
+  status_retire_presentation_task "$STATE" "$ID" || exit 1
+  # The steering inbox (bin/fm-task-inbox-lib.sh) is runtime state for the
+  # retired endpoint; teardown only runs after landing is confirmed, so any
+  # leftover unhandled steer here is moot rather than unlanded work.
+  fm_task_records_retire_residue "$STATE" "$ID" || exit 1
+fi
 # The record is gone, so the backlog must not still show this task in flight
 # when teardown reports success. Still under this task's meta lock, so a steer
 # racing the same id stays serialized exactly as it was before. A captain-held

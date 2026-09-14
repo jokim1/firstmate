@@ -1295,6 +1295,9 @@ if ! wait "$teardown_pid"; then
   printf 'serialized retirement output:\n%s\n' "$(cat "$TMP_ROOT/teardown-serialized.out")" >&2
   fail "safe remote retirement failed after handoff serialization"
 fi
+assert_no_grep 'state dir not found|task record authorized directory cannot be resolved' \
+  "$TMP_ROOT/teardown-serialized.out" \
+  "remote home removal ran record retirement against its deleted control state"
 assert_absent "$REMOTE_HOME" "remote retirement did not remove the remote home"
 assert_absent "$PARENT/state/ios.meta" "remote retirement did not remove parent metadata"
 assert_absent "$PARENT/state/.backlog-handoff-ios.wake-pending" \
