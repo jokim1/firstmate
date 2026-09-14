@@ -88,7 +88,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update
   captain-shared.md  main-authoritative shared captain preferences propagated read-only to secondmate homes; LOCAL, gitignored, owned by secondmate-provisioning
   learnings.md       fleet-local operational facts and gotchas; LOCAL, gitignored; dated, evidence-backed, curated, and updated with inspect-then-update - rewrite and prune rather than append forever, the same contract as captain.md; created lazily, absent until this home has a learning to store
-  standing-authority.md  per-home register of standing captain grants consulted before any captain-facing question (section 9); entries point at each grant's authoritative owner and never restate it; LOCAL, gitignored
+  standing-authority.md  main-authoritative register of standing captain grants propagated read-only to secondmate homes and consulted under section 9; entries point at each grant's authoritative owner and never restate it; LOCAL, gitignored, owned by secondmate-provisioning
   projects.md        thin fleet navigation registry recording each project's standing delivery posture; firstmate-private, parsed for mechanical sync and seeding by fm-project-mode.sh (section 6)
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
@@ -498,8 +498,8 @@ Every escalation must stand alone and remain concise.
 Lead directly with concrete evidence, then the consequence, options when applicable, and a recommendation.
 Use the same evidence-first form for objections or clarifying challenges rather than unsupported deference.
 
-Before any captain-facing question, consult this home's standing authority register at `data/standing-authority.md` for an existing grant covering that exact object; when one applies, act on it and report the action instead of asking.
-The register cites each grant's authoritative owner rather than restating rulings; an absent register means ask as usual.
+Before asking the captain for permission, or before overriding, dropping, or declining a recorded obligation, consult this home's standing authority register at `data/standing-authority.md` for an existing grant covering that exact object; when one applies, act on it and report the action instead of asking or overriding.
+The register cites each grant's authoritative owner rather than restating rulings; when the register is absent, consult its owners directly in `data/captain.md`, `data/captain-shared.md`, `data/projects.md`, `data/patch-queue/README.md`, and the `ask-user-authority` skill instead of defaulting to asking.
 
 Reach the captain immediately for:
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Behavior tests for primary-authoritative shared captain-preference inheritance.
+# Behavior tests for primary-authoritative shared data inheritance.
 #
-# The narrow shared surface is exactly data/captain-shared.md.
+# The narrow shared surface is data/captain-shared.md and
+# data/standing-authority.md.
 # data/captain.md and data/learnings.md remain domain-local in every home.
 set -u
 
@@ -40,6 +41,11 @@ write_shared() {
   printf '%s\n' "$body" >> "$path"
 }
 
+write_authority() {
+  local path=$1 body=$2
+  printf '# Standing authority\n\n%s\n' "$body" > "$path"
+}
+
 new_home_pair() {
   local name=$1 base primary second
   base="$TMP_ROOT/$name"
@@ -55,8 +61,8 @@ new_home_pair() {
 
 assert_shared_readonly() {
   local path=$1
-  [ "$(file_mode "$path")" = "$FM_SHARED_CAPTAIN_MODE" ] \
-    || fail "$path mode should be $FM_SHARED_CAPTAIN_MODE, got $(file_mode "$path")"
+  [ "$(file_mode "$path")" = "$FM_SHARED_DATA_MODE" ] \
+    || fail "$path mode should be $FM_SHARED_DATA_MODE, got $(file_mode "$path")"
 }
 
 assert_secondmate_write_fails() {
@@ -72,6 +78,7 @@ test_first_copy_readonly_and_local_files_preserved() {
   primary=${rec%%|*}
   second=${rec#*|}
   write_shared "$primary/data/captain-shared.md" "shared v1"
+  write_authority "$primary/data/standing-authority.md" "authority v1"
   report="$TMP_ROOT/first-copy.report"
 
   out=$(FM_CONFIG_INHERIT_REPORT="$report" propagate_secondmate_inheritance "$primary" "$second")
@@ -82,6 +89,11 @@ test_first_copy_readonly_and_local_files_preserved() {
   assert_shared_readonly "$second/data/captain-shared.md"
   assert_secondmate_write_fails "$second/data/captain-shared.md"
   assert_grep $'data/captain-shared.md\tpushed\t' "$report" "first copy should report pushed"
+  cmp -s "$primary/data/standing-authority.md" "$second/data/standing-authority.md" \
+    || fail "first copy did not converge standing authority"
+  assert_shared_readonly "$second/data/standing-authority.md"
+  assert_secondmate_write_fails "$second/data/standing-authority.md"
+  assert_grep $'data/standing-authority.md\tpushed\t' "$report" "first authority copy should report pushed"
   assert_grep "second local captain" "$second/data/captain.md" "domain-local captain.md was changed"
   assert_grep "second local learning" "$second/data/learnings.md" "domain-local learnings.md was changed"
 
@@ -89,8 +101,39 @@ test_first_copy_readonly_and_local_files_preserved() {
   out=$(FM_CONFIG_INHERIT_REPORT="$report" propagate_secondmate_inheritance "$primary" "$second")
   [ -z "$out" ] || fail "unchanged convergence should stay quiet: $out"
   assert_grep $'data/captain-shared.md\tunchanged\t' "$report" "unchanged bytes should report unchanged"
+  assert_grep $'data/standing-authority.md\tunchanged\t' "$report" "unchanged authority should report unchanged"
   assert_shared_readonly "$second/data/captain-shared.md"
   pass "shared captain first copy converges, is read-only, and preserves local captain/learnings files"
+}
+
+test_standing_authority_drift_and_absence_converge() {
+  local rec primary second report out diag qpath
+  rec=$(new_home_pair standing-authority)
+  primary=${rec%%|*}
+  second=${rec#*|}
+  write_authority "$primary/data/standing-authority.md" "primary grant"
+  write_authority "$second/data/standing-authority.md" "local drift"
+  chmod "$FM_SHARED_DATA_MODE" "$second/data/standing-authority.md"
+  report="$TMP_ROOT/standing-authority.report"
+
+  out=$(FM_CONFIG_INHERIT_REPORT="$report" propagate_secondmate_inheritance "$primary" "$second")
+  diag=$(printf '%s\n' "$out" | grep 'quarantined data/standing-authority.md drift' || true)
+  [ -n "$diag" ] || fail "standing-authority drift should emit a quarantine diagnostic"
+  qpath=${diag##* at }
+  assert_grep "local drift" "$qpath" "standing-authority quarantine lost local bytes"
+  cmp -s "$primary/data/standing-authority.md" "$second/data/standing-authority.md" \
+    || fail "standing-authority drift did not converge to primary bytes"
+  assert_shared_readonly "$second/data/standing-authority.md"
+
+  rm -f "$primary/data/standing-authority.md"
+  : > "$report"
+  out=$(FM_CONFIG_INHERIT_REPORT="$report" propagate_secondmate_inheritance "$primary" "$second")
+  diag=$(printf '%s\n' "$out" | grep 'quarantined data/standing-authority.md drift' || true)
+  [ -n "$diag" ] || fail "standing-authority absence should quarantine the destination"
+  assert_absent "$second/data/standing-authority.md" "primary authority absence should converge"
+  assert_grep $'data/standing-authority.md\tpushed\tmirrored primary absence' "$report" \
+    "standing-authority absence should report pushed"
+  pass "standing authority drift and primary absence converge safely"
 }
 
 test_drift_quarantine_collision_and_repeated_convergence() {
@@ -100,7 +143,7 @@ test_drift_quarantine_collision_and_repeated_convergence() {
   second=${rec#*|}
   write_shared "$primary/data/captain-shared.md" "shared v2"
   write_shared "$second/data/captain-shared.md" "local drift"
-  chmod "$FM_SHARED_CAPTAIN_MODE" "$second/data/captain-shared.md"
+  chmod "$FM_SHARED_DATA_MODE" "$second/data/captain-shared.md"
   hash=$(fm_inherit_sha256 "$second/data/captain-shared.md")
   collision="$second/data/.captain-shared.md.quarantine.20260102T030405Z.$hash"
   printf '%s\n' "preexisting different artifact" > "$collision"
@@ -145,7 +188,7 @@ test_missing_source_mirrors_absence_without_losing_local_bytes() {
   primary=${rec%%|*}
   second=${rec#*|}
   write_shared "$second/data/captain-shared.md" "orphaned local shared file"
-  chmod "$FM_SHARED_CAPTAIN_MODE" "$second/data/captain-shared.md"
+  chmod "$FM_SHARED_DATA_MODE" "$second/data/captain-shared.md"
 
   out=$(propagate_secondmate_inheritance "$primary" "$second")
 
@@ -190,7 +233,7 @@ test_unsafe_artifacts_and_failure_restore_readonly_mode() {
   rm -f "$second/data/captain-shared.md" "$other"
 
   write_shared "$second/data/captain-shared.md" "permission drift"
-  chmod "$FM_SHARED_CAPTAIN_MODE" "$second/data/captain-shared.md"
+  chmod "$FM_SHARED_DATA_MODE" "$second/data/captain-shared.md"
   before_mode=$(file_mode "$second/data/captain-shared.md")
   chmod 500 "$second/data"
   err="$TMP_ROOT/restore-readonly.err"
@@ -284,6 +327,7 @@ new_git_world() {
   mkdir -p "$w/sm/data" "$w/sm/state" "$w/sm/config" "$w/sm/projects"
   printf '%s\n' "charter" > "$w/sm/data/charter.md"
   write_shared "$home/data/captain-shared.md" "shared from primary"
+  write_authority "$home/data/standing-authority.md" "authority from primary"
   printf '%s|%s|%s|%s\n' "$w" "$root" "$home" "$w/sm"
 }
 
@@ -296,6 +340,7 @@ EOF
   data_override="$w/primary-data-override"
   mkdir -p "$data_override"
   write_shared "$data_override/captain-shared.md" "shared from override"
+  write_authority "$data_override/standing-authority.md" "authority from override"
   fakebin=$(make_fake_spawn_toolchain "$w")
 
   PATH="$fakebin:$BASE_PATH" TMUX='' \
@@ -308,7 +353,10 @@ EOF
   cmp -s "$data_override/captain-shared.md" "$sm/data/captain-shared.md" \
     || fail "spawn convergence point did not copy shared captain preferences from FM_DATA_OVERRIDE"
   assert_shared_readonly "$sm/data/captain-shared.md"
-  pass "spawn convergence point propagates data/captain-shared.md from FM_DATA_OVERRIDE"
+  cmp -s "$data_override/standing-authority.md" "$sm/data/standing-authority.md" \
+    || fail "spawn convergence point did not copy standing authority from FM_DATA_OVERRIDE"
+  assert_shared_readonly "$sm/data/standing-authority.md"
+  pass "spawn convergence point propagates both shared data files from FM_DATA_OVERRIDE"
 }
 
 test_bootstrap_convergence_point_copies_shared_file() {
@@ -320,6 +368,7 @@ EOF
   data_override="$w/primary-data-override"
   mkdir -p "$data_override"
   write_shared "$data_override/captain-shared.md" "shared from bootstrap override"
+  write_authority "$data_override/standing-authority.md" "authority from bootstrap override"
   {
     printf 'window=firstmate:fm-sm\n'
     printf 'kind=secondmate\n'
@@ -338,7 +387,10 @@ EOF
   cmp -s "$data_override/captain-shared.md" "$sm/data/captain-shared.md" \
     || fail "bootstrap convergence point did not copy shared captain preferences from FM_DATA_OVERRIDE"
   assert_shared_readonly "$sm/data/captain-shared.md"
-  pass "bootstrap convergence point propagates data/captain-shared.md from FM_DATA_OVERRIDE"
+  cmp -s "$data_override/standing-authority.md" "$sm/data/standing-authority.md" \
+    || fail "bootstrap convergence point did not copy standing authority from FM_DATA_OVERRIDE"
+  assert_shared_readonly "$sm/data/standing-authority.md"
+  pass "bootstrap convergence point propagates both shared data files from FM_DATA_OVERRIDE"
 }
 
 test_config_push_convergence_point_updates_changed_source() {
@@ -355,8 +407,11 @@ EOF
     printf 'home=%s\n' "$sm"
   } > "$home/state/sm.meta"
   write_shared "$sm/data/captain-shared.md" "old shared bytes"
-  chmod "$FM_SHARED_CAPTAIN_MODE" "$sm/data/captain-shared.md"
+  chmod "$FM_SHARED_DATA_MODE" "$sm/data/captain-shared.md"
   write_shared "$data_override/captain-shared.md" "changed override shared bytes"
+  write_authority "$sm/data/standing-authority.md" "old authority bytes"
+  chmod "$FM_SHARED_DATA_MODE" "$sm/data/standing-authority.md"
+  write_authority "$data_override/standing-authority.md" "changed authority bytes"
 
   out=$(PATH="$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
     FM_DATA_OVERRIDE="$data_override" \
@@ -367,7 +422,12 @@ EOF
   cmp -s "$data_override/captain-shared.md" "$sm/data/captain-shared.md" \
     || fail "config-push convergence point did not update shared captain preferences from FM_DATA_OVERRIDE"
   assert_shared_readonly "$sm/data/captain-shared.md"
-  pass "fm-config-push convergence point updates changed shared captain source bytes from FM_DATA_OVERRIDE"
+  assert_contains "$out" "data/standing-authority.md: pushed - quarantined local drift at" \
+    "config-push should report the standing authority update and quarantine"
+  cmp -s "$data_override/standing-authority.md" "$sm/data/standing-authority.md" \
+    || fail "config-push convergence point did not update standing authority from FM_DATA_OVERRIDE"
+  assert_shared_readonly "$sm/data/standing-authority.md"
+  pass "fm-config-push convergence point updates both shared data files from FM_DATA_OVERRIDE"
 }
 
 test_session_start_digest_labels_shared_file_and_read_once_rule() {
@@ -393,6 +453,7 @@ EOF
 }
 
 test_first_copy_readonly_and_local_files_preserved
+test_standing_authority_drift_and_absence_converge
 test_drift_quarantine_collision_and_repeated_convergence
 test_missing_source_mirrors_absence_without_losing_local_bytes
 test_unsafe_artifacts_and_failure_restore_readonly_mode

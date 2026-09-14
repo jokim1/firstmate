@@ -6,8 +6,8 @@
 #   fm-remote-inherit.sh absent <allowlisted-relative-path> 0 <empty-sha256> <generation>
 #
 # Only the inherited-material allowlist is writable or removable. Writes are
-# atomic ordinary-file replacements. Divergent data/captain-shared.md bytes are
-# quarantined before replacement or removal and its converged copy is read-only.
+# atomic ordinary-file replacements. Divergent shared-data bytes are quarantined
+# before replacement or removal and their converged copies are read-only.
 set -eu
 
 FM_HOME=${FM_HOME:?FM_HOME is required}
@@ -124,16 +124,18 @@ commit_generation() {
 
 quarantine_shared() {
   local reason=$1 quarantine stamp base n=0
-  [ "$REL" = data/captain-shared.md ] && [ -f "$DEST" ] || return 0
+  if ! fm_shared_data_item "$REL" || [ ! -f "$DEST" ]; then
+    return 0
+  fi
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  base="$HOME_REAL/data/captain-shared.md.remote-quarantine-$stamp-$$"
+  base="$HOME_REAL/data/$(basename "$REL").remote-quarantine-$stamp-$$"
   quarantine=$base
   while [ -e "$quarantine" ] || [ -L "$quarantine" ]; do
     n=$((n + 1))
     quarantine="$base.$n"
   done
-  cp -p -- "$DEST" "$quarantine" || die "cannot quarantine divergent shared captain preferences"
-  chmod 600 "$quarantine" || die "cannot secure shared-preference quarantine"
+  cp -p -- "$DEST" "$quarantine" || die "cannot quarantine divergent shared data"
+  chmod 600 "$quarantine" || die "cannot secure shared-data quarantine"
   printf 'quarantined: %s (%s)\n' "${quarantine#"$HOME_REAL/"}" "$reason" >&2
 }
 
@@ -148,7 +150,9 @@ case "$COMMAND" in
     [ "$ACTUAL_HASH" = "$EXPECTED_HASH" ] || die "inherited material digest does not match its commitment"
     commit_generation
     if [ -f "$DEST" ] && cmp -s "$TMP" "$DEST"; then
-      [ "$REL" != data/captain-shared.md ] || chmod 444 "$DEST"
+      if fm_shared_data_item "$REL"; then
+        chmod "$FM_SHARED_DATA_MODE" "$DEST"
+      fi
       printf 'unchanged: %s\n' "$REL"
       exit 0
     fi
@@ -156,7 +160,9 @@ case "$COMMAND" in
     chmod 600 "$TMP" || die "cannot secure inherited material"
     mv -f -- "$TMP" "$DEST" || die "cannot publish inherited material"
     TMP=
-    [ "$REL" != data/captain-shared.md ] || chmod 444 "$DEST"
+    if fm_shared_data_item "$REL"; then
+      chmod "$FM_SHARED_DATA_MODE" "$DEST"
+    fi
     printf 'pushed: %s\n' "$REL"
     ;;
   absent)
