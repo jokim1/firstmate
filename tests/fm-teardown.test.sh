@@ -688,8 +688,11 @@ add_stat_error() {
   local case_dir=$1
   cat > "$case_dir/fakebin/stat" <<'SH'
 #!/usr/bin/env bash
-echo "stat: simulated failure" >&2
-exit 1
+if [ "${1:-}" = -c ] && [ "${2:-}" = %Y ]; then
+  echo "stat: simulated failure" >&2
+  exit 1
+fi
+PATH=/usr/bin:/bin exec stat "$@"
 SH
   chmod +x "$case_dir/fakebin/stat"
 }
