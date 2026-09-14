@@ -90,7 +90,6 @@ FM_PR_RETIRE_RECEIPT_HASH=
 FM_PR_RETIRE_RECEIPT_IDENTITY=
 FM_PR_RECORD_STATE=
 FM_PR_RECORD_MERGED=
-FM_PR_RECORD_QUEUE_OBSERVED=
 FM_PR_POLL_RETIREMENT_REJECTED=
 
 fm_task_id_path_safe() {
@@ -743,16 +742,15 @@ fm_pr_poll_retirement_receipt_valid() {
 
 fm_pr_github_read_record_with_gh() {  # <owner> <repo> <number>
   local owner=$1 repo=$2 number=$3 fields line total=0 named=0
-  local state='' merged='' queued=''
+  local state='' merged=''
   FM_PR_RECORD_STATE=
   FM_PR_RECORD_MERGED=
-  FM_PR_RECORD_QUEUE_OBSERVED=false
 
   # shellcheck disable=SC2016  # GraphQL variables are literal query syntax.
   if ! fields=$(gh api graphql \
-    -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){state merged isInMergeQueue}}}' \
+    -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){state merged}}}' \
     -F "owner=$owner" -F "repo=$repo" -F "number=$number" \
-    --jq '.data.repository.pullRequest | "state=" + (.state // ""), "merged=" + (.merged | tostring), "queued=" + (.isInMergeQueue | tostring)' \
+    --jq '.data.repository.pullRequest | "state=" + (.state // ""), "merged=" + (.merged | tostring)' \
     2>/dev/null) || [ -z "$fields" ]; then
     return 1
   fi
@@ -761,29 +759,25 @@ fm_pr_github_read_record_with_gh() {  # <owner> <repo> <number>
     case "$line" in
       state=*) state=${line#state=} ;;
       merged=*) merged=${line#merged=} ;;
-      queued=*) queued=${line#queued=} ;;
       *) continue ;;
     esac
     named=$((named + 1))
   done <<FIELDS
 $fields
 FIELDS
-  if [ "$named" -ne 3 ] || [ "$total" -ne 3 ] || [ -z "$state" ] \
-    || { [ "$merged" != true ] && [ "$merged" != false ]; } \
-    || { [ "$queued" != true ] && [ "$queued" != false ]; }; then
+  if [ "$named" -ne 2 ] || [ "$total" -ne 2 ] || [ -z "$state" ] \
+    || { [ "$merged" != true ] && [ "$merged" != false ]; }; then
     return 1
   fi
 
   FM_PR_RECORD_STATE=$state
   FM_PR_RECORD_MERGED=$merged
-  FM_PR_RECORD_QUEUE_OBSERVED=true
 }
 
 fm_pr_github_read_record_with_gh_axi() {  # <owner> <repo> <number>
   local owner=$1 repo=$2 number=$3 output state
   FM_PR_RECORD_STATE=
   FM_PR_RECORD_MERGED=
-  FM_PR_RECORD_QUEUE_OBSERVED=false
   if ! output=$(gh-axi pr view "$number" --repo "$owner/$repo" 2>/dev/null); then
     return 1
   fi

@@ -123,8 +123,6 @@ META=${FM_CREW_STATE_META_OVERRIDE:-"$STATE/$ID.meta"}
 LOG=${FM_CREW_STATE_STATUS_OVERRIDE:-"$STATE/$ID.status"}
 NM_TIMEOUT=${FM_CREW_STATE_NM_TIMEOUT:-10}
 case "$NM_TIMEOUT" in ''|*[!0-9]*) NM_TIMEOUT=10 ;; esac
-PR_TIMEOUT=${FM_CREW_STATE_PR_TIMEOUT:-5}
-case "$PR_TIMEOUT" in ''|*[!0-9]*) PR_TIMEOUT=5 ;; esac
 # How many of the most recent `no-mistakes runs` rows each ledger read
 # (fm_nm_runs_status_for_worktree in bin/fm-nm-run-lib.sh) scans, whether it is
 # the cross-branch fallback or the live-sibling probe behind a terminal `axi
@@ -281,51 +279,53 @@ nm_field() {  # <key>
 }
 
 pr_read_record_bounded() {  # <owner> <repo> <number>
-  local record state merged queue_observed
+  local record state merged
   # shellcheck disable=SC2016  # The inner script expands after bash -c receives positional args.
-  if ! record=$(fm_run_timed "$PR_TIMEOUT" bash -c '
+  if ! record=$(fm_run_timed 5 bash -c '
     . "$1"
     fm_pr_github_read_record "$2" "$3" "$4" || exit 1
-    printf "state=%s\nmerged=%s\nqueue_observed=%s\n" \
-      "$FM_PR_RECORD_STATE" "$FM_PR_RECORD_MERGED" "$FM_PR_RECORD_QUEUE_OBSERVED"
+    printf "state=%s\nmerged=%s\n" "$FM_PR_RECORD_STATE" "$FM_PR_RECORD_MERGED"
   ' _ "$SCRIPT_DIR/fm-pr-lib.sh" "$1" "$2" "$3" 2>/dev/null); then
     return 1
   fi
   state=$(printf '%s\n' "$record" | sed -n 's/^state=//p' | head -1)
   merged=$(printf '%s\n' "$record" | sed -n 's/^merged=//p' | head -1)
-  queue_observed=$(printf '%s\n' "$record" | sed -n 's/^queue_observed=//p' | head -1)
   [ -n "$state" ] || return 1
   [ "$merged" = true ] || [ "$merged" = false ] || return 1
   FM_PR_RECORD_STATE=$state
   FM_PR_RECORD_MERGED=$merged
-  FM_PR_RECORD_QUEUE_OBSERVED=$queue_observed
 }
 
 passed_pr_detail() {
   local provider url host path number owner repo raw_pr state_lc
-  if fm_pr_poll_retirement_receipt_valid "$STATE" "$ID"; then
-    printf 'run passed: PR merged'
-    return
-  fi
-  if fm_pr_metadata_identity_parse "$META"; then
+  raw_pr=$(strip_quotes "$(nm_field pr)")
+  if fm_pr_url_parse "$raw_pr"; then
+    provider=$FM_PR_PROVIDER
+    url=$FM_PR_URL
+    host=$FM_PR_HOST
+    path=$FM_PR_PATH
+    number=$FM_PR_NUMBER
+  elif fm_pr_metadata_identity_parse "$META"; then
     provider=$FM_PR_META_PROVIDER
     url=$FM_PR_META_URL
     host=$FM_PR_META_HOST
     path=$FM_PR_META_PATH
     number=$FM_PR_META_NUMBER
   else
-    raw_pr=$(strip_quotes "$(nm_field pr)")
-    if ! fm_pr_url_parse "$raw_pr"; then
-      printf 'run passed: PR state unknown (no PR identity)'
-      return
-    fi
-    provider=$FM_PR_PROVIDER
-    url=$FM_PR_URL
-    host=$FM_PR_HOST
-    path=$FM_PR_PATH
-    number=$FM_PR_NUMBER
+    printf 'run passed: PR state unknown (no PR identity)'
+    return
   fi
   : "$host"
+
+  if fm_pr_poll_retirement_receipt_valid "$STATE" "$ID" \
+    && [ "$FM_PR_RETIRE_PROVIDER" = "$provider" ] \
+    && [ "$FM_PR_RETIRE_URL" = "$url" ] \
+    && [ "$FM_PR_RETIRE_HOST" = "$host" ] \
+    && [ "$FM_PR_RETIRE_PATH" = "$path" ] \
+    && [ "$FM_PR_RETIRE_NUMBER" = "$number" ]; then
+    printf 'run passed: PR merged'
+    return
+  fi
 
   case "$provider" in
     github)

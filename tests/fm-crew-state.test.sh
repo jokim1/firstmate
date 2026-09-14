@@ -105,11 +105,19 @@ SH
 set -u
 case "${1:-} ${2:-}" in
   "api graphql")
+    number=1
+    for arg in "$@"; do
+      case "$arg" in
+        number=*) number=${arg#number=} ;;
+      esac
+    done
+    case "$number" in *[!0-9]*|'') number=1 ;; esac
     state=${FM_FAKE_PR_STATE:-MERGED}
     merged=${FM_FAKE_PR_MERGED:-true}
-    queued=${FM_FAKE_PR_QUEUED:-false}
+    eval "state=\${FM_FAKE_PR_${number}_STATE:-\$state}"
+    eval "merged=\${FM_FAKE_PR_${number}_MERGED:-\$merged}"
     [ "${FM_FAKE_PR_READ_FAIL:-0}" = 1 ] && exit 1
-    printf 'state=%s\nmerged=%s\nqueued=%s\n' "$state" "$merged" "$queued"
+    printf 'state=%s\nmerged=%s\n' "$state" "$merged"
     exit 0 ;;
 esac
 exit 1
@@ -254,13 +262,14 @@ reset_fakes() {
   FM_FAKE_DAEMON_DOWN=0
   FM_FAKE_PR_STATE=MERGED
   FM_FAKE_PR_MERGED=true
-  FM_FAKE_PR_QUEUED=false
   FM_FAKE_PR_READ_FAIL=0
   FM_FAKE_PR_STATE_AXI=merged
+  unset FM_FAKE_PR_47_STATE FM_FAKE_PR_47_MERGED FM_FAKE_PR_48_STATE FM_FAKE_PR_48_MERGED
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BUSY_TEXT FM_FAKE_TMUX_MISSING FM_FAKE_TMUX_UNREADABLE
   export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_READ_FAIL FM_FAKE_HERDR_HUSK FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS
   export FM_FAKE_DAEMON_DOWN
-  export FM_FAKE_PR_STATE FM_FAKE_PR_MERGED FM_FAKE_PR_QUEUED FM_FAKE_PR_READ_FAIL FM_FAKE_PR_STATE_AXI
+  export FM_FAKE_PR_STATE FM_FAKE_PR_MERGED FM_FAKE_PR_READ_FAIL FM_FAKE_PR_STATE_AXI
+  export FM_FAKE_PR_47_STATE FM_FAKE_PR_47_MERGED FM_FAKE_PR_48_STATE FM_FAKE_PR_48_MERGED
 }
 
 # --- run-object fixtures (TOON, as `no-mistakes axi status` emits) -----------
@@ -399,6 +408,19 @@ run:
   status: completed
   head: "${FM_FAKE_RUN_HEAD:-abc1234}"
   pr: "https://github.com/o/r/pull/1"
+  findings: none
+outcome: passed
+EOF
+}
+
+run_passed_with_pr() {  # <branch> <pr-url>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: completed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "$2"
   findings: none
 outcome: passed
 EOF
@@ -1026,6 +1048,25 @@ test_terminal_passed_with_open_pr_does_not_claim_merged() {
   assert_not_contains "$out" "merged/closed" "open PR must not get the old merged/closed label"
   assert_not_contains "$out" "PR merged" "open PR must not be reported merged"
   pass "terminal passed run with open PR does not claim merged"
+}
+
+test_terminal_passed_run_pr_overrides_stale_metadata() {
+  reset_fakes
+  local d; d=$(new_case passed-stale-meta)
+  make_repo_on_branch "$d/wt" fm/feat-dstale
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dstale.meta" "window=fm:fm-feat-dstale" \
+    "worktree=$d/wt" "kind=ship" "pr=https://github.com/o/r/pull/47"
+  FM_FAKE_PR_47_STATE=MERGED
+  FM_FAKE_PR_47_MERGED=true
+  FM_FAKE_PR_48_STATE=OPEN
+  FM_FAKE_PR_48_MERGED=false
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/feat-dstale https://github.com/o/r/pull/48)"
+  local out; out=$(run_crew_state "$d" feat-dstale)
+  assert_contains "$out" "state: done" "passed run with stale task metadata -> done"
+  assert_contains "$out" "run passed: PR open" "run PR identity outranks stale task metadata"
+  assert_not_contains "$out" "PR merged" "stale merged metadata must not report merged"
+  pass "terminal passed run PR overrides stale task metadata"
 }
 
 test_terminal_passed_without_readable_pr_identity_reports_unknown() {
@@ -2577,6 +2618,7 @@ test_top_level_fixing_ci_running_after_green_stays_working
 test_top_level_fixing_done_log_stays_working
 test_terminal_passed
 test_terminal_passed_with_open_pr_does_not_claim_merged
+test_terminal_passed_run_pr_overrides_stale_metadata
 test_terminal_passed_without_readable_pr_identity_reports_unknown
 test_terminal_failed
 test_terminal_failed_ci_orphan_after_green_reads_done
