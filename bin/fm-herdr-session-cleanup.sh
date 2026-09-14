@@ -358,7 +358,7 @@ fm_herdr_cleanup_gone_journal() { # <session> <home-real> <list-json> <journal> 
 }
 
 fm_herdr_cleanup_task_journal() { # <task-id>
-  local id=$1 journal home_real session list title candidates workspace
+  local id=$1 journal home_real session list title candidates workspace bound_workspace=
   fm_task_id_creation_valid "$id" || return 1
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
   journal="$STATE/$id$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX"
@@ -366,24 +366,28 @@ fm_herdr_cleanup_task_journal() { # <task-id>
   [ ! -e "$STATE/$id.meta" ] && [ ! -L "$STATE/$id.meta" ] || return 1
   command -v herdr >/dev/null 2>&1 \
     && command -v jq >/dev/null 2>&1 || return 1
+  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
   home_real=$(fm_herdr_cleanup_home_identity) || return 1
-  session=$(fm_backend_herdr_session)
+  if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ]; then
+    [ "$(fm_backend_herdr_projection_home_identity \
+      "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null)" = "$home_real" ] || return 1
+    session=$FM_BACKEND_HERDR_JOURNAL_SESSION
+    bound_workspace=$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID
+  else
+    session=$(fm_backend_herdr_session)
+  fi
   list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
   printf '%s' "$list" | jq -e '
     (.result.workspaces | type) == "array"
   ' >/dev/null 2>&1 || return 1
-  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
-  if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ]; then
-    [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] || return 1
-    [ "$(fm_backend_herdr_projection_home_identity \
-      "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null)" = "$home_real" ] || return 1
-  fi
   title=$(fm_backend_herdr_projection_workspace_label \
     "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID")
-  candidates=$(printf '%s' "$list" | jq -r --arg title "$title" '
+  candidates=$(printf '%s' "$list" | jq -r \
+    --arg title "$title" --arg bound_workspace "$bound_workspace" '
     .result.workspaces[]
     | select(.label == $title)
     | select((.workspace_id | type) == "string" and (.workspace_id | length) > 0)
+    | select($bound_workspace == "" or .workspace_id == $bound_workspace)
     | .workspace_id
   ' 2>/dev/null) || return 1
   while IFS= read -r workspace; do

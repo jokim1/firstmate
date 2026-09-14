@@ -64,6 +64,7 @@ TITLE="└ task · p:$TOKEN"
 FIXTURE_DIR="$TMP_ROOT/fixture"
 LOCK_LOG="$TMP_ROOT/locks.log"
 CLOSE_LOG="$TMP_ROOT/closes.log"
+SESSION_LOG="$TMP_ROOT/sessions.log"
 mkdir -p "$FIXTURE_DIR"
 
 fm_backend_name() { printf herdr; }
@@ -154,6 +155,7 @@ fm_backend_herdr_cli() {
   panes=$(cat "$FIXTURE_DIR/panes")
   case "$first $second" in
     "workspace list")
+      printf '%s\n' "$_session" >> "$SESSION_LOG"
       if [ -e "$FIXTURE_DIR/empty-workspaces" ]; then
         printf '%s\n' '{"result":{"workspaces":[]}}'
       else
@@ -233,7 +235,7 @@ write_cross_home_v2() {
 reset_fixture() {
   rm -rf "$FIXTURE_DIR" "$TMP_ROOT"/*.lock "${FM_STATE_OVERRIDE:?}/"*
   mkdir -p "$FIXTURE_DIR"
-  : > "$LOCK_LOG"; : > "$CLOSE_LOG"
+  : > "$LOCK_LOG"; : > "$CLOSE_LOG"; : > "$SESSION_LOG"
   printf '%s\n' "$TITLE" > "$FIXTURE_DIR/title"
   printf '1\n' > "$FIXTURE_DIR/tabs"
   printf '1\n' > "$FIXTURE_DIR/panes"
@@ -330,9 +332,12 @@ pass "task cleanup never touches a journal whose task record still exists"
 task_cleanup_failures=
 reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
 write_v2 "$FM_HOME" w9 "$TAB" "$PANE" other
-fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1 || true
-[ -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
-  || task_cleanup_failures="${task_cleanup_failures} cross-session"
+fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1
+[ ! -e "$FM_STATE_OVERRIDE/$ID.herdr-presentation" ] \
+  || task_cleanup_failures="${task_cleanup_failures} bound-session-retirement"
+[ -s "$SESSION_LOG" ] \
+  && [ "$(sort -u "$SESSION_LOG")" = other ] \
+  || task_cleanup_failures="${task_cleanup_failures} bound-session-query"
 
 reset_fixture; printf '%s\n' '└ renamed' > "$FIXTURE_DIR/title"
 : > "$FIXTURE_DIR/journal-session-race"
@@ -358,7 +363,7 @@ fm_herdr_cleanup_task_journal "$ID" >/dev/null 2>&1
 
 [ -z "$task_cleanup_failures" ] \
   || fail "task cleanup ownership and empty-list regressions:$task_cleanup_failures"
-pass "task cleanup stays session/home scoped and accepts an empty workspace list"
+pass "task cleanup uses v2 journal ownership and accepts an empty workspace list"
 
 INTEGRATION_ROOT="$TMP_ROOT/bootstrap-integration"
 mkdir -p "$INTEGRATION_ROOT/home/state" "$INTEGRATION_ROOT/home/data" "$INTEGRATION_ROOT/home/config"
