@@ -332,6 +332,37 @@ nm_gate_findings_count() {
 # 0 when a finding parked at the gate carries ask-user authority.
 nm_gate_has_ask_user_finding() {
   printf '%s\n' "$RUN_OUT" | awk '
+    function split_toon_row(row, values,    i, ch, n, value, quoted, escaped) {
+      n = 1
+      value = ""
+      quoted = 0
+      escaped = 0
+      for (i = 1; i <= length(row); i++) {
+        ch = substr(row, i, 1)
+        if (escaped) {
+          value = value ch
+          escaped = 0
+        } else if (quoted && ch == "\\") {
+          value = value ch
+          escaped = 1
+        } else if (ch == "\"") {
+          if (quoted && substr(row, i + 1, 1) == "\"") {
+            value = value ch
+            i++
+          } else {
+            quoted = !quoted
+            value = value ch
+          }
+        } else if (!quoted && ch == ",") {
+          values[n++] = value
+          value = ""
+        } else {
+          value = value ch
+        }
+      }
+      values[n] = value
+      return n
+    }
     /^[[:space:]]*findings\[[0-9]+\]\{/ {
       hdr = index($0, "findings")
       cols = $0
@@ -349,7 +380,7 @@ nm_gate_has_ask_user_finding() {
     inblock {
       match($0, /[^ \t]/)
       if ($0 ~ /^[[:space:]]*$/ || RSTART <= hdr) { inblock = 0; next }
-      split($0, fields, ",")
+      split_toon_row($0, fields)
       value = fields[action]
       gsub(/^[ \t]+|[ \t]+$/, "", value)
       if (action && value == "ask-user") found = 1

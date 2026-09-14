@@ -313,7 +313,7 @@ run:
   note: blocking and ask-user review findings park for your decision rather than being silently self-fixed
   findings[2]{id,severity,file,line,action,description}:
     r1,warning,a.go,,auto-fix,ignored error
-    r2,error,b.go,,ask-user,changes product behavior
+    r2,error,"src/a,b.go",,ask-user,changes product behavior
 gate: review
 EOF
 }
