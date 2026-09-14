@@ -50,8 +50,12 @@
 #      the ledger has been asked whether a live sibling run exists.
 #      The run-step is AUTHORITATIVE: running/fixing -> working, ci -> working,
 #      awaiting_approval/fix_review -> parked (with gate findings), terminal
-#      passed/checks-passed -> done, failed/cancelled -> failed. EXCEPT: while
-#      the active step is ci, `axi status` alone cannot tell "still waiting on
+#      passed/checks-passed -> done, failed/cancelled -> failed. A passed run's
+#      detail never infers landing from the outcome: it requires the run's own
+#      valid PR identity, then accepts an identity-matching retirement receipt
+#      or performs a bounded PR read to report merged, open, or closed; missing
+#      or unreadable PR evidence reports unknown. EXCEPT: while the active step
+#      is ci, `axi status` alone cannot tell "still waiting on
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
 #      green, so a green PR is never silently read as still-validating. And a

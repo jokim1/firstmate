@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Shared validation and atomic artifact helpers for merge polling on the
-# supported forges. Callers must validate task IDs and raw PR/MR URLs before
-# constructing task paths or performing any side effect.
+# Shared PR/MR validation, forge-record reads, and atomic artifact helpers for
+# merge polling on the supported forges. Callers must validate task IDs and raw
+# PR/MR URLs before constructing task paths or performing any side effect.
 #
 # The stored identity is provider-tagged: provider, url, host, path, number.
 # "path" is the full project path, which is owner/repository on GitHub and an
