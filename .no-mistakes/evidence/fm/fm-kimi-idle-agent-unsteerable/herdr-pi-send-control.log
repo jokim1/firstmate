@@ -1,0 +1,30 @@
+Note: switching to '3f876db33cc96ed5b2e7907b2fc91b28185c151e'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+warning: secondmate marker-pi-sm sync skipped before launch: primary default-branch commit cannot be resolved
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the requested message WILL still be sent.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+evidence: exact-id record-body-hex=5b666d2d66726f6d2d66697273746d6174655de281a3636f72723d3638343133626635303031666630393520464d5f4d41524b45525f48455244525f4532452065786163742d69642072657175657374
+ok - real Pi/Herdr: exact-id FM_HOME send delivers its atomic doorbell and records exactly one from-firstmate marker
+evidence: direct-input received-hex=464d5f4d41524b45525f48455244525f444952454354206361707461696e20696e707574
+ok - real Pi/Herdr: direct captain terminal input stays unmarked
+ok - real Pi/Herdr: fm-control submits /quit atomically and verifies the idle agent stopped
