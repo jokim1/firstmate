@@ -40,8 +40,8 @@
 #          into each validated live secondmate home.
 #          SECONDMATE_SYNC lines report actionable skipped placement-specific
 #          syncs or inheritance failures for live secondmate homes, plus
-#          quarantine diagnostics for divergent shared captain-preference
-#          copies; no-op/current and successful updates stay quiet.
+#          quarantine diagnostics for divergent shared-data copies;
+#          no-op/current and successful updates stay quiet.
 #          SECONDMATE_LIVENESS lines report actionable liveness failures or
 #          degraded relaunch serialization. The recovery-grade state owned by
 #          bin/fm-backend.sh's fm_backend_agent_state distinguishes an existing

@@ -2,8 +2,8 @@
 # Push the declared inherited-material allowlist to one remote secondmate route.
 # Usage: fm-remote-inherit-push.sh <secondmate-id> <generation>
 #
-# The item set is derived from the ONE declared owner
-# (FM_INHERITABLE_CONFIG in bin/fm-config-inherit-lib.sh), the same declaration
+# The item set is derived from the one declared owner
+# (fm_config_inherit_items in bin/fm-config-inherit-lib.sh), the same declaration
 # the receiving bin/fm-remote-inherit.sh enforces, so the two implementations in
 # one code revision cannot drift silently. Different local and remote revisions
 # fail closed as documented by that owner. FM_CONFIG_INHERIT_LIVE=1 marks a live
