@@ -162,9 +162,11 @@ set -u
 [ "${FM_FAKE_TMUX_UNREADABLE:-0}" = 1 ] && { printf 'no current client\n' >&2; exit 1; }
 case "${1:-}" in
   list-windows)
-    # A successful but empty inventory: it omits the crew's window, so absence
-    # is proved by the answer rather than by an addressed call failing. Only
-    # reached once display-message has already failed.
+    # Missing targets return a successful but empty inventory, proving absence
+    # by omitting the crew's window. Readable targets name their recorded
+    # window so the newly unconditional agent classifier can distinguish them
+    # from an absent endpoint.
+    [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] || printf '%s\n' "${FM_FAKE_TMUX_WINDOW:-}"
     ;;
   display-message)
     [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] && exit 1
@@ -236,7 +238,7 @@ SH
 make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
   local dir=$1 tb="$1/notimeoutbin" tool real
   mkdir -p "$tb"
-  for tool in bash git grep sed head cut tail dirname perl; do
+  for tool in bash basename git grep sed head cut tail dirname perl; do
     real=$(command -v "$tool" || true)
     [ -n "$real" ] || fail "missing tool for no-timeout path: $tool"
     ln -s "$real" "$tb/$tool"
@@ -247,7 +249,12 @@ make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
 # Run the helper for one case dir. FM_FAKE_* env (run output, busy flag) are read
 # from the caller's environment by the fakes above.
 run_crew_state() {  # <case-dir> <id>
-  PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" "$CREW_STATE" "$2"
+  local target=''
+  if [ -f "$1/state/$2.meta" ]; then
+    target=$(sed -n 's/^window=//p' "$1/state/$2.meta" | head -1)
+  fi
+  PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" \
+    FM_FAKE_TMUX_WINDOW="${target#*:}" "$CREW_STATE" "$2"
 }
 
 new_case() {  # <name> -> echoes case dir with an empty state/
@@ -1768,7 +1775,8 @@ test_no_run_herdr_unknown_uses_backend_capture() {
   assert_contains "$out" "state: working" "herdr native busy -> working"
   assert_contains "$out" "source: pane" "herdr native busy -> pane source"
   assert_contains "$out" "herdr-native" "the herdr verdict names its native source"
-  pass "herdr's native busy verdict reads working with no record present"
+  assert_not_contains "$out" "backend target gone" "a readable pane with a live agent is never death"
+  pass "a readable pane with a live agent stays working"
 }
 
 # Regression (2026-09 G7 stale-claim incident): a herdr CLI that errors or
@@ -1880,9 +1888,34 @@ test_no_run_herdr_stale_working_record_is_never_busy() {
   pass "herdr stale working record never reports a shell-only pane busy"
 }
 
-# Decision follow-up (2026-09-05 review): a husk pane (pane present,
-# agent_not_found) is authoritative death evidence - it keeps the gone-class
-# text so the stale sweep may still reclaim it, never unknown/unreachable.
+# A readable pane whose agent has exited is the common husk shape: scrollback
+# still answers with the shell prompt while agent get returns agent_not_found.
+# Positive agent-death evidence must win over pane readability and keep the
+# established gone-class wording used by the stale sweep and recovery paths.
+test_no_run_herdr_readable_husk_dead_reads_gone() {
+  command -v jq >/dev/null 2>&1 || { pass "herdr readable-husk test skipped without jq"; return; }
+  reset_fakes
+  local d; d=$(new_case herdr-readable-husk-dead)
+  make_repo_on_branch "$d/wt" fm/feat-herdr-readable-husk
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-herdr-readable-husk.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=ship" \
+    "backend=herdr" "harness=claude"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_TMUX_MISSING=1
+  FM_FAKE_HERDR_HUSK=1
+  local out; out=$(run_crew_state "$d" feat-herdr-readable-husk)
+  assert_contains "$out" "state: unknown" "an exited agent has no live current state"
+  assert_contains "$out" "source: none" "confirmed agent death has no live state source"
+  assert_contains "$out" "backend target gone" "positive death evidence wins over readable scrollback"
+  assert_contains "$out" "agent gone, pane shell remains" "confirmed death keeps the established wording"
+  assert_not_contains "$out" "harness state unavailable" "confirmed agent death cannot fall through to busy classification"
+  pass "a readable pane whose agent exited reads gone"
+}
+
+# Decision follow-up (2026-09-05 review): an unreadable husk pane whose
+# classifier says dead is still authoritative death evidence. It keeps the
+# gone-class text so the stale sweep may reclaim it, never unknown/unreachable.
 test_no_run_herdr_husk_dead_still_reads_gone() {
   command -v jq >/dev/null 2>&1 || { pass "herdr husk test skipped without jq"; return; }
   reset_fakes
@@ -2326,7 +2359,8 @@ SH
   "$ROOT/bin/fm-busy-event.sh" apply "$d/state" feat-timeout busy --gen "$gen" \
     --source claude-hook --event user-prompt-submit
   start=$SECONDS
-  out=$(FM_FAKE_NM_CALLS="$calls_file" PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" FM_CREW_STATE_NM_TIMEOUT=1 "$CREW_STATE" feat-timeout)
+  out=$(FM_FAKE_NM_CALLS="$calls_file" PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" \
+    FM_FAKE_TMUX_WINDOW=fm-feat-timeout FM_CREW_STATE_NM_TIMEOUT=1 "$CREW_STATE" feat-timeout)
   elapsed=$((SECONDS - start))
   assert_contains "$out" "state: working" "timed-out no-mistakes falls back to pane"
   assert_contains "$out" "source: pane" "timed-out no-mistakes -> pane source"
@@ -3006,6 +3040,7 @@ test_no_run_grok_uses_isolated_fallback
 test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_cli_failure_reads_unreachable_not_gone
 test_no_run_herdr_alive_with_failed_read_stays_live
+test_no_run_herdr_readable_husk_dead_reads_gone
 test_no_run_herdr_husk_dead_still_reads_gone
 test_no_run_herdr_idle_agent_status_outranked_by_record
 test_no_run_herdr_idle_agent_status_and_idle_record_stays_idle
