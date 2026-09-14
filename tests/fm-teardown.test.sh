@@ -2458,6 +2458,58 @@ test_teardown_preflights_status_presentation_before_mutation() {
   pass "teardown preflights status presentation records before runtime mutation"
 }
 
+test_teardown_blocks_fresh_spawns_through_record_retirement() {
+  local case_dir ready release teardown_pid teardown_rc spawn_rc i
+  case_dir=$(make_case task-set-spawn-race)
+  ready="$case_dir/return-ready"
+  release="$case_dir/return-release"
+  write_meta "$case_dir" local-only ship
+  printf 'done: trial ok\n' > "$case_dir/state/task-x1.status"
+  printf 'manual\n' > "$case_dir/config/backlog-backend"
+  cat > "$case_dir/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = return ]; then
+  : > "${FM_TEST_RETURN_READY:?}"
+  while [ ! -e "${FM_TEST_RETURN_RELEASE:?}" ]; do sleep 0.05; done
+fi
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
+
+  FM_TEST_RETURN_READY="$ready" FM_TEST_RETURN_RELEASE="$release" \
+    run_teardown "$case_dir" --force > "$case_dir/teardown.out" 2> "$case_dir/teardown.err" &
+  teardown_pid=$!
+  for ((i=0; i < 100; i++)); do
+    [ -e "$ready" ] && break
+    kill -0 "$teardown_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [ ! -e "$ready" ]; then
+    : > "$release"
+    wait "$teardown_pid" 2>/dev/null || true
+    fail "task-set-spawn-race: teardown did not reach its post-preflight worktree return"
+  fi
+
+  spawn_rc=0
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" FM_CONFIG_OVERRIDE="$case_dir/config" \
+    PATH="$case_dir/fakebin:$PATH" \
+    "$ROOT/bin/fm-spawn.sh" sibling "$case_dir/project" --mode local-only \
+      --yolo off --harness codex --backend tmux \
+      > "$case_dir/spawn.out" 2> "$case_dir/spawn.err" || spawn_rc=$?
+  : > "$release"
+  teardown_rc=0
+  wait "$teardown_pid" || teardown_rc=$?
+
+  [ "$spawn_rc" -eq 1 ] || fail "task-set-spawn-race: fresh spawn did not refuse during teardown (rc=$spawn_rc)"
+  grep -F 'task set is locked' "$case_dir/spawn.err" >/dev/null \
+    || fail "task-set-spawn-race: spawn did not name task-set ownership: $(cat "$case_dir/spawn.err")"
+  [ ! -e "$case_dir/state/sibling.meta" ] || fail "task-set-spawn-race: concurrent spawn published a task record"
+  [ "$teardown_rc" -eq 0 ] \
+    || fail "task-set-spawn-race: teardown failed after releasing worktree return: $(cat "$case_dir/teardown.err")"
+  pass "teardown holds task-set ownership from preflight through record retirement"
+}
+
 assert_teardown_preflights_unsafe_record_shape() {  # <suffix>
   local suffix=$1 case_dir rc head
   case_dir=$(make_case "record-shape-preflight-$suffix")
@@ -5360,6 +5412,7 @@ test_teardown_missing_busy_sidecar_completes
 test_teardown_preflights_turnend_records_before_mutation
 test_teardown_refuses_hardlinked_turnend_auth_before_mutation
 test_teardown_preflights_status_presentation_before_mutation
+test_teardown_blocks_fresh_spawns_through_record_retirement
 test_teardown_preflights_busy_shape_before_mutation
 test_teardown_preflights_residue_shape_before_mutation
 test_teardown_enqueues_refill_wake

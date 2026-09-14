@@ -423,13 +423,10 @@ if [ -f "$META" ] && [ ! -L "$META" ]; then
       echo "REFUSED: cannot resolve the shared Treehouse project lock for ${TEARDOWN_LOCK_PROJECT:-<missing>}; nothing was changed" >&2
       exit 1
     }
-    fm_lock_try_acquire "$TREEHOUSE_PROJECT_LOCK" || {
-      echo "REFUSED: another Treehouse slot allocation or return is in progress for $TEARDOWN_LOCK_PROJECT; nothing was changed" >&2
-      exit 1
-    }
-    TREEHOUSE_PROJECT_LOCK_HELD=1
   fi
 fi
+TASK_SET_LOCK=
+TASK_SET_LOCK_HELD=0
 CONTROL_LOCK="$STATE/.control-$ID.lock"
 CONTROL_LOCK_HELD=0
 META_LOCK=
@@ -473,10 +470,30 @@ teardown_release_locks() {
     fm_lock_release "$TREEHOUSE_PROJECT_LOCK" || true
     TREEHOUSE_PROJECT_LOCK_HELD=0
   fi
+  if [ "$TASK_SET_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$TASK_SET_LOCK" || true
+    TASK_SET_LOCK_HELD=0
+  fi
   fm_lease_guard_release || true
   return "$status"
 }
 trap teardown_release_locks EXIT
+TASK_SET_LOCK=$(fm_task_set_lock_path "$STATE") || {
+  echo "REFUSED: cannot resolve this home's task-set lock; nothing was changed" >&2
+  exit 1
+}
+fm_lock_try_acquire "$TASK_SET_LOCK" || {
+  echo "REFUSED: this home's task set is locked by another spawn or teardown; nothing was changed" >&2
+  exit 1
+}
+TASK_SET_LOCK_HELD=1
+if [ "$TREEHOUSE_SLOT_LOCK_REQUIRED" = 1 ]; then
+  fm_lock_try_acquire "$TREEHOUSE_PROJECT_LOCK" || {
+    echo "REFUSED: another Treehouse slot allocation or return is in progress for $TEARDOWN_LOCK_PROJECT; nothing was changed" >&2
+    exit 1
+  }
+  TREEHOUSE_PROJECT_LOCK_HELD=1
+fi
 fm_lock_try_acquire "$CONTROL_LOCK" || {
   echo "error: another lifecycle action is already running for task $ID; nothing was changed" >&2
   exit 1
