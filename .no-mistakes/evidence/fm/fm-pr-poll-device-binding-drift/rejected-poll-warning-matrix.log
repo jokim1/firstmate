@@ -1,0 +1,19 @@
+SCENARIO: every poll-shaped rejected artifact family gets the lost-merge warning
+pr-poll-registration/regular -> check: merge watching stopped - PR poll rejected as unauthenticated: task-a - merge notifications for these tasks are lost until each is re-armed with bin/fm-pr-check.sh <task-id> <pr-url>
+pr-poll-registration/symlink -> check: merge watching stopped - PR poll rejected as unauthenticated: task-a - merge notifications for these tasks are lost until each is re-armed with bin/fm-pr-check.sh <task-id> <pr-url>
+pr-poll-registration/directory -> check: merge watching stopped - PR poll rejected as unauthenticated: task-a - merge notifications for these tasks are lost until each is re-armed with bin/fm-pr-check.sh <task-id> <pr-url>
+pr-poll/regular -> check: merge watching stopped - PR poll rejected as unauthenticated: task-a - merge notifications for these tasks are lost until each is re-armed with bin/fm-pr-check.sh <task-id> <pr-url>
+pr-poll/symlink -> check: merge watching stopped - PR poll rejected as unauthenticated: task-a - merge notifications for these tasks are lost until each is re-armed with bin/fm-pr-check.sh <task-id> <pr-url>
+pr-poll/directory -> check: merge watching stopped - PR poll rejected as unauthenticated: task-a - merge notifications for these tasks are lost until each is re-armed with bin/fm-pr-check.sh <task-id> <pr-url>
+SCENARIO: an inode-rejected poll and custom check report both warnings in one wake
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+combined -> check: rejected unauthenticated state checks: /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2FH1FCFSTS618NPG29JEMY3/.nm-live-rejections.3dSuUG/combined/home/state/z-custom.check.sh; check: merge watching stopped - PR poll rejected as unauthenticated: task-a - merge notifications for these tasks are lost until each is re-armed with bin/fm-pr-check.sh <task-id> <pr-url>
+PERSISTED WAKE KEYS:
+unauthenticated-state-checks
+unauthenticated-pr-polls

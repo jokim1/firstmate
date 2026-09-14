@@ -1,0 +1,22 @@
+SCENARIO: a device-drifted pending retirement receipt cannot delete poll artifacts
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ARTIFACTS BEFORE RECOVERY ATTEMPT:
+check.sh e87aae384ec62ae28f78a0779020f52f7b891ba0cafea2551b5a2c4e967870cf
+pr-poll d3d1bd3857c5219323c845bc8385d29221bbc8ecea52164aab88f3c6943678ec
+pr-poll-registration 114788287a65b032a28a9042c8fded1a22f51e9934a54bf1b0008ccb041d810a
+pr-poll-retirement 155c308fa058472cfe4d586b947bcdf6cbe316d1f498c9987fa825b604e18691
+WATCHER OUTPUT:
+check: rejected unauthenticated PR poll retirement receipts: /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2FH1FCFSTS618NPG29JEMY3/.nm-live-receipt.8ZS03g/home/state/receipt-drift.pr-poll-retirement
+WATCHER EXIT: 0
+ARTIFACTS AFTER REFUSED RECOVERY:
+check.sh e87aae384ec62ae28f78a0779020f52f7b891ba0cafea2551b5a2c4e967870cf
+pr-poll d3d1bd3857c5219323c845bc8385d29221bbc8ecea52164aab88f3c6943678ec
+pr-poll-registration 114788287a65b032a28a9042c8fded1a22f51e9934a54bf1b0008ccb041d810a
+pr-poll-retirement 155c308fa058472cfe4d586b947bcdf6cbe316d1f498c9987fa825b604e18691
+PRESERVATION CHECK: all four poll artifacts remain byte-for-byte unchanged

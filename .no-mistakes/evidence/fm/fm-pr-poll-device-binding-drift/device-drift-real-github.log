@@ -1,0 +1,24 @@
+SCENARIO: arm a PR poll through the public command against real GitHub PR 46
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+armed: state/live-device-drift.check.sh
+IDENTITIES BEFORE DRIFT (recorded -> live):
+16777233:402216484
+16777233:402216485
+16777233:402216484
+16777233:402216485
+IDENTITIES AFTER RECORDED DEVICE-ONLY DRIFT (recorded -> live):
+99999999:402216484
+99999999:402216485
+16777233:402216484
+16777233:402216485
+HASH CHECK: poll sidecar and executable bytes remain unchanged
+WATCHER OUTPUT:
+check: /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2FH1FCFSTS618NPG29JEMY3/.nm-live-device-drift.OIe55F/home/state/live-device-drift.check.sh: merged
+WATCHER EXIT: 0
+RETIREMENT CHECK: merged poll artifacts removed after the notification
