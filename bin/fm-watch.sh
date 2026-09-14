@@ -2095,7 +2095,8 @@ EOF
           fm_custom_check_snapshot_cleanup
         else
           fm_custom_check_snapshot_cleanup
-          if [ -f "$STATE/$id.pr-poll-registration" ] && [ ! -L "$STATE/$id.pr-poll-registration" ]; then
+          if [ -e "$STATE/$id.pr-poll-registration" ] || [ -L "$STATE/$id.pr-poll-registration" ] \
+            || [ -e "$STATE/$id.pr-poll" ] || [ -L "$STATE/$id.pr-poll" ]; then
             rejected_pr_polls="$rejected_pr_polls $id"
           else
             rejected_checks="$rejected_checks $c"
@@ -2130,17 +2131,24 @@ EOF
         wake "$reason"
       fi
     done
+    rejection_reason=
     if [ -n "$rejected_checks" ]; then
       reason="check: rejected unauthenticated state checks:$rejected_checks"
       fm_wake_append check unauthenticated-state-checks "$reason" || exit 1
-      touch "$STATE/.last-check"
-      wake "$reason"
+      rejection_reason=$reason
     fi
     if [ -n "$rejected_pr_polls" ]; then
       reason="check: merge watching stopped - PR poll rejected as unauthenticated:$rejected_pr_polls - merge notifications for these tasks are lost until each is re-armed with bin/fm-pr-check.sh <task-id> <pr-url>"
       fm_wake_append check unauthenticated-pr-polls "$reason" || exit 1
+      if [ -n "$rejection_reason" ]; then
+        rejection_reason="$rejection_reason; $reason"
+      else
+        rejection_reason=$reason
+      fi
+    fi
+    if [ -n "$rejection_reason" ]; then
       touch "$STATE/.last-check"
-      wake "$reason"
+      wake "$rejection_reason"
     fi
     touch "$STATE/.last-check"
   fi

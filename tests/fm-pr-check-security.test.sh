@@ -2221,6 +2221,62 @@ test_recorded_inode_drift_still_disarms_pr_poll() {
   pass "recorded inode drift still disarms, and the wake names the stopped merge watching"
 }
 
+test_rejected_poll_families_keep_the_merge_loss_warning() {
+  local dir state suffix shape external rc
+  for suffix in pr-poll-registration pr-poll; do
+    for shape in regular symlink directory; do
+      dir=$(make_case "rejected-${suffix}-${shape}")
+      state="$dir/home/state"
+      cp "$POLL" "$state/task-a.check.sh"
+      chmod 0600 "$state/task-a.check.sh"
+      case "$shape" in
+        regular) printf 'invalid\n' > "$state/task-a.$suffix" ;;
+        symlink)
+          external="$dir/$suffix-target"
+          printf 'invalid\n' > "$external"
+          ln -s "$external" "$state/task-a.$suffix"
+          ;;
+        directory) mkdir "$state/task-a.$suffix" ;;
+      esac
+      set +e
+      run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+      rc=$?
+      set -e
+      [ "$rc" -eq 0 ] || fail "$suffix $shape rejection watcher failed: $(cat "$dir/watch.err")"
+      grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+        || fail "$suffix $shape rejection hid the lost merge watching: $(cat "$dir/watch.out")"
+      grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+        || fail "$suffix $shape rejection omitted the PR-poll wake row"
+      ! grep "$(printf '\tcheck\tunauthenticated-state-checks\t')" "$state/.wake-queue" >/dev/null \
+        || fail "$suffix $shape rejection was misclassified as a generic check"
+    done
+  done
+
+  dir=$(make_case rejected-poll-with-custom-check)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/4
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/4
+  drift_recorded_inode "$state/task-a.pr-poll-registration"
+  printf '#!/usr/bin/env bash\nprintf "unsafe\\n"\n' > "$state/z-custom.check.sh"
+  chmod 0700 "$state/z-custom.check.sh"
+  set +e
+  run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "combined rejection watcher failed: $(cat "$dir/watch.err")"
+  grep -F 'rejected unauthenticated state checks' "$dir/watch.out" >/dev/null \
+    || fail "combined rejection wake omitted the generic check warning: $(cat "$dir/watch.out")"
+  grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+    || fail "combined rejection wake omitted the lost merge warning: $(cat "$dir/watch.out")"
+  [ "$(wc -l < "$state/.wake-queue" | tr -d ' ')" -eq 2 ] \
+    || fail "combined rejection did not enqueue exactly both warnings"
+  grep "$(printf '\tcheck\tunauthenticated-state-checks\t')" "$state/.wake-queue" >/dev/null \
+    || fail "combined rejection omitted the generic wake row"
+  grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+    || fail "combined rejection omitted the PR-poll wake row"
+  pass "all malformed poll families warn of merge loss without rejection starvation"
+}
+
 test_parser_matrix
 test_gitlab_merge_watch
 test_merged_poll_retires_once
@@ -2237,6 +2293,7 @@ test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
 test_device_drift_does_not_disarm_pr_poll
 test_recorded_inode_drift_still_disarms_pr_poll
+test_rejected_poll_families_keep_the_merge_loss_warning
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
 test_rejected_metacharacter_bytes_are_inert
