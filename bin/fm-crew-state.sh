@@ -329,6 +329,34 @@ nm_gate_findings_count() {
   case "$rest" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s' "$rest"
 }
+# 0 when a finding parked at the gate carries ask-user authority.
+nm_gate_has_ask_user_finding() {
+  printf '%s\n' "$RUN_OUT" | awk '
+    /^[[:space:]]*findings\[[0-9]+\]\{/ {
+      hdr = index($0, "findings")
+      cols = $0
+      sub(/^[^{]*\{/, "", cols)
+      sub(/\}.*/, "", cols)
+      n = split(cols, names, ",")
+      action = 0
+      for (i = 1; i <= n; i++) {
+        gsub(/^[ \t]+|[ \t]+$/, "", names[i])
+        if (names[i] == "action") action = i
+      }
+      inblock = 1
+      next
+    }
+    inblock {
+      match($0, /[^ \t]/)
+      if ($0 ~ /^[[:space:]]*$/ || RSTART <= hdr) { inblock = 0; next }
+      split($0, fields, ",")
+      value = fields[action]
+      gsub(/^[ \t]+|[ \t]+$/, "", value)
+      if (action && value == "ask-user") found = 1
+    }
+    END { exit(found ? 0 : 1) }
+  '
+}
 log_reports_ci_ready() {
   [ "$LOG_VERB" = "done" ] || return 1
   case "$(status_line_note "$LOG_LINE")" in
@@ -682,7 +710,7 @@ if [ "$HAVE_RUN" = 1 ]; then
       RUN_DETAIL="parked at $gate"
       fcount=$(nm_gate_findings_count)
       [ -n "$fcount" ] && RUN_DETAIL="$RUN_DETAIL: $fcount finding(s)"
-      if printf '%s\n' "$RUN_OUT" | grep -q 'ask-user'; then
+      if nm_gate_has_ask_user_finding; then
         RUN_DETAIL="$RUN_DETAIL (ask-user: authority decision)"
       fi
     else

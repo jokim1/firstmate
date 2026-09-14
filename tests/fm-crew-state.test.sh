@@ -310,6 +310,7 @@ run:
   awaiting_agent: parked 2m10s
   head: "${FM_FAKE_RUN_HEAD:-abc1234}"
   pr: ""
+  note: blocking and ask-user review findings park for your decision rather than being silently self-fixed
   findings[2]{id,severity,file,line,action,description}:
     r1,warning,a.go,,auto-fix,ignored error
     r2,error,b.go,,ask-user,changes product behavior
@@ -348,6 +349,23 @@ steps[3]{step,status,findings,duration_ms}:
   intent,completed,0,0
   review,fix_review,1,0
   test,pending,0,0
+EOF
+}
+
+run_parked_auto_fix_only() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: awaiting_approval
+  awaiting_agent: parked 2m10s
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: ""
+  note: blocking and ask-user review findings park for your decision rather than being silently self-fixed
+  findings[2]{id,severity,file,line,action,description}:
+    r1,warning,a.go,,auto-fix,ignored error
+    r2,error,b.go,,auto-fix,missing nil check
+gate: review
 EOF
 }
 
@@ -672,7 +690,7 @@ test_genuine_parked_not_superseded() {
   assert_contains "$out" "state: parked" "genuine parked run -> parked"
   assert_contains "$out" "source: run-step" "parked -> run-step source"
   assert_contains "$out" "2 finding(s)" "parked includes gate finding count"
-  assert_contains "$out" "ask-user" "parked surfaces ask-user finding"
+  assert_contains "$out" "(ask-user: authority decision)" "parked surfaces ask-user authority"
   assert_not_contains "$out" "superseded" "agreeing parked+needs-decision not flagged stale"
   pass "genuine parked run is not flagged superseded"
 }
@@ -709,6 +727,21 @@ test_gate_block_parked_not_superseded() {
   assert_contains "$out" "1 finding(s)" "gate block wait includes finding count"
   assert_not_contains "$out" "superseded" "gate block wait not flagged stale"
   pass "gate block parked run is not flagged superseded"
+}
+
+test_auto_fix_only_park_unlabelled() {
+  reset_fakes
+  local d; d=$(new_case parked-auto-fix)
+  make_repo_on_branch "$d/wt" fm/feat-af
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-af.meta" "window=fm:fm-feat-af" "worktree=$d/wt" "kind=ship"
+  printf 'needs-decision: review gate\n' > "$d/state/feat-af.status"
+  FM_FAKE_AXI_STATUS="$(run_parked_auto_fix_only fm/feat-af)"
+  local out; out=$(run_crew_state "$d" feat-af)
+  assert_contains "$out" "parked at review" "auto-fix park names the gate"
+  assert_contains "$out" "2 finding(s)" "auto-fix park includes finding count"
+  assert_not_contains "$out" "authority decision" "auto-fix-only park not labelled an authority decision"
+  pass "auto-fix-only park is not labelled an authority decision"
 }
 
 test_ci_ready_done_log_beats_monitoring_run() {
@@ -2433,6 +2466,7 @@ test_genuine_daemon_down_reports_blocked
 test_genuine_parked_not_superseded
 test_scalar_gate_parked_not_superseded
 test_gate_block_parked_not_superseded
+test_auto_fix_only_park_unlabelled
 test_ci_ready_done_log_beats_monitoring_run
 test_ci_monitoring_checks_green_surfaces_done
 test_top_level_ci_checks_green_surfaces_done
