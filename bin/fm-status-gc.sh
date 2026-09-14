@@ -96,7 +96,9 @@ fm_gc_record_families() {
 |.meta
 |.status
 |.turn-ended
+|.progress
 |.busy-gen
+|.busy-state
 |.check.sh
 |.check-trust
 |.pr-poll
@@ -111,6 +113,9 @@ fm_gc_record_families() {
 |.muse-session-current
 |.cursor-session
 |.pi-ext.ts
+|.omp-ext.ts
+|.gemini-settings.json
+|.reconcile-nudged
 |.playbot-outbox.json
 |.playbot-route.json
 |.control-relaunch
@@ -118,6 +123,7 @@ fm_gc_record_families() {
 |.control-relaunch.meta-prior
 |.control-relaunch.brief-prior
 .|.open-decisions-cursor
+.|.branch-outcome-index
 .lease-|
 .control-|.lock
 .meta-|.lock
@@ -417,7 +423,7 @@ gc_finish_interrupted_cleanup() {
     case "$name" in
       "$ID.kimi-turnend-token") turnend_kimi=1 ;;
       "$ID.grok-turnend-token") turnend_grok=1 ;;
-      "$ID.busy-gen") busy=1 ;;
+      "$ID.busy-gen"|"$ID.busy-state") busy=1 ;;
       "$ID.check.sh"|"$ID.check-trust"|"$ID.pr-poll"|"$ID.pr-poll-registration"|"$ID.pr-poll-retirement"|"$ID.pr-poll-merge-notified") prpoll=1 ;;
       "$ID.herdr-presentation") herdr=1 ;;
       "$ID.turn-ended"|"$ID.progress"|"$ID.muse-session"|"$ID.muse-session-current"|"$ID.cursor-session"|"$ID.pi-ext.ts"|"$ID.omp-ext.ts"|"$ID.gemini-settings.json"|"$ID.reconcile-nudged"|"$ID.control-relaunch"|"$ID.control-relaunch.note"|"$ID.control-relaunch.meta-prior"|"$ID.control-relaunch.brief-prior"|".$ID.branch-outcome-index"|"$ID.inbox") residue=1 ;;
@@ -428,6 +434,23 @@ gc_finish_interrupted_cleanup() {
     echo "REFUSED: task $ID has records with no writer-owned retirement: $refusal" >&2
     echo "Reconcile those records first; --finish-cleanup retires only families their own writers own." >&2
     exit 1
+  fi
+  if [ "$turnend_kimi" = 1 ]; then
+    fm_task_records_validate_turnend kimi "$STATE" "$ID" \
+      || { echo "error: unsafe task $ID kimi turn-end token record; preserving task state" >&2; exit 1; }
+  fi
+  if [ "$turnend_grok" = 1 ]; then
+    fm_task_records_validate_turnend grok "$STATE" "$ID" \
+      || { echo "error: unsafe task $ID grok turn-end token record; preserving task state" >&2; exit 1; }
+  fi
+  if [ "$prpoll" = 1 ]; then
+    fm_task_records_validate_pr_poll_cleanup "$STATE" "$ID" \
+      || { echo "error: unsafe task $ID PR-check artifacts; preserving task state" >&2; exit 1; }
+  fi
+  if [ "$busy" = 1 ]; then
+    gen=$(cat "$STATE/$ID.busy-gen" 2>/dev/null || true)
+    fm_task_records_validate_busy_cleanup "$STATE" "$ID" "$gen" \
+      || { echo "error: unsafe task $ID busy-state record; preserving task state" >&2; exit 1; }
   fi
   if [ "$herdr" = 1 ]; then
     gc_retire_herdr_journal \
@@ -442,7 +465,6 @@ gc_finish_interrupted_cleanup() {
       || { echo "error: could not deregister task $ID's grok turn-end wiring through its control-plane path" >&2; exit 1; }
   fi
   if [ "$busy" = 1 ]; then
-    gen=$(cat "$STATE/$ID.busy-gen" 2>/dev/null || true)
     fm_task_records_retire_busy "$STATE" "$ID" "$gen" \
       || { echo "error: could not retire task $ID's busy-state record through bin/fm-busy-event.sh" >&2; exit 1; }
   fi

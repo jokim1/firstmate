@@ -49,12 +49,29 @@ FM_TASK_RECORDS_RETIRE_BIN=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$FM_TASK_RECORDS_RETIRE_BIN/fm-pr-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$FM_TASK_RECORDS_RETIRE_BIN/fm-control-lib.sh"
+# shellcheck source=bin/fm-busy-lib.sh
+. "$FM_TASK_RECORDS_RETIRE_BIN/fm-busy-lib.sh"
+
+fm_task_records_validate_turnend() {  # <grok|kimi> <state-dir> <id>
+  local harness=$1 state_dir=$2 id=$3 token_path
+  token_path=$(fm_control_harness_turnend_token_path "$harness" "$state_dir" "$id") || return 1
+  [ -e "$token_path" ] || [ -L "$token_path" ] || return 0
+  if [ ! -f "$token_path" ] || [ -L "$token_path" ] \
+    || [ "$(fm_pr_file_link_count "$token_path")" != 1 ]; then
+    echo "REFUSED: unsafe task turn-end token record; preserving task state." >&2
+    return 1
+  fi
+}
 
 fm_task_records_retire_turnend() {  # <grok|kimi> <state-dir> <id>
-  local harness=$1 state_dir=$2 id=$3 token_path token='' path
+  local harness=$1 state_dir=$2 id=$3 token_path token='' path inode
   token_path=$(fm_control_harness_turnend_token_path "$harness" "$state_dir" "$id") || return 1
+  fm_task_records_validate_turnend "$harness" "$state_dir" "$id" || return 1
   if [ -n "$token_path" ] && [ -f "$token_path" ]; then
+    inode=$(fm_pr_file_inode "$token_path") || return 1
     IFS= read -r token < "$token_path" || [ -n "$token" ] || return 1
+    fm_task_records_validate_turnend "$harness" "$state_dir" "$id" || return 1
+    [ "$(fm_pr_file_inode "$token_path")" = "$inode" ] || return 1
   fi
   path=$(fm_control_harness_turnend_auth_path "$harness" "$token") || return 1
   # The token file is firstmate-owned state and always goes; the global hook
@@ -70,8 +87,18 @@ fm_task_records_retire_busy() {  # <state-dir> <id> <gen>
   local state_dir=$1 id=$2 gen=${3:-}
   if [ -n "$gen" ]; then
     "$FM_TASK_RECORDS_RETIRE_BIN/fm-busy-event.sh" retire "$state_dir" "$id" --gen "$gen"
-  elif [ -f "$state_dir/$id.busy-gen" ]; then
+  else
     "$FM_TASK_RECORDS_RETIRE_BIN/fm-busy-event.sh" retire "$state_dir" "$id" --current-gen
+  fi
+}
+
+fm_task_records_validate_busy_cleanup() {  # <state-dir> <id> <gen>
+  local state_dir=$1 id=$2 gen=${3:-} current
+  if [ -e "$state_dir/$id.busy-gen" ] || [ -L "$state_dir/$id.busy-gen" ]; then
+    current=$(fm_busy_current_gen "$state_dir" "$id") || return 1
+    [ "$gen" = "$current" ]
+  else
+    [ -z "$gen" ]
   fi
 }
 
@@ -80,7 +107,7 @@ fm_task_records_validate_pr_poll_cleanup() {  # <state-dir> <id>
   fm_task_id_path_safe "$id" || return 0
   for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
     "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
-    "$state_dir/$id.check-trust"; do
+    "$state_dir/$id.check-trust" "$state_dir/$id.pr-poll-merge-notified"; do
     [ -e "$artifact" ] || [ -L "$artifact" ] || continue
     has_artifact=1
   done
@@ -89,7 +116,7 @@ fm_task_records_validate_pr_poll_cleanup() {  # <state-dir> <id>
   state_device=$(fm_pr_file_device "$state_dir") || return 1
   for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
     "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
-    "$state_dir/$id.check-trust"; do
+    "$state_dir/$id.check-trust" "$state_dir/$id.pr-poll-merge-notified"; do
     [ -e "$artifact" ] || [ -L "$artifact" ] || continue
     if [ ! -f "$artifact" ] || [ -L "$artifact" ] \
       || [ "$(fm_pr_file_device "$artifact")" != "$state_device" ] \

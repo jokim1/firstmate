@@ -511,6 +511,74 @@ test_finish_cleanup_retires_partial_records_through_their_writers() {
   pass "finish-cleanup retires a partial cleanup through each record's own writer, kimi hook auth included"
 }
 
+test_finish_cleanup_preflights_late_pr_refusal() {
+  local dir state token_auth rc
+  dir=$(make_case finish-cleanup-pr-preflight)
+  state="$dir/state"
+  printf 'done: trial ok\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+  printf 'fm.reprotok123\n' > "$state/partial.kimi-turnend-token"
+  token_auth="$dir/fakehome/.kimi-code/fm-turn-end.d/fm.reprotok123"
+  mkdir -p "$(dirname "$token_auth")"
+  printf 'hook\n' > "$token_auth"
+  printf 'foreign check\n' > "$dir/foreign-check"
+  ln -s "$dir/foreign-check" "$state/partial.check.sh"
+
+  rc=0
+  HOME="$dir/fakehome" run_gc "$state" partial --finish-cleanup \
+    > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup accepted an unsafe late PR artifact (rc=$rc)"
+  [ -f "$state/partial.status" ] || fail "late PR refusal removed the status log"
+  [ -f "$state/partial.turn-ended" ] || fail "late PR refusal removed another residue marker"
+  [ -f "$state/partial.kimi-turnend-token" ] || fail "late PR refusal removed the turn-end token"
+  [ -f "$token_auth" ] || fail "late PR refusal deregistered the turn-end hook"
+  [ -L "$state/partial.check.sh" ] || fail "late PR refusal removed the unsafe artifact"
+  pass "finish-cleanup preflights late writer refusals before any mutation"
+}
+
+test_finish_cleanup_refuses_symlinked_turnend_token_without_mutation() {
+  local dir state token_auth rc
+  dir=$(make_case finish-cleanup-token-symlink)
+  state="$dir/state"
+  printf 'done: trial ok\n' > "$state/task-a.status"
+  : > "$state/task-a.turn-ended"
+  printf 'fm.task-b-token\n' > "$state/task-b.kimi-turnend-token"
+  ln -s "$state/task-b.kimi-turnend-token" "$state/task-a.kimi-turnend-token"
+  token_auth="$dir/fakehome/.kimi-code/fm-turn-end.d/fm.task-b-token"
+  mkdir -p "$(dirname "$token_auth")"
+  printf 'task B hook\n' > "$token_auth"
+
+  rc=0
+  HOME="$dir/fakehome" run_gc "$state" task-a --finish-cleanup \
+    > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup accepted a symlinked turn-end token (rc=$rc)"
+  [ -f "$state/task-a.status" ] || fail "token refusal removed task A's status log"
+  [ -f "$state/task-a.turn-ended" ] || fail "token refusal removed task A's residue"
+  [ -L "$state/task-a.kimi-turnend-token" ] || fail "token refusal removed task A's symlink"
+  [ -f "$state/task-b.kimi-turnend-token" ] || fail "token refusal removed task B's token"
+  [ -f "$token_auth" ] || fail "token refusal deregistered task B's hook"
+  pass "finish-cleanup refuses a symlinked token without cross-task mutation"
+}
+
+test_finish_cleanup_retires_an_intact_busy_incarnation() {
+  local dir state rc
+  dir=$(make_case finish-cleanup-busy-incarnation)
+  state="$dir/state"
+  printf 'done: trial ok\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+  "$ROOT/bin/fm-busy-event.sh" arm "$state" partial >/dev/null \
+    || fail "could not arm the busy incarnation fixture"
+
+  rc=0
+  run_gc "$state" partial --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "finish-cleanup refused an intact busy incarnation: $(cat "$dir/gc.err")"
+  [ ! -e "$state/partial.busy-gen" ] || fail "the busy generation survived finish-cleanup"
+  [ ! -e "$state/partial.busy-state" ] || fail "the busy record survived finish-cleanup"
+  [ ! -e "$state/partial.turn-ended" ] || fail "the other residue marker survived finish-cleanup"
+  [ ! -e "$state/partial.status" ] || fail "the status log survived busy retirement"
+  pass "finish-cleanup retires an intact busy incarnation through its writer"
+}
+
 # A writer's conservative preservation refuses the whole finish: the herdr
 # journal's own orphan path keeps it while its projection cannot be proven
 # gone, and nothing else may be retired around that refusal.
@@ -657,6 +725,9 @@ test_unfinished_and_undecided_records_refuse
 test_other_surviving_records_refuse
 test_invalid_and_absent_ids_refuse
 test_finish_cleanup_retires_partial_records_through_their_writers
+test_finish_cleanup_preflights_late_pr_refusal
+test_finish_cleanup_refuses_symlinked_turnend_token_without_mutation
+test_finish_cleanup_retires_an_intact_busy_incarnation
 test_finish_cleanup_refuses_when_a_writer_preserves_its_record
 test_finish_cleanup_retires_only_its_own_gone_herdr_journal
 test_finish_cleanup_refuses_records_no_writer_owns_and_retires_nothing
