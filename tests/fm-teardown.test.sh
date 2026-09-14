@@ -5127,6 +5127,7 @@ SH
 
 run_teardown_for_id() {  # <case_dir> <id> [teardown args...]
   local case_dir=$1 id=$2; shift 2
+  FM_HOME="$case_dir" \
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_DATA_OVERRIDE="$case_dir/data" \

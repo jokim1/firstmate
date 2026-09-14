@@ -3,21 +3,27 @@
 # no state/<id>.meta behind it.
 # Usage: fm-status-gc.sh <id> [--finish-cleanup]
 #
-# Teardown removes a task's status log only through status_retire_presentation_task
-# and only after every other record is gone, so a status log that outlives its meta
-# is a leak a completed teardown cannot produce. Left in place it keeps costing
-# supervision: the heartbeat backstop rescans every *.status regardless of meta, so
-# a terminal line goes on resurfacing as captain-relevant forever, and the
-# presentation cursor keeps a row for a task nothing owns.
+# Teardown removes a task's status log only through
+# status_retire_presentation_task as part of writer-owned record retirement, so
+# a status log that outlives its meta is evidence of interrupted cleanup. Left in
+# place it keeps costing supervision: the heartbeat backstop rescans every
+# *.status regardless of meta, so a terminal line goes on resurfacing as
+# captain-relevant forever, and the presentation cursor keeps a row for a task
+# nothing owns.
 #
 # This is a janitor, never a teardown. It touches no worktree, project, or
-# data/<id>/, and it retires nothing unless the record set is exactly that leak:
+# data/<id>/. Without --finish-cleanup it retires nothing unless the record set
+# is exactly that leak; the flag permits only the writer-owned interrupted-cleanup
+# path documented below. Both modes require these gates:
 #
 #   1. This home's task-set lock is free, and is then HELD through retirement, so
 #      a spawn cannot publish a record for this id while the gates below are
 #      being evaluated (bin/fm-wake-lib.sh's fm_task_set_lock_path owns why).
 #   2. No state/<id>.meta - re-checked immediately before deletion.
-#   3. No other record of this task anywhere in this home's state directory.
+#   3. By default, no other record of this task anywhere in this home's state
+#      directory. With --finish-cleanup, every survivor must be a recognized
+#      family with writer-owned retirement, and gates 4 and 5 pass before any
+#      survivor is retired.
 #      TOP LEVEL is resolved by name: every family is enumerated below from its
 #      writer rather than matched with a glob, because a glob over `<id>.*` and
 #      `.<id>.*` misses every id-SUFFIXED family (`.lease-<id>` and friends) and
@@ -47,12 +53,11 @@
 # an endpoint created outside firstmate's own spawn path, leaves no temp root -
 # which is a residual no meta-less check could see either.
 #
-# --finish-cleanup is the forward path for an INTERRUPTED cleanup (observed
-# 2026-09-14): when gate 3 refuses because recognized per-task records survive
-# next to the status log, each refusal is individually correct - teardown cannot
-# run without the meta this record lacks, and this janitor must not erase the
-# last trace of unfinished work - but together they park the record forever. With
-# the flag, and only after this janitor's own terminal gates (4 and 5) have
+# --finish-cleanup is the forward path for an interrupted cleanup: when gate 3
+# refuses because recognized per-task records survive next to the status log,
+# teardown cannot run without the meta this record lacks and this janitor must
+# not erase the last trace of unfinished work. With the flag, and only after
+# this janitor's own terminal gates (4 and 5) have
 # passed first so no record of unfinished work is ever destroyed, every
 # surviving family is retired through its own writer rather than by hand
 # (bin/fm-task-records-retire-lib.sh owns the shared mechanics, and the herdr
