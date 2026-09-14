@@ -442,7 +442,7 @@ EOF
 # Bounded and silent: prints nothing when no decision is open, which is the
 # common case.
 print_open_decisions_section() {
-  local snapshot=${1:-} open task key verb note line item_bytes=220 global_bytes=4000
+  local snapshot=${1:-} open task key verb note line display_verb item_bytes=220 global_bytes=4000
   local output='' pending='' remote_pending='' used=0 shown=0 omitted=0 bytes
   local answerable=0 pending_count=0 remote_count=0
 
@@ -457,7 +457,8 @@ print_open_decisions_section() {
     [ -n "$task" ] || continue
     line="$task"
     [ "$key" = default ] || line="$line [key=$key]"
-    line="$line $verb: $note"
+    case "$verb" in pending-delivery/*) display_verb=pending-delivery ;; *) display_verb=$verb ;; esac
+    line="$line $display_verb: $note"
     # The shared cut counts the item's own characters; the trailing newline this
     # section's global budget also pays for is this caller's, so the per-item
     # allowance passed down is one short of the cap.
@@ -468,24 +469,24 @@ print_open_decisions_section() {
       omitted=$((omitted + 1))
       continue
     fi
-    if [ "$verb" = pending-delivery ]; then
-      case "$note" in
-        *remote-limited:*)
+    case "$verb" in
+      pending-delivery/*)
+        if [ "$verb" = pending-delivery/remote ]; then
           remote_pending="$remote_pending$line
 "
           remote_count=$((remote_count + 1))
-          ;;
-        *)
+        else
           pending="$pending$line
 "
           pending_count=$((pending_count + 1))
-          ;;
-      esac
-    else
+        fi
+        ;;
+      *)
       output="$output$line
 "
       answerable=$((answerable + 1))
-    fi
+      ;;
+    esac
     used=$((used + bytes))
     shown=$((shown + 1))
   done <<EOF

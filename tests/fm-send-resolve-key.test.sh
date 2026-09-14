@@ -299,11 +299,11 @@ test_failed_ring_keeps_decision_pending_delivery() {
   : > "$log"
   env PATH="$fb:$PATH" FM_FAKE_TMUX_SEND_FAIL=1 \
     FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
-    "$SEND" t5 --resolve-key creds "token is in the vault now" >/dev/null 2>&1; rc=$?
+    "$SEND" t5 --resolve-key creds "remote-limited: token is in the vault now" >/dev/null 2>&1; rc=$?
   expect_code 0 "$rc" "a failed doorbell must not fail the durably enqueued answer"
-  grep -qF 'token is in the vault now' "$home/state/t5.inbox/001.msg" \
+  grep -qF 'remote-limited: token is in the vault now' "$home/state/t5.inbox/001.msg" \
     || fail "the answer must be durably recorded despite the failed ring"
-  grep -F 'pending-delivery [key=creds]' "$home/state/t5.status" >/dev/null \
+  grep -F 'pending-delivery [key=creds] [mode=local] [delivery=' "$home/state/t5.status" >/dev/null \
     || fail "the enqueued answer must mark pending delivery: $(cat "$home/state/t5.status")"
   out=$(drain_out "$home")
   printf '%s' "$out" | grep -F '[key=creds]' >/dev/null \
@@ -311,6 +311,8 @@ test_failed_ring_keeps_decision_pending_delivery() {
   printf '%s' "$out" | grep -F 'pending-delivery' >/dev/null \
     || fail "the open decision should identify pending delivery: $out"
   assert_contains "$out" "PENDING DELIVERIES" "pending answers should render separately"
+  assert_not_contains "$out" "REMOTE PENDING DELIVERIES" \
+    "local answer text must not impersonate structural remote mode"
   assert_not_contains "$out" "fm-send.sh <task> --resolve-key" \
     "a pending answer must not invite a duplicate send"
   mkdir -p "$home/state/t5.inbox/handled"
@@ -342,9 +344,63 @@ test_acknowledgement_does_not_close_newer_same_key_decision() {
 
   out=$(drain_out "$home")
   assert_contains "$out" "choose the follow-up API" "the newer same-key decision was closed by the old acknowledgement"
-  [ "$(grep -c 'resolved \[key=choice\]' "$home/state/t5.status" || true)" -eq 0 ] \
-    || fail "the old acknowledgement appended a resolved transition over the newer decision"
   pass "inbox acknowledgement closes only its matching pending transition"
+}
+
+test_old_identical_answer_does_not_close_newer_pending_delivery() {
+  local dir fb log home rc out
+  dir="$TMP_ROOT/identical-answer"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_home identical-answer)
+  fm_write_meta "$home/state/t5.meta" "window=sess:fm-t5" "kind=ship"
+  printf 'needs-decision [key=choice]: choose the first API\n' > "$home/state/t5.status"
+
+  env PATH="$fb:$PATH" FM_FAKE_TMUX_SEND_FAIL=1 \
+    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" t5 --resolve-key choice "use v1" >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "the first inbox answer should be recorded"
+  mv "$home/state/t5.inbox/001.msg" "$home/state/t5.inbox/handled/"
+  printf 'resolved [key=choice]: first occurrence retired\n' >> "$home/state/t5.status"
+  printf 'needs-decision [key=choice]: choose the follow-up API\n' >> "$home/state/t5.status"
+  env PATH="$fb:$PATH" FM_FAKE_TMUX_SEND_FAIL=1 \
+    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" t5 --resolve-key choice "use v1" >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "the identical follow-up answer should be recorded separately"
+
+  FM_STATE_OVERRIDE="$home/state" bash -c '
+    . "$1"
+    fm_task_inbox_resolve_acknowledged "$2" "$3" "$4"
+  ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$home/state" t5 "$home/state/t5.inbox/handled/001.msg" \
+    || fail "the older acknowledgement should reconcile"
+  out=$(drain_out "$home")
+  assert_contains "$out" "PENDING DELIVERIES" "the older identical acknowledgement closed the newer delivery"
+  assert_contains "$out" "[key=choice]" "the newer identical delivery disappeared"
+  pass "inbox acknowledgement identity survives identical later answers"
+}
+
+test_pending_publication_follows_concurrent_handled_move() {
+  local home record stale out
+  home=$(setup_home publication-move)
+  printf 'needs-decision [key=move-race]: choose safely\n' > "$home/state/t5.status"
+  mkdir -p "$home/state/t5.inbox/handled"
+  stale="$home/state/t5.inbox/001.msg"
+  record="$home/state/t5.inbox/handled/001.msg"
+  {
+    printf 'schema=fm-task-inbox.v1\n'
+    printf 'at=2026-09-14T00:00:00Z\n'
+    printf 'resolve-status-file=%s\n' "$home/state/t5.status"
+    printf 'resolve-status-pending-line=pending-delivery [key=move-race] [mode=local] [delivery=0123456789abcdef]: answered: safe\n'
+    printf 'resolve-status-line=resolved [key=move-race] [delivery=0123456789abcdef]: answered: safe\n'
+    printf '%s\n' '--' 'safe'
+  } > "$record"
+  FM_STATE_OVERRIDE="$home/state" bash -c '
+    . "$1"
+    fm_task_inbox_publish_pending_resolutions "$2"
+  ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$stale" \
+    || fail "pending publication did not recover the handled record"
+  out=$(drain_out "$home")
+  assert_contains "$out" "PENDING DELIVERIES" "the handled move bypassed pending publication"
+  pass "pending publication follows a concurrent handled move"
 }
 
 test_captain_hold_answer_cannot_be_resent_before_acknowledgement() {
@@ -445,7 +501,7 @@ test_local_secondmate_answer_marked_and_pending() {
     "$FM_FROMFIRST_MARK"corr=*) : ;;
     *) fail "the secondmate answer's record lost its from-firstmate marker/corr framing: $got" ;;
   esac
-  pending=$(grep -F 'pending-delivery [key=fleet-split]' "$home/state/domain.status" || true)
+  pending=$(grep -F 'pending-delivery [key=fleet-split] [mode=local] [delivery=' "$home/state/domain.status" || true)
   [ -n "$pending" ] || fail "the secondmate decision was not marked pending: $(cat "$home/state/domain.status")"
   case "$pending" in
     *corr=*) fail "the pending line leaked the corr token: $pending" ;;
@@ -486,21 +542,22 @@ EOF
 }
 
 test_remote_secondmate_answer_marks_pending_locally() {
-  local dir fb log home ssh_log rc out
+  local dir fb log home ssh_log rc out answer
   dir="$TMP_ROOT/remote-ok"; mkdir -p "$dir"
   fb=$(make_stubs "$dir"); log="$dir/send.log"; ssh_log="$dir/ssh.log"; : > "$ssh_log"
   home=$(setup_remote_home remote-ok)
   printf 'needs-decision [key=upgrade-window]: tonight or the weekend\n' > "$home/state/rsm.status"
+  answer="the weekend, freeze Friday $(printf 'x%.0s' {1..300})"
 
   : > "$log"
   env PATH="$fb:$PATH" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
     FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=0 \
-    "$SEND" rsm --resolve-key upgrade-window "the weekend, freeze Friday" >/dev/null 2>&1; rc=$?
+    "$SEND" rsm --resolve-key upgrade-window "$answer" >/dev/null 2>&1; rc=$?
   expect_code 0 "$rc" "a remote secondmate answer send should succeed"
   assert_grep 'fm-remote-entrypoint.sh' "$ssh_log" \
     "the answer message should cross the remote transport"
-  grep -F 'pending-delivery [key=upgrade-window]: answered: the weekend, freeze Friday' "$home/state/rsm.status" >/dev/null \
+  grep -F 'pending-delivery [key=upgrade-window] [mode=remote]: answered: the weekend, freeze Friday' "$home/state/rsm.status" >/dev/null \
     || fail "the remote answer did not mark pending delivery locally: $(cat "$home/state/rsm.status")"
   out=$(drain_out "$home")
   printf '%s' "$out" | grep -F '[key=upgrade-window]' >/dev/null \
@@ -539,7 +596,7 @@ test_remote_reply_corr_tag_does_not_block_resolve_key() {
     FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=0 \
     "$SEND" rsm --resolve-key loan-installment-cadence-amount "monthly" >/dev/null 2>&1; rc=$?
   expect_code 0 "$rc" "answering a corr-tagged remote decision should succeed, not refuse as unknown"
-  grep -F 'pending-delivery [key=loan-installment-cadence-amount]: answered: monthly' "$home/state/rsm.status" >/dev/null \
+  grep -F 'pending-delivery [key=loan-installment-cadence-amount] [mode=remote]: answered: monthly' "$home/state/rsm.status" >/dev/null \
     || fail "the pending-delivery line is missing:"$'\n'"$(cat "$home/state/rsm.status")"
 
   out=$(drain_out "$home")
@@ -783,7 +840,7 @@ test_remote_reserved_pending_reply_key_closes_locally() {
     FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=0 \
     "$SEND" rsm --resolve-key "$key" "ack the missed-reply hold" >/dev/null 2>&1; rc=$?
   expect_code 0 "$rc" "a remote reserved-key --resolve-key should succeed"
-  grep -F "pending-delivery [key=$key]: pending-reply-resolved: task=rsm pending-reply-id=$corr via=operator-resolve-key" \
+  grep -F "pending-delivery [key=$key] [mode=remote]: pending-reply-resolved: task=rsm pending-reply-id=$corr via=operator-resolve-key" \
     "$home/state/rsm.status" >/dev/null \
     || fail "the remote operator pending-delivery did not write the owning library's note: $(cat "$home/state/rsm.status")"
   out=$(drain_out "$home")
@@ -800,6 +857,8 @@ test_routine_steer_never_closes
 test_not_open_key_refuses_before_send
 test_failed_ring_keeps_decision_pending_delivery
 test_acknowledgement_does_not_close_newer_same_key_decision
+test_old_identical_answer_does_not_close_newer_pending_delivery
+test_pending_publication_follows_concurrent_handled_move
 test_captain_hold_answer_cannot_be_resent_before_acknowledgement
 test_failed_enqueue_does_not_close
 test_multiple_keys_close_together

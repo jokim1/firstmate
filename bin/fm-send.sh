@@ -605,7 +605,7 @@ if [ -n "$RESOLVE_KEYS" ]; then
       "$k"$'\t'*|*$'\n'"$k"$'\t'*)
         resolve_open_line=$(printf '%s' "$resolve_open_set" | awk -F '\t' -v key="$k" '$1 == key { print; exit }')
         case "$resolve_open_line" in
-          "$k"$'\t'"pending-delivery"$'\t'*)
+          "$k"$'\t'"pending-delivery/"*$'\t'*)
             echo "error: --resolve-key '$k' is already pending delivery in $RESOLVE_STATUS_FILE; do not resend the answer. Wait for the worker to acknowledge the existing inbox record, or inspect the task inbox if it is stuck." >&2
             exit 1
             ;;
@@ -644,12 +644,23 @@ if [ -n "$RESOLVE_KEYS" ]; then
       echo "error: --resolve-key cannot close a decision key of length ${#k}: its ${#probe_line}-character close record exceeds the $FM_LINE_CAP_DEFAULT-character status-line cap, and truncation would remove the structural key delimiter. Refusing rather than writing an ineffective close; nothing was sent." >&2
       exit 1
     fi
-    probe_line="pending-delivery [key=$k]: $probe"
-    fm_cap_line_var "$probe_line"
-    probe_key=$(_fm_decision_key "$FM_LINE_CAP_LINE") || probe_key=
-    if [ "$(status_line_verb "$FM_LINE_CAP_LINE")" != pending-delivery ] || [ "$probe_key" != "$k" ]; then
-      echo "error: --resolve-key cannot mark pending delivery for decision key of length ${#k}: its ${#probe_line}-character pending-delivery record exceeds the $FM_LINE_CAP_DEFAULT-character status-line cap, and truncation would remove the structural key delimiter. Refusing rather than writing an ineffective pending-delivery state; nothing was sent." >&2
-      exit 1
+    probe_mode=
+    probe_delivery=
+    case "$TARGET_BACKEND:$TARGET_HARNESS:$*" in
+      remote:*) probe_mode=remote; probe_line="pending-delivery [key=$k] [mode=$probe_mode]: $probe" ;;
+      *:*:/*|*:codex:\$*) probe_line= ;;
+      *) probe_mode=local; probe_delivery=0000000000000000; probe_line="pending-delivery [key=$k] [mode=$probe_mode] [delivery=$probe_delivery]: $probe" ;;
+    esac
+    if [ -n "$probe_line" ]; then
+      fm_cap_line_var "$probe_line"
+      probe_key=$(_fm_decision_key "$FM_LINE_CAP_LINE") || probe_key=
+      capped_mode=$(_fm_status_tag_value "$FM_LINE_CAP_LINE" mode) || capped_mode=
+      capped_delivery=$(_fm_status_tag_value "$FM_LINE_CAP_LINE" delivery) || capped_delivery=
+      if [ "$(status_line_verb "$FM_LINE_CAP_LINE")" != pending-delivery ] || [ "$probe_key" != "$k" ] \
+        || [ "$capped_mode" != "$probe_mode" ] || [ "$capped_delivery" != "$probe_delivery" ]; then
+        echo "error: --resolve-key cannot mark pending delivery for decision key of length ${#k}: its ${#probe_line}-character pending-delivery record exceeds the $FM_LINE_CAP_DEFAULT-character status-line cap, and truncation would remove structural metadata. Refusing rather than writing an ineffective pending-delivery state; nothing was sent." >&2
+        exit 1
+      fi
     fi
   done
 fi
@@ -689,13 +700,12 @@ fm_send_close_resolved_keys() {  # <answer-text>
 # Mark each answered decision as delivered only to the steering inbox.
 # The worker has not acknowledged the record until it moves the message to
 # handled/, so the status fold keeps pending-delivery visible in OPEN DECISIONS.
-fm_send_mark_pending_delivery_keys() {  # <answer-text> [remote]
-  local note=$1 mode=${2:-} k line pending_note append_rc
+fm_send_mark_pending_delivery_keys() {  # <answer-text>
+  local note=$1 k line pending_note append_rc
   note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
   for k in $RESOLVE_STATUS_KEYS; do
     pending_note=$(fm_send_resolve_close_note "$k" "$note")
-    [ "$mode" != remote ] || pending_note="$pending_note; remote-limited: answer sent; automatic acknowledgement is unavailable"
-    line="pending-delivery [key=$k]: $pending_note"
+    line="pending-delivery [key=$k] [mode=remote]: $pending_note"
     fm_cap_line_var "$line"
     append_rc=0
     fm_wake_status_append_self_announced "$STATE" "$RESOLVE_STATUS_FILE" "$FM_LINE_CAP_LINE" || append_rc=$?
@@ -707,7 +717,7 @@ fm_send_mark_pending_delivery_keys() {  # <answer-text> [remote]
 }
 
 fm_send_prepare_inbox_resolve_metadata() {  # <answer-text>
-  local note=$1 k close_note line pending_line hold lines='' pending_lines='' holds=''
+  local note=$1 k close_note line pending_line hold lines='' pending_lines='' holds='' delivery
   FM_TASK_INBOX_RESOLVE_STATUS_FILE=
   FM_TASK_INBOX_RESOLVE_STATUS_PENDING_LINES=
   FM_TASK_INBOX_RESOLVE_STATUS_LINES=
@@ -716,11 +726,13 @@ fm_send_prepare_inbox_resolve_metadata() {  # <answer-text>
   [ -n "$RESOLVE_KEYS" ] || return 0
   note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
   if [ -n "$RESOLVE_STATUS_KEYS" ]; then
+    delivery=$(fm_pending_reply_new_id)
+    _fm_delivery_token_ok "$delivery" || return 1
     FM_TASK_INBOX_RESOLVE_STATUS_FILE=$RESOLVE_STATUS_FILE
     for k in $RESOLVE_STATUS_KEYS; do
       close_note=$(fm_send_resolve_close_note "$k" "$note")
-      line="resolved [key=$k]: $close_note"
-      pending_line="pending-delivery [key=$k]: $close_note"
+      line="resolved [key=$k] [delivery=$delivery]: $close_note"
+      pending_line="pending-delivery [key=$k] [mode=local] [delivery=$delivery]: $close_note"
       fm_cap_line_var "$line"
       lines="${lines}resolve-status-line=${FM_LINE_CAP_LINE}"$'\n'
       fm_cap_line_var "$pending_line"
@@ -1024,7 +1036,7 @@ else
     if [ -n "$RESOLVE_KEYS" ]; then
       # fm-on starts the remote command with an empty environment, so
       # parent-local acknowledgement metadata cannot cross this boundary.
-      fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" remote || exit 1
+      fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" || exit 1
     fi
     exit 0
   fi
@@ -1058,7 +1070,14 @@ else
       echo "error: steer not sent to $INBOX_TASK_ID: the task retired or changed endpoint during target resolution" >&2
       exit 1
     fi
-    fm_send_prepare_inbox_resolve_metadata "$RESOLVE_ANSWER_TEXT"
+    if ! fm_send_prepare_inbox_resolve_metadata "$RESOLVE_ANSWER_TEXT"; then
+      fm_lock_release "$INBOX_META_LOCK"
+      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+      fi
+      echo "error: steer not sent to $INBOX_TASK_ID: could not create valid acknowledgement metadata" >&2
+      exit 1
+    fi
     if [ "${FM_SEND_IDEMPOTENT:-0}" = 1 ]; then
       INBOX_RECORD=$(fm_task_inbox_write_idempotent "$STATE" "$INBOX_TASK_ID" "$MESSAGE" \
         "${FIRE_AND_FORGET_ID:+fire-and-forget}") || inbox_write_rc=$?

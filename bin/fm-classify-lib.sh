@@ -429,6 +429,25 @@ _fm_decision_slug_ok() {  # <slug>
     *) return 0 ;;
   esac
 }
+_fm_status_tag_value() {  # <status-line> <tag-name>
+  local prefix rest value
+  prefix=${1%%:*}
+  case "$prefix" in
+    *"[$2="*']'*) ;;
+    *) return 1 ;;
+  esac
+  rest=${prefix#*"[$2="}
+  value=${rest%%]*}
+  _fm_decision_slug_ok "$value" || return 1
+  printf '%s' "$value"
+}
+
+_fm_delivery_token_ok() {  # <token>
+  case "$1" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 status_line_note() {  # <status-line> -> text after the first colon, trimmed
   local n k
   case "$1" in
@@ -525,7 +544,7 @@ _fm_is_pending_reply_escalation() {  # <key> <note>
 }
 
 _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb>
-  local open=$1 line=$2 resolve=$3 held=$4 pending verb key note
+  local open=$1 line=$2 resolve=$3 held=$4 pending verb key note mode delivery
   pending=${FM_CLASSIFY_PENDING_DELIVERY_VERB:-$FM_CLASSIFY_PENDING_DELIVERY_VERB_DEFAULT}
   # Blank-line guard. A `case` glob answers "does this line hold any non-space
   # character" in one pattern match; the equivalent ${line//[[:space:]]/} costs
@@ -541,13 +560,42 @@ _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb
   _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")" \
     || { printf '%s' "$open"; return 0; }
   case "$verb" in
-    needs-decision|blocked|"$pending")
+    "$pending")
+      mode=$(_fm_status_tag_value "$line" mode) || { printf '%s' "$open"; return 0; }
+      case "$mode" in
+        local)
+          delivery=$(_fm_status_tag_value "$line" delivery) || { printf '%s' "$open"; return 0; }
+          _fm_delivery_token_ok "$delivery" || { printf '%s' "$open"; return 0; }
+          verb="$pending/local/$delivery"
+          ;;
+        remote) verb="$pending/remote" ;;
+        *) printf '%s' "$open"; return 0 ;;
+      esac
       note=$(status_line_note "$line")
       open=$(_fm_decision_drop "$open" "$key")
       [ -n "$open" ] && open="${open}"$'\n'
       open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\n'
       ;;
-    "$resolve"|"$held")
+    needs-decision|blocked)
+      note=$(status_line_note "$line")
+      open=$(_fm_decision_drop "$open" "$key")
+      [ -n "$open" ] && open="${open}"$'\n'
+      open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\n'
+      ;;
+    "$resolve")
+      case "${line%%:*}" in
+        *'[delivery='*)
+          delivery=$(_fm_status_tag_value "$line" delivery) \
+            || { printf '%s' "$open"; return 0; }
+        _fm_delivery_token_ok "$delivery" || { printf '%s' "$open"; return 0; }
+        [ "$(_fm_open_set_verb "$open" "$key")" = "$pending/local/$delivery" ] \
+          || { printf '%s' "$open"; return 0; }
+          ;;
+      esac
+      open=$(_fm_decision_drop "$open" "$key")
+      [ -n "$open" ] && open="${open}"$'\n'
+      ;;
+    "$held")
       open=$(_fm_decision_drop "$open" "$key")
       [ -n "$open" ] && open="${open}"$'\n'
       ;;
@@ -741,7 +789,7 @@ _fm_open_decisions_cursor_path() {  # <status-file>
 # Version 4 was already spent on the bracketed-tag parser change above, and a
 # cursor persisted under that reading predates this one, so it must still be
 # discarded and rebuilt from byte 0 under the new reading.
-FM_OPEN_DECISIONS_FOLD_VERSION=5
+FM_OPEN_DECISIONS_FOLD_VERSION=6
 
 # Portable device:inode identity for the rotation/recreation check below.
 _fm_open_decisions_file_ident() {  # <file> -> strongest available identity
