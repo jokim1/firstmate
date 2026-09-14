@@ -882,7 +882,7 @@ else
       exit 1
     fi
     remote_rc=0
-    remote_ring_rc=0
+    remote_ring_rc=6
     remote_completion_unknown=0
     REMOTE_SEND_ARGS=("$TARGET_REMOTE_ID" "$MESSAGE")
     [ -z "$FIRE_AND_FORGET_ID" ] || REMOTE_SEND_ARGS+=(fire-and-forget)
@@ -904,6 +904,10 @@ else
         fm-remote-secondmate-control.sh send "${REMOTE_SEND_ARGS[@]}" < /dev/null || remote_rc=$?
     fi
     case "$remote_rc" in
+      200)
+        remote_ring_rc=0
+        remote_rc=0
+        ;;
       201|202|203|204|205|206)
         remote_ring_rc=$((remote_rc - 200))
         remote_rc=0

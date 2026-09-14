@@ -272,9 +272,9 @@ cmd_send() {
   # best-effort (bin/fm-task-inbox-lib.sh owns the record and doorbell). The
   # write is idempotent - re-running the same request after an ambiguous
   # transport failure lands on the existing record instead of a duplicate - so
-  # the parent may safely repeat this leg. Exit 201-206 for a durable record
-  # whose ring returned 1-6, preserving that verdict across the remote process
-  # boundary while reserving 0 for confirmed delivery.
+  # the parent may safely repeat this leg. Exit 200 for confirmed delivery or
+  # 201-206 for a durable record whose ring returned 1-6, preserving the full
+  # verdict across the remote process boundary.
   if ! rec=$(fm_task_inbox_write_idempotent "$CONTROL_STATE" "$id" "$message" "$delivery_mode"); then
     fm_lock_release "$meta_lock"
     die "steering-inbox record could not be written under $CONTROL_STATE/$id.inbox"
@@ -285,7 +285,7 @@ cmd_send() {
       # The dedup landed on a record the worker already acknowledged: the
       # steer was delivered and acted on, so there is nothing to announce.
       printf 'notice: this steer was already delivered and acknowledged at %s; nothing re-rung\n' "$rec" >&2
-      return 0
+      return 200
       ;;
   esac
   fm_task_inbox_ring "$REMOTE_ENDPOINT_BACKEND" "$REMOTE_ENDPOINT_TARGET" "$rec" "fm-$id" || ring_rc=$?
@@ -298,6 +298,7 @@ cmd_send() {
     6) printf 'notice: doorbell delivery is unconfirmed (verdict=unknown); the steer is durably recorded at %s\n' "$rec" >&2 ;;
   esac
   [ "$ring_rc" -eq 0 ] || return $((200 + ring_rc))
+  return 200
 }
 
 cmd_key() {

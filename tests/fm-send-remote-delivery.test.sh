@@ -20,8 +20,8 @@
 #      remote typed-payload plane is gone for every remote text.
 #   5. A real remote failure still fails loudly with the remote leg's own
 #      stderr and discards the undelivered expectation.
-#   6. The deleted exit-3-as-delivered remap is GONE: a nonzero remote leg
-#      status is a failure, never reported as delivered.
+#   6. The deleted exit-3-as-delivered remap is GONE: unrecognized nonzero
+#      remote statuses are failures, never reported as delivered.
 #   7. Pure transport loss (ssh 255 twice, nothing executed) fails with
 #      resend-safe guidance - the deleted "do not resend" trap is gone - and
 #      preserves the marked expectation for the record that may have landed.
@@ -150,6 +150,7 @@ if [ "${FM_FAKE_SSH_AMBIGUOUS:-0}" = 1 ] \
   || { [ "${FM_FAKE_SSH_AFTER_AMBIGUOUS_RC:-0}" -ne 0 ] && [ "$count" -eq 1 ]; }; then
   exit 255
 fi
+[ "${FM_FAKE_SSH_LEGACY_ZERO:-0}" != 1 ] || exit 0
 exit "$rc"
 SH
   chmod +x "$fb/fake-ssh"
@@ -565,15 +566,38 @@ test_remote_confirmed_ring_closes_decision() {
   pass "fm-send remote: a confirmed doorbell closes a --resolve-key decision"
 }
 
+test_legacy_remote_zero_leaves_decision_open() {
+  local dir fb ssh_log home rhome rc out
+  dir="$TMP_ROOT/remote-key-legacy-zero"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); ssh_log="$dir/ssh.log"; : > "$ssh_log"
+  rhome=$(setup_remote_secondmate_home remote-key-legacy-zero)
+  home=$(setup_remote_parent_home remote-key-legacy-zero "$rhome")
+  printf 'needs-decision [key=upgrade-window]: tonight or the weekend\n' > "$home/state/rsm.status"
+
+  rc=0
+  send_env "$fb" "$home" "$ssh_log" FM_FAKE_SSH_LEGACY_ZERO=1 \
+    "$SEND" rsm --resolve-key upgrade-window "the weekend, freeze Friday" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "a legacy remote durable enqueue must retain its success status"
+  if grep -F 'resolved [key=upgrade-window]' "$home/state/rsm.status" >/dev/null; then
+    fail "a legacy bare-zero remote response closed the decision: $(cat "$home/state/rsm.status")"
+  fi
+  out=$(drain_out "$home")
+  printf '%s' "$out" | grep -F '[key=upgrade-window]' >/dev/null \
+    || fail "the decision vanished after a legacy bare-zero remote response: $out"
+  grep -rqF 'the weekend, freeze Friday' "$rhome/state/parent-route/rsm.inbox" \
+    || fail "the legacy remote answer must still land in the remote steering inbox"
+  pass "fm-send remote: legacy bare zero cannot close a --resolve-key decision"
+}
+
 test_remote_ring_verdict_gates_captain_hold() {
-  local dir fb ssh_log home rhome key confirmed rc
+  local dir fb ssh_log home rhome key mode rc
   command -v tasks-axi >/dev/null 2>&1 || { pass "remote captain-held ring verdict (tasks-axi unavailable)"; return; }
-  for confirmed in 0 1; do
-    dir="$TMP_ROOT/remote-hold-$confirmed"; mkdir -p "$dir"
+  for mode in unconfirmed confirmed legacy-zero; do
+    dir="$TMP_ROOT/remote-hold-$mode"; mkdir -p "$dir"
     fb=$(make_stubs "$dir"); ssh_log="$dir/ssh.log"; : > "$ssh_log"
-    rhome=$(setup_remote_secondmate_home "remote-hold-$confirmed")
-    home=$(setup_remote_parent_home "remote-hold-$confirmed" "$rhome")
-    key="remote-hold-$confirmed"
+    rhome=$(setup_remote_secondmate_home "remote-hold-$mode")
+    home=$(setup_remote_parent_home "remote-hold-$mode" "$rhome")
+    key="remote-hold-$mode"
     mkdir -p "$home/config"
     cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
     printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
@@ -586,16 +610,23 @@ test_remote_ring_verdict_gates_captain_hold() {
     printf 'captain-held [key=%s]: transferred\n' "$key" > "$home/state/rsm.status"
 
     rc=0
-    if [ "$confirmed" = 1 ]; then
-      send_env "$fb" "$home" "$ssh_log" FM_FAKE_HERDR_CONFIRMED=1 \
-        FM_BACKEND_HERDR_SUBMIT_POLLS=1 FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0 \
-        "$SEND" rsm --resolve-key "$key" "approve it" >/dev/null 2>&1 || rc=$?
-    else
-      send_env "$fb" "$home" "$ssh_log" \
-        "$SEND" rsm --resolve-key "$key" "approve it" >/dev/null 2>&1 || rc=$?
-    fi
+    case "$mode" in
+      confirmed)
+        send_env "$fb" "$home" "$ssh_log" FM_FAKE_HERDR_CONFIRMED=1 \
+          FM_BACKEND_HERDR_SUBMIT_POLLS=1 FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0 \
+          "$SEND" rsm --resolve-key "$key" "approve it" >/dev/null 2>&1 || rc=$?
+        ;;
+      legacy-zero)
+        send_env "$fb" "$home" "$ssh_log" FM_FAKE_SSH_LEGACY_ZERO=1 \
+          "$SEND" rsm --resolve-key "$key" "approve it" >/dev/null 2>&1 || rc=$?
+        ;;
+      *)
+        send_env "$fb" "$home" "$ssh_log" \
+          "$SEND" rsm --resolve-key "$key" "approve it" >/dev/null 2>&1 || rc=$?
+        ;;
+    esac
     expect_code 0 "$rc" "a durable remote captain-held answer must exit 0"
-    if [ "$confirmed" = 1 ]; then
+    if [ "$mode" = confirmed ]; then
       if FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
         FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" open "$key"; then
         fail "a confirmed remote doorbell left captain-held work open"
@@ -659,8 +690,8 @@ test_remote_exit3_no_longer_delivered() {
   home=$(setup_remote_parent_home remote-exit3 "$rhome")
 
   # The typed-plane remote transport remapped a leg exit 3 to "delivered with
-  # confirmation pending". That transport is deleted: any nonzero remote leg
-  # status is a failure, never a delivery claim.
+  # confirmation pending". That transport is deleted: exit 3 from the remote
+  # leg is a failure, never a delivery claim.
   rc=0
   send_env "$fb" "$home" "$ssh_log" FM_FAKE_SSH_RC=3 \
     "$SEND" rsm "please rename the metric" >"$dir/out" 2>"$dir/err" || rc=$?
@@ -876,6 +907,7 @@ test_remote_send_revalidates_parent_route_after_retirement_lock
 test_remote_expected_host_revalidates_final_route
 test_remote_unconfirmed_ring_leaves_decision_open
 test_remote_confirmed_ring_closes_decision
+test_legacy_remote_zero_leaves_decision_open
 test_remote_ring_verdict_gates_captain_hold
 test_remote_slash_rides_inbox
 test_remote_real_failure_still_fails

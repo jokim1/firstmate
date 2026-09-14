@@ -116,12 +116,12 @@ switch (command) {
 }
 JS
   # Stub ssh transport for the remote-secondmate legs, selected via FM_SSH_BIN.
-  # Records the full remote invocation and exits FM_FAKE_SSH_RC (default 0).
+  # Records the full remote invocation and exits FM_FAKE_SSH_RC (default 200).
   cat > "$fb/fake-ssh" <<'SH'
 #!/usr/bin/env bash
 cat > /dev/null
 printf '%s\n' "$*" >> "$FM_SSH_LOG"
-exit "${FM_FAKE_SSH_RC:-0}"
+exit "${FM_FAKE_SSH_RC:-200}"
 SH
   chmod +x "$fb/fake-ssh"
   printf '%s\n' "$fb"
@@ -613,7 +613,7 @@ test_remote_secondmate_answer_closes_locally() {
   : > "$log"
   env PATH="$fb:$PATH" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
-    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=0 \
+    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=200 \
     "$SEND" rsm --resolve-key upgrade-window "the weekend, freeze Friday" >/dev/null 2>&1; rc=$?
   expect_code 0 "$rc" "a remote secondmate answer send should succeed"
   assert_grep 'fm-remote-entrypoint.sh' "$ssh_log" \
@@ -650,7 +650,7 @@ test_remote_reply_corr_tag_does_not_block_resolve_key() {
   : > "$log"
   env PATH="$fb:$PATH" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
-    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=0 \
+    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=200 \
     "$SEND" rsm --resolve-key loan-installment-cadence-amount "monthly" >/dev/null 2>&1; rc=$?
   expect_code 0 "$rc" "answering a corr-tagged remote decision should succeed, not refuse as unknown"
   grep -F 'resolved [key=loan-installment-cadence-amount]: answered: monthly' "$home/state/rsm.status" >/dev/null \
@@ -895,7 +895,7 @@ test_remote_reserved_pending_reply_key_closes_locally() {
   : > "$log"
   env PATH="$fb:$PATH" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
-    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=0 \
+    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=200 \
     "$SEND" rsm --resolve-key "$key" "ack the missed-reply hold" >/dev/null 2>&1; rc=$?
   expect_code 0 "$rc" "a remote reserved-key --resolve-key should succeed"
   grep -F "pending-reply-resolved: task=rsm pending-reply-id=$corr via=operator-resolve-key" \
