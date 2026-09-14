@@ -83,15 +83,20 @@ HERDR_VER=$(PATH="$ORIGINAL_PATH" herdr --version 2>/dev/null | head -1 || print
 lab pane run "$PANE" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}'" >/dev/null \
   || fail "could not launch Claude Code ($VERSION) in the isolated Herdr pane"
 
-idle=0
+ready=0
 i=0
 while [ "$i" -lt 45 ]; do
   st=$(lab agent get "$PANE" 2>/dev/null | jq -r '.result.agent.agent_status // empty')
-  case "$st" in idle|done|blocked) idle=1; break ;; esac
+  case "$st" in
+    idle|done|blocked)
+      [ "$(fm_backend_herdr_composer_state "$TARGET")" = empty ] \
+        && { ready=1; break; }
+      ;;
+  esac
   i=$((i + 1))
   sleep 1
 done
-[ "$idle" = 1 ] || fail "Claude Code ($VERSION) on $HERDR_VER never registered an idle agent in the lab pane"
+[ "$ready" = 1 ] || fail "Claude Code ($VERSION) on $HERDR_VER never reached an idle, empty composer in the lab pane"
 
 TOKEN="FMHERDRPONG$$_$RANDOM"
 verdict=$(fm_backend_herdr_send_text_submit "$TARGET" "Reply with exactly $TOKEN and nothing else." 3 0.4 0.4) \

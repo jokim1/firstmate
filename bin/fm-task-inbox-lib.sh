@@ -294,10 +294,9 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   case "$cstate" in
     pending) return 1 ;;
   esac
-  # Accepted residual race: terminal input and Enter are separate delivery
-  # steps, so an agent exiting after the liveness check could leave a bare
-  # shell only a suffix; the `: ` prefix protects complete lines only. Do not
-  # add process-bound atomic delivery here unless an incident reopens this.
+  # An agent can still exit after the liveness check and expose a bare shell.
+  # The `: ` prefix protects complete lines; each backend owns whether text
+  # plus submit is one transport request (Herdr) or separate terminal steps.
   if ! verdict=$(fm_backend_send_text_submit "$backend" "$target" "$line" 1 0.4 0.3 "$label" 2>/dev/null); then
     return 2
   fi
