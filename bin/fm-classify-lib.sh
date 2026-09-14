@@ -647,6 +647,39 @@ EOF
   return 0
 }
 
+status_delivery_transition_state() {  # <status-file> <key> <delivery-token>
+  local f=$1 key=$2 delivery=$3 line resolve held pending open='' before after
+  local verb line_delivery applied=0 saw_pending=0 matching
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 1
+  _fm_delivery_token_ok "$delivery" || return 1
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  pending=${FM_CLASSIFY_PENDING_DELIVERY_VERB:-$FM_CLASSIFY_PENDING_DELIVERY_VERB_DEFAULT}
+  matching="$pending/local/$delivery"
+  while IFS= read -r line || [ -n "$line" ]; do
+    before=$(_fm_open_set_verb "$open" "$key")
+    verb=$(status_line_verb "$line")
+    line_delivery=
+    if [ "$verb" = "$resolve" ]; then
+      line_delivery=$(_fm_status_tag_value "$line" delivery 2>/dev/null || true)
+    fi
+    open=$(_fm_decision_fold_line "$open" "$line" "$resolve" "$held")
+    after=$(_fm_open_set_verb "$open" "$key")
+    [ "$after" != "$matching" ] || saw_pending=1
+    if [ "$before" = "$matching" ] && [ "$after" != "$matching" ] \
+      && [ "$verb" = "$resolve" ] && [ "$line_delivery" = "$delivery" ]; then
+      applied=1
+    fi
+  done < "$f"
+  if [ "$(_fm_open_set_verb "$open" "$key")" = "$matching" ]; then
+    printf 'pending'
+  elif [ "$applied" = 1 ]; then
+    printf 'resolved'
+  elif [ "$saw_pending" = 1 ]; then
+    printf 'superseded'
+  fi
+}
+
 # The verb that last moved <key> in a status stream, which is what tells a
 # consumer HOW the status side currently reads that key. Prints the opening verb
 # (needs-decision or blocked) while the key is still open, the closing verb

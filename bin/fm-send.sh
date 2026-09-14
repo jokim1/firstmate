@@ -541,6 +541,7 @@ RESOLVE_STATUS_FILE=
 # longer owns also keeps the common path free of any backlog read.
 RESOLVE_STATUS_KEYS=
 RESOLVE_HOLD_KEYS=
+RESOLVE_REMOTE_HOLD_STATUS_KEYS=
 
 # Resolve a --resolve-key key that the status log no longer owns to the
 # captain-held task that carries it: the key as a task id itself (the collapsed
@@ -623,6 +624,9 @@ if [ -n "$RESOLVE_KEYS" ]; then
         exit 1
       fi
       RESOLVE_HOLD_KEYS="${RESOLVE_HOLD_KEYS}${RESOLVE_HOLD_KEYS:+ }$resolved_hold_id"
+      if [ "$TARGET_BACKEND" = remote ]; then
+        RESOLVE_REMOTE_HOLD_STATUS_KEYS="${RESOLVE_REMOTE_HOLD_STATUS_KEYS}${RESOLVE_REMOTE_HOLD_STATUS_KEYS:+ }$k"
+      fi
       continue
     fi
     echo "error: --resolve-key '$k': no open decision or blocker with that key in $RESOLVE_STATUS_FILE, and no captain-held task '$k' or '$RESOLVE_TASK_ID-decision-$k' still open (already closed or mistyped). Re-check the OPEN DECISIONS listing, then resend without that key or with the right one; nothing was sent." >&2
@@ -631,7 +635,7 @@ if [ -n "$RESOLVE_KEYS" ]; then
   # Refuse before send when a named status-log key cannot actually close: a
   # reserved key with an answered: note is a silent no-op in the fold.
   resolve_excerpt=$(printf '%s' "$*" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
-  for k in $RESOLVE_STATUS_KEYS; do
+  for k in $RESOLVE_STATUS_KEYS $RESOLVE_REMOTE_HOLD_STATUS_KEYS; do
     probe=$(fm_send_resolve_close_note "$k" "$resolve_excerpt")
     if ! _fm_decision_key_transition_allowed "$k" "$probe"; then
       echo "error: --resolve-key '$k' cannot take effect: this key is reserved for its owning library, and this send cannot produce a close note that library's fold will accept. Refusing rather than writing a silent no-op; nothing was sent." >&2
@@ -703,7 +707,7 @@ fm_send_close_resolved_keys() {  # <answer-text>
 fm_send_mark_pending_delivery_keys() {  # <answer-text>
   local note=$1 k line pending_note append_rc
   note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
-  for k in $RESOLVE_STATUS_KEYS; do
+  for k in $RESOLVE_STATUS_KEYS $RESOLVE_REMOTE_HOLD_STATUS_KEYS; do
     pending_note=$(fm_send_resolve_close_note "$k" "$note")
     line="pending-delivery [key=$k] [mode=remote]: $pending_note"
     fm_cap_line_var "$line"
@@ -1087,12 +1091,24 @@ else
     fi
     if [ "${inbox_write_rc:-0}" -ne 0 ]; then
       fm_lock_release "$INBOX_META_LOCK"
-      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      fi
       if [ "${inbox_write_rc:-0}" -eq 2 ]; then
+        if [ -n "$PENDING_REPLY_CORR" ]; then
+          if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
+            :
+          else
+            delivery_commit_status=$?
+            if [ "$delivery_commit_status" = 2 ]; then
+              echo "notice: the steer was recorded at $INBOX_RECORD, but its pending-reply delivery commit failed; a durable recovery marker was stored and the watcher will reconcile it. Do not resend." >&2
+            else
+              echo "warning: reply-tracking-degraded (steer delivered, do not resend): the steer was durably recorded at $INBOX_RECORD, but its pending-reply delivery commit and recovery marker both failed, so the reply expectation for this request may not reconcile on its own. Inspect $STATE." >&2
+            fi
+          fi
+        fi
         echo "error: the answer was recorded at $INBOX_RECORD, but its pending-delivery transition could not be published. Do not resend; inspect $RESOLVE_STATUS_FILE and the inbox record." >&2
       else
+        if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+          fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+        fi
         echo "error: steer not sent to $INBOX_TASK_ID: its inbox record could not be written under $STATE/$INBOX_TASK_ID.inbox" >&2
       fi
       exit 1

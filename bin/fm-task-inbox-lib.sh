@@ -311,7 +311,7 @@ fm_task_inbox_resolve_marker() {  # <state-dir> <task-id> <record-path>
 }
 
 fm_task_inbox_resolve_acknowledged() {  # <state-dir> <task-id> <handled-record>
-  local state=$1 task=$2 rec=$3 marker status_file answer line pending key pending_key mode delivery resolved_delivery index=0 lines='' rc=0
+  local state=$1 task=$2 rec=$3 marker status_file answer line pending key pending_key mode delivery resolved_delivery transition index=0 lines='' rc=0
   marker=$(fm_task_inbox_resolve_marker "$state" "$task" "$rec")
   [ ! -e "$marker" ] || return 0
   status_file=$(fm_task_inbox_header_values "$rec" resolve-status-file | head -1)
@@ -332,8 +332,17 @@ fm_task_inbox_resolve_acknowledged() {  # <state-dir> <task-id> <handled-record>
       _fm_delivery_token_ok "$delivery" || return 1
       resolved_delivery=$(_fm_status_tag_value "$line" delivery) || return 1
       [ "$resolved_delivery" = "$delivery" ] || return 1
-      fm_wake_status_append_self_announced "${status_file%/*}" "$status_file" "$line" || rc=$?
-      [ "$rc" -ne 2 ] || return 1
+      transition=$(status_delivery_transition_state "$status_file" "$key" "$delivery") || return 1
+      case "$transition" in
+        pending)
+          rc=0
+          fm_wake_status_append_self_announced "${status_file%/*}" "$status_file" "$line" || rc=$?
+          [ "$rc" -ne 2 ] || return 1
+          ;;
+        resolved|superseded) continue ;;
+        *) return 1 ;;
+      esac
+      [ "$(status_delivery_transition_state "$status_file" "$key" "$delivery")" = resolved ] || return 1
     done <<EOF
 $(fm_task_inbox_header_values "$rec" resolve-status-line)
 EOF

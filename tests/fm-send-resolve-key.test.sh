@@ -403,6 +403,67 @@ test_pending_publication_follows_concurrent_handled_move() {
   pass "pending publication follows a concurrent handled move"
 }
 
+test_acknowledgement_refuses_unpublished_transition() {
+  local home record marker out
+  home=$(setup_home unpublished-ack)
+  printf 'needs-decision [key=unpublished]: choose safely\n' > "$home/state/t5.status"
+  mkdir -p "$home/state/t5.inbox/handled"
+  record="$home/state/t5.inbox/handled/001.msg"
+  marker="$home/state/t5.inbox/.resolved/001.msg"
+  {
+    printf 'schema=fm-task-inbox.v1\n'
+    printf 'at=2026-09-14T00:00:00Z\n'
+    printf 'resolve-status-file=%s\n' "$home/state/t5.status"
+    printf 'resolve-status-pending-line=pending-delivery [key=unpublished] [mode=local] [delivery=0123456789abcdef]: answered: safe\n'
+    printf 'resolve-status-line=resolved [key=unpublished] [delivery=0123456789abcdef]: answered: safe\n'
+    printf '%s\n' '--' 'safe'
+  } > "$record"
+
+  if FM_STATE_OVERRIDE="$home/state" bash -c '
+    . "$1"
+    fm_task_inbox_resolve_acknowledged "$2" "$3" "$4"
+  ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$home/state" t5 "$record"; then
+    fail "an acknowledgement without its published transition succeeded"
+  fi
+  [ ! -e "$marker" ] || fail "a rejected acknowledgement wrote its resolved marker"
+  out=$(drain_out "$home")
+  assert_contains "$out" "[key=unpublished]" "the rejected acknowledgement hid the original decision"
+  pass "acknowledgement markers require an accepted pending transition"
+}
+
+test_publication_failure_preserves_reply_tracking() {
+  local dir fb log home err rc corr
+  dir="$TMP_ROOT/publication-reply"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"; err="$dir/send.err"
+  home=$(setup_home publication-reply)
+  fm_write_meta "$home/state/t5.meta" "window=sess:fm-t5" "kind=secondmate"
+  printf 'needs-decision [key=delivery-state]: choose safely\n' > "$home/state/t5.status"
+  chmod 0400 "$home/state/t5.status"
+
+  env PATH="$fb:$PATH" FM_FAKE_TMUX_SEND_FAIL=1 \
+    FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" t5 --resolve-key delivery-state "use durable delivery" >/dev/null 2>"$err"; rc=$?
+  chmod 0600 "$home/state/t5.status"
+  [ "$rc" -ne 0 ] || fail "a failed pending transition publication should report failure"
+  [ -f "$home/state/t5.inbox/001.msg" ] || fail "publication failure lost the durable inbox record"
+  corr=$(bash -c '
+    . "$1"
+    . "$2"
+    body=$(fm_task_inbox_body "$3")
+    fm_pending_reply_extract_corr "$body"
+  ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$ROOT/bin/fm-pending-reply-lib.sh" \
+    "$home/state/t5.inbox/001.msg")
+  [ -n "$corr" ] || fail "the durable inbox record lost its reply correlation"
+  FM_STATE_OVERRIDE="$home/state" bash -c '
+    . "$1"
+    rec=$(fm_pending_reply_path "$2" "$3")
+    [ -f "$rec" ] && [ -n "$(fm_pending_reply_get "$rec" delivered_epoch)" ]
+  ' _ "$ROOT/bin/fm-pending-reply-lib.sh" "$home/state" "$corr" \
+    || fail "publication failure discarded or left reply tracking undelivered"
+  assert_contains "$(cat "$err")" "Do not resend" "publication failure should remain non-resendable"
+  pass "durable inbox records preserve reply tracking after publication failure"
+}
+
 test_captain_hold_answer_cannot_be_resent_before_acknowledgement() {
   local dir fb log home rc err
   command -v tasks-axi >/dev/null 2>&1 || { pass "captain hold pending retry guard (tasks-axi unavailable)"; return; }
@@ -567,6 +628,40 @@ test_remote_secondmate_answer_marks_pending_locally() {
   assert_not_contains "$out" "fm-send.sh <task> --resolve-key" \
     "remote pending must not invite a duplicate answer"
   pass "fm-send --resolve-key: a remote-secondmate answer stays pending in the same local ledger"
+}
+
+test_remote_captain_hold_answer_marks_pending_locally() {
+  local dir fb log home ssh_log err rc out
+  command -v tasks-axi >/dev/null 2>&1 || { pass "remote captain hold pending state (tasks-axi unavailable)"; return; }
+  dir="$TMP_ROOT/remote-hold"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"; ssh_log="$dir/ssh.log"; err="$dir/send.err"; : > "$ssh_log"
+  home=$(setup_remote_home remote-hold)
+  mkdir -p "$home/config"
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  (cd "$home" && tasks-axi add hold-remote "Choose the remote held option" --repo sample --start >/dev/null) \
+    || fail "could not create the remote captain-held fixture"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" hold hold-remote \
+      --reason "waiting for the captain" >/dev/null \
+    || fail "could not hold the remote fixture for the captain"
+  printf 'captain-held [key=hold-remote]: transferred\n' > "$home/state/rsm.status"
+
+  env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=0 \
+    "$SEND" rsm --resolve-key hold-remote "approve remotely" >/dev/null 2>"$err"; rc=$?
+  expect_code 0 "$rc" "a remote captain-held answer should be recorded"
+  grep -F 'pending-delivery [key=hold-remote] [mode=remote]: answered: approve remotely' "$home/state/rsm.status" >/dev/null \
+    || fail "the remote held answer has no structural pending state: $(cat "$home/state/rsm.status")"
+  out=$(drain_out "$home")
+  assert_contains "$out" "REMOTE PENDING DELIVERIES" "the remote held answer is not operator-visible"
+
+  env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
+    FM_SSH_BIN="$fb/fake-ssh" FM_SSH_LOG="$ssh_log" FM_FAKE_SSH_RC=0 \
+    "$SEND" rsm --resolve-key hold-remote "approve twice" >/dev/null 2>"$err"; rc=$?
+  [ "$rc" -ne 0 ] || fail "a remote captain-held answer remained retryable"
+  assert_contains "$(cat "$err")" "already pending delivery" "the retry refusal should name remote pending state"
+  pass "remote captain-held answers remain visible and retry-safe"
 }
 
 # The reported failure: a remote secondmate reply line prepends a
@@ -859,11 +954,14 @@ test_failed_ring_keeps_decision_pending_delivery
 test_acknowledgement_does_not_close_newer_same_key_decision
 test_old_identical_answer_does_not_close_newer_pending_delivery
 test_pending_publication_follows_concurrent_handled_move
+test_acknowledgement_refuses_unpublished_transition
+test_publication_failure_preserves_reply_tracking
 test_captain_hold_answer_cannot_be_resent_before_acknowledgement
 test_failed_enqueue_does_not_close
 test_multiple_keys_close_together
 test_local_secondmate_answer_marked_and_pending
 test_remote_secondmate_answer_marks_pending_locally
+test_remote_captain_hold_answer_marks_pending_locally
 test_remote_reply_corr_tag_does_not_block_resolve_key
 test_remote_transport_failure_does_not_close
 test_flag_misuse_refuses
