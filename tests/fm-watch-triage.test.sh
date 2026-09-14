@@ -62,6 +62,20 @@ wait_live() {
   return 0
 }
 
+has_live_non_zombie_child() {  # <parent-pid>
+  local parent=$1 child children
+  # Linux pgrep includes zombies that a stopped parent cannot reap. Those are
+  # completed commands, not in-flight fixture work.
+  children=$(pgrep -P "$parent" 2>/dev/null || true)
+  while IFS= read -r child; do
+    [ -n "$child" ] || continue
+    is_live_non_zombie "$child" && return 0
+  done <<EOF
+$children
+EOF
+  return 1
+}
+
 # Wait until <pid>'s watcher has completed a whole poll cycle, or exited first.
 # A fixed wait_live budget only proves the process is still ALIVE: fm-watch.sh
 # does bounded startup work (the recovery-marker snapshot, lock acquisition)
@@ -2118,11 +2132,11 @@ test_refill_retry_preserves_successful_endpoints() {
       # cannot start another command, so wait for that in-flight child to drain
       # before opening the append-to-prime window.
       child_i=0
-      while [ "$child_i" -lt 120 ] && [ -n "$(pgrep -P "$pid" 2>/dev/null || true)" ]; do
+      while [ "$child_i" -lt 120 ] && has_live_non_zombie_child "$pid"; do
         sleep 0.1
         child_i=$((child_i + 1))
       done
-      if [ -z "$(pgrep -P "$pid" 2>/dev/null || true)" ]; then
+      if ! has_live_non_zombie_child "$pid"; then
         frozen=1
         break
       fi
