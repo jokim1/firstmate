@@ -127,11 +127,12 @@
 # Remote secondmate delivery: the send crosses fm-on.sh to a host-local leg
 # (bin/fm-remote-secondmate-control.sh cmd_send) that writes the message as a
 # durable record into the remote home's steering inbox and rings the remote
-# doorbell, best-effort. The remote record is the delivery, exactly as it is
-# locally: leg exit 0 means durably recorded (fm-send then exits 0, marks the
-# pending-reply expectation delivered, and closes any --resolve-key
-# decisions), and any real remote failure fails loudly with the remote leg's
-# own stderr attached. Transport loss (ssh exit 255) means completion unknown,
+# doorbell, best-effort. The remote leg reports confirmed or unconfirmed ring
+# outcomes separately from durable recording: fm-send marks a pending-reply
+# expectation delivered once the record exists, but closes any --resolve-key
+# decision only after explicit confirmation from the current remote protocol.
+# A legacy exit 0 is not delivery proof. Any real remote failure fails loudly
+# with the remote leg's own stderr attached. Transport loss (ssh exit 255) means completion unknown,
 # so fm-send retries the identical leg once - safe because the remote write
 # deduplicates the same request onto the same record - and a still-lost
 # transport exits nonzero while preserving a reply-bearing marked request's
