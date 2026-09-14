@@ -882,7 +882,7 @@ remote_outbox_cleanup() {
 }
 
 remote_secondmate_teardown() {
-  local remote_host remote_root remote_home kind route_host route_root route_home out rc tmp rec phase task_id
+  local remote_host remote_root remote_home kind route_host route_root route_home out rc tmp rec phase task_id remote_busy_gen
   remote_host=$(fm_meta_get "$META" remote_host)
   [ -n "$remote_host" ] || return 3
   kind=$(fm_meta_get "$META" kind)
@@ -897,6 +897,8 @@ remote_secondmate_teardown() {
   route_home=$SECONDMATE_REGISTRY_HOME
   [ "$route_host" = "$remote_host" ] && [ "$route_root" = "$remote_root" ] && [ "$route_home" = "$remote_home" ] \
     || { echo "REFUSED: remote secondmate metadata does not match its registry route" >&2; return 1; }
+  remote_busy_gen=$(fm_task_records_read_busy_gen "$STATE" "$ID" "$(fm_meta_get "$META" busy_gen)") || return 1
+  fm_task_records_validate_cleanup "$STATE" "$ID" "$remote_busy_gen" || return 1
   status_validate_retire_presentation_task "$STATE" "$ID" || return 1
   handoff_wake_retire_validate || return 1
   remote_recovery_paths_validate initial || return 1
@@ -950,12 +952,16 @@ remote_secondmate_teardown() {
     || { echo "error: remote pending-reply cleanup failed; preserving the local route for retry" >&2; return 1; }
   handoff_wake_retire \
     || { echo "error: remote receiver wake cleanup failed; preserving the local route for retry" >&2; return 1; }
+  fm_task_records_retire_turnend grok "$STATE" "$ID" || return 1
+  fm_task_records_retire_turnend kimi "$STATE" "$ID" || return 1
+  fm_task_records_remove_pr_poll_artifacts "$STATE" "$ID" || return 1
+  fm_task_records_retire_busy "$STATE" "$ID" "$remote_busy_gen" || return 1
+  status_retire_presentation_task "$STATE" "$ID" || return 1
+  fm_task_records_retire_residue "$STATE" "$ID" || return 1
   tmp="$SECONDMATE_REG.tmp.$$"
   grep -vE "^- $ID( |$)" "$SECONDMATE_REG" > "$tmp" || true
   mv -f -- "$tmp" "$SECONDMATE_REG"
-  status_retire_presentation_task "$STATE" "$ID" || return 1
   fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE" || return 1
-  rm -f -- "$STATE/$ID.turn-ended" "$STATE/$ID.progress"
   printf 'teardown %s complete (remote %s:%s)\n' "$ID" "$remote_host" "$remote_home"
   # Capacity free: advisory refill so firstmate re-evaluates ready work.
   fm_wake_enqueue_refill || \
