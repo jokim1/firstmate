@@ -1,0 +1,6 @@
+Case 1 - run PR is live open PR 48 while stale task metadata names merged PR 47:
+state: done · source: run-step · run passed: PR open
+Case 2 - passed run has no PR identity while stale task metadata still names merged PR 47:
+state: done · source: run-step · run passed: PR state unknown (no PR identity)
+Case 3 - run PR is live merged PR 47:
+state: done · source: run-step · run passed: PR merged

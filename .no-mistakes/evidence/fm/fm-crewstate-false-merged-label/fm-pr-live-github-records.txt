@@ -1,0 +1,2 @@
+live PR 48: state=OPEN merged=false
+live PR 47: state=MERGED merged=true

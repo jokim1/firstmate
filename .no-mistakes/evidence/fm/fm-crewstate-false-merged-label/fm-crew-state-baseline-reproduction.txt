@@ -1,0 +1,3 @@
+not ok - open PR state is named (missing: 'run passed: PR open')
+--- output ---
+state: done · source: run-step · run passed: PR merged/closed
