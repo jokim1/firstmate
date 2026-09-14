@@ -2336,6 +2336,49 @@ test_teardown_missing_busy_sidecar_completes() {
   pass "teardown completes when an exact busy-state sidecar is already absent"
 }
 
+test_teardown_preflights_turnend_records_before_mutation() {
+  local case_dir grok_auth rc head
+  case_dir=$(make_case turnend-preflight)
+  write_meta "$case_dir" local-only ship
+  printf 'done: trial ok\n' > "$case_dir/state/task-x1.status"
+  : > "$case_dir/state/task-x1.turn-ended"
+  printf 'fm.grok-token\n' > "$case_dir/state/task-x1.grok-turnend-token"
+  printf 'fm.other-kimi-token\n' > "$case_dir/state/other.kimi-turnend-token"
+  ln -s "$case_dir/state/other.kimi-turnend-token" \
+    "$case_dir/state/task-x1.kimi-turnend-token"
+  grok_auth="$case_dir/fake-grok/hooks/fm-turn-end.d/fm.grok-token"
+  mkdir -p "$(dirname "$grok_auth")"
+  printf 'grok hook\n' > "$grok_auth"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  : > "$case_dir/treehouse.log"
+  : > "$case_dir/tmux.log"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/treehouse.log'" \
+    'exit 0' > "$case_dir/fakebin/treehouse"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/tmux.log'" \
+    'exit 0' > "$case_dir/fakebin/tmux"
+  chmod +x "$case_dir/fakebin/treehouse" "$case_dir/fakebin/tmux"
+
+  rc=0
+  GROK_HOME="$case_dir/fake-grok" HOME="$case_dir/fakehome" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "teardown accepted a symlinked kimi turn-end token"
+  [ ! -s "$case_dir/treehouse.log" ] || fail "turn-end refusal returned the worktree"
+  ! grep -Eq '^kill-(window|pane)' "$case_dir/tmux.log" \
+    || fail "turn-end refusal killed the task endpoint"
+  [ -d "$case_dir/wt" ] || fail "turn-end refusal removed the worktree"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD 2>/dev/null)" = "$head" ] \
+    || fail "turn-end refusal changed the worktree branch"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "turn-end refusal removed task metadata"
+  [ -f "$case_dir/state/task-x1.status" ] || fail "turn-end refusal removed task status"
+  [ -f "$case_dir/state/task-x1.turn-ended" ] || fail "turn-end refusal removed task residue"
+  [ -f "$case_dir/state/task-x1.grok-turnend-token" ] || fail "turn-end refusal removed the grok token"
+  [ -L "$case_dir/state/task-x1.kimi-turnend-token" ] || fail "turn-end refusal removed the kimi token"
+  [ -f "$grok_auth" ] || fail "turn-end refusal removed the grok registration"
+  pass "teardown preflights both turn-end records before runtime mutation"
+}
+
 # Phase 2: successful teardown enqueues one advisory fleet refill wake so
 # firstmate re-evaluates ready work against free capacity. Drain clears it.
 test_teardown_enqueues_refill_wake() {
@@ -5043,6 +5086,7 @@ test_local_only_force_overrides_unpushed
 test_secondmate_pr_registration_publishes_ready_line
 test_secondmate_home_teardown_delivers_final_line_or_refuses
 test_teardown_missing_busy_sidecar_completes
+test_teardown_preflights_turnend_records_before_mutation
 test_teardown_enqueues_refill_wake
 test_herdr_teardown_clears_escalation_marker
 test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes

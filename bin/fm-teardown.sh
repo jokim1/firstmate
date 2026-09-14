@@ -4160,6 +4160,8 @@ elif [ "$RETIRE_FOREIGN_WORKTREE" = 1 ]; then
   exit 2
 fi
 
+fm_task_records_validate_turnend grok "$STATE" "$ID" || exit 1
+fm_task_records_validate_turnend kimi "$STATE" "$ID" || exit 1
 fm_task_records_validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
 
 if [ "$KIND" = secondmate ]; then

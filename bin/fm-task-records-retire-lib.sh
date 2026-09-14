@@ -160,16 +160,52 @@ fm_task_records_remove_pr_poll_artifacts() {  # <state-dir> <id>
     "$state_dir/$id.check-trust" || return 1
 }
 
-fm_task_records_retire_residue() {  # <state-dir> <id>
+fm_task_records_residue_paths() {  # <state-dir> <id>
   local state_dir=$1 id=$2
-  rm -f -- "$state_dir/$id.turn-ended" "$state_dir/$id.progress" \
-    "$state_dir/$id.pi-ext.ts" "$state_dir/$id.omp-ext.ts" \
-    "$state_dir/$id.muse-session" "$state_dir/$id.muse-session-current" \
-    "$state_dir/$id.cursor-session" "$state_dir/$id.control-relaunch" \
+  printf '%s\n' \
+    "$state_dir/$id.turn-ended" \
+    "$state_dir/$id.progress" \
+    "$state_dir/$id.pi-ext.ts" \
+    "$state_dir/$id.omp-ext.ts" \
+    "$state_dir/$id.muse-session" \
+    "$state_dir/$id.muse-session-current" \
+    "$state_dir/$id.cursor-session" \
+    "$state_dir/$id.control-relaunch" \
     "$state_dir/$id.control-relaunch.meta-prior" \
     "$state_dir/$id.control-relaunch.brief-prior" \
-    "$state_dir/$id.control-relaunch.note" "$state_dir/$id.reconcile-nudged" \
+    "$state_dir/$id.control-relaunch.note" \
+    "$state_dir/$id.reconcile-nudged" \
     "$state_dir/$id.gemini-settings.json" \
-    "$state_dir/.$id.branch-outcome-index" || return 1
+    "$state_dir/.$id.branch-outcome-index"
+}
+
+fm_task_records_validate_residue() {  # <state-dir> <id>
+  local state_dir=$1 id=$2 state_device path inbox
+  fm_task_id_path_safe "$id" || return 1
+  [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 1
+  state_device=$(fm_pr_file_device "$state_dir") || return 1
+  while IFS= read -r path; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    if [ ! -f "$path" ] || [ -L "$path" ] \
+      || [ "$(fm_pr_file_device "$path")" != "$state_device" ] \
+      || [ "$(fm_pr_file_link_count "$path")" != 1 ]; then
+      echo "REFUSED: unsafe task state residue; preserving task state." >&2
+      return 1
+    fi
+  done < <(fm_task_records_residue_paths "$state_dir" "$id")
+  inbox="$state_dir/$id.inbox"
+  [ -e "$inbox" ] || [ -L "$inbox" ] || return 0
+  if [ ! -d "$inbox" ] || [ -L "$inbox" ]; then
+    echo "REFUSED: unsafe task steering inbox; preserving task state." >&2
+    return 1
+  fi
+}
+
+fm_task_records_retire_residue() {  # <state-dir> <id>
+  local state_dir=$1 id=$2 path
+  fm_task_records_validate_residue "$state_dir" "$id" || return 1
+  while IFS= read -r path; do
+    rm -f -- "$path" || return 1
+  done < <(fm_task_records_residue_paths "$state_dir" "$id")
   rm -rf -- "$state_dir/$id.inbox"
 }

@@ -452,6 +452,10 @@ gc_finish_interrupted_cleanup() {
     fm_task_records_validate_busy_cleanup "$STATE" "$ID" "$gen" \
       || { echo "error: unsafe task $ID busy-state record; preserving task state" >&2; exit 1; }
   fi
+  if [ "$residue" = 1 ]; then
+    fm_task_records_validate_residue "$STATE" "$ID" \
+      || { echo "error: unsafe task $ID state residue; preserving task state" >&2; exit 1; }
+  fi
   if [ "$herdr" = 1 ]; then
     gc_retire_herdr_journal \
       || { echo "error: task $ID's herdr presentation journal could not be retired through its writer" >&2; exit 1; }

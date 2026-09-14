@@ -596,6 +596,38 @@ test_finish_cleanup_preflights_turnend_auth_target() {
   pass "finish-cleanup preflights the external turn-end auth target"
 }
 
+test_finish_cleanup_preflights_unsafe_residue() {
+  local dir home state rc
+  dir=$(make_case finish-cleanup-residue-preflight)
+  home="$dir/home"
+  state="$home/state"
+  mkdir -p "$state/partial.turn-ended" "$dir/fakebin"
+  printf 'done: trial ok\n' > "$state/partial.status"
+  printf 'preserve\n' > "$state/partial.progress"
+  {
+    printf 'version=2\ntask_id=partial\nprojection_id=AbCdEfGhIjKlMnOpQrStUv\nhome=%s\n' "$home"
+    printf 'session=default\nworkspace_id=wA\ntab_id=wA:t1\npane_id=wA:p1\n'
+    printf 'parent_workspace_id=w0\nparent_label=firstmate\nworkspace_label=└ partial · p:AbCdEfGhIjKlMnOpQrStUv\ntask_label=fm-partial\n'
+  } > "$state/partial.herdr-presentation"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    "case \"\${1:-} \${2:-}\" in" \
+    '  "workspace list") printf "%s\\n" '\''{"result":{"workspaces":[]}}'\'' ;;' \
+    '  *) exit 1 ;;' \
+    'esac' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
+
+  rc=0
+  FM_HOME="$home" PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" partial --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup accepted an unsafe residue directory (rc=$rc)"
+  [ -f "$state/partial.status" ] || fail "residue refusal removed the status log"
+  [ -d "$state/partial.turn-ended" ] || fail "residue refusal changed the unsafe record"
+  [ -f "$state/partial.progress" ] || fail "residue refusal removed another record"
+  [ -f "$state/partial.herdr-presentation" ] || fail "residue refusal retired Herdr state first"
+  pass "finish-cleanup preflights every residue before any mutation"
+}
+
 test_finish_cleanup_retires_an_intact_busy_incarnation() {
   local dir state rc
   dir=$(make_case finish-cleanup-busy-incarnation)
@@ -764,6 +796,7 @@ test_finish_cleanup_retires_partial_records_through_their_writers
 test_finish_cleanup_preflights_late_pr_refusal
 test_finish_cleanup_refuses_symlinked_turnend_token_without_mutation
 test_finish_cleanup_preflights_turnend_auth_target
+test_finish_cleanup_preflights_unsafe_residue
 test_finish_cleanup_retires_an_intact_busy_incarnation
 test_finish_cleanup_refuses_when_a_writer_preserves_its_record
 test_finish_cleanup_retires_only_its_own_gone_herdr_journal
