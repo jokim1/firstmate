@@ -968,6 +968,56 @@ fm_backend_agent_alive() {  # <backend> <target>
   esac
 }
 
+# fm_backend_task_endpoints_live: every live backend endpoint LABELED for task
+# <id> ("fm-<id>", the label every spawn-capable backend's create path mints),
+# one "tmux <session>:<window>" or "herdr <session>:<pane>" line per live
+# endpoint, nothing when none exist. Read-only.
+#
+# This is the id-keyed positive liveness probe for callers that have no
+# recorded endpoint to target - a meta-less cleanup record cannot name its
+# window, so the only writer-owned proof that the endpoint is gone is an
+# inventory read that finds no live label for the task:
+#   - tmux: the live-window inventory, through the exact list command
+#     bin/backends/tmux.sh's fm_backend_tmux_resolve_bare_selector consults. A
+#     missing/unconnectable server authoritatively holds no windows; any other
+#     inventory error returns non-zero so the caller refuses rather than
+#     treating an unreadable inventory as proof of death.
+#   - herdr: this home's own workspace tab labels, through the recovery writer
+#     fm_backend_herdr_list_live, which is deliberately fail-soft (an
+#     unreadable herdr lists nothing). A herdr task that kept its presentation
+#     journal carries its own writer-owned liveness proof; this probe covers
+#     the rest.
+# Backends without an id-keyed inventory listing (zellij, orca, cmux, playbot)
+# have nothing to probe: callers that must positively establish endpoint death
+# on those homes cannot, and must refuse instead of retiring around that.
+fm_backend_task_endpoints_live() {  # <id>
+  local id=$1 out rc line window
+  [ -n "$id" ] || return 1
+  if command -v tmux >/dev/null 2>&1; then
+    out=$(LC_ALL=C tmux list-windows -a -F '#{session_name}:#{window_name}' 2>&1) && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      while IFS= read -r line; do
+        window=${line##*:}
+        [ "$window" = "fm-$id" ] && printf 'tmux %s\n' "$line"
+      done <<EOF
+$out
+EOF
+    else
+      case "$out" in
+        *"no server running on "*|*"error connecting to "*|*"can't find session:"*) ;;
+        *) return 1 ;;
+      esac
+    fi
+  fi
+  if command -v herdr >/dev/null 2>&1; then
+    fm_backend_source herdr || return 1
+    while IFS=$(printf '\t') read -r line label; do
+      [ "$label" = "fm-$id" ] && printf 'herdr %s\n' "$line"
+    done < <(fm_backend_herdr_list_live "$(fm_backend_herdr_session)")
+  fi
+  return 0
+}
+
 # --- native event push (backend-extensible) ---------------------------------
 #
 # The watcher's event-wait splice (bin/fm-watch.sh) is backend-agnostic: it asks

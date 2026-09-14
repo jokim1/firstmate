@@ -1137,6 +1137,37 @@ status_daemon_seen_marker_path() {  # <state> <task-id>
   printf '%s/.subsuper-seen-status-%s' "$1" "$(printf '%s' "$2" | tr ':/.' '___')"
 }
 
+# Every legal task id whose watcher-marker names collide with <task-id>'s.
+# The marker writers above normalize '.' and '_' (and ':/.') to '_', so two
+# legal ids that differ only in those positions resolve to the SAME
+# .seen-/.hb-surfaced-/.subsuper-seen-status- names: retiring one task's
+# markers would silently delete the other task's notification state. Prints one
+# colliding id per line (never <task-id> itself); nothing when the id has no
+# '.' or '_' and therefore no possible collision. A full injective re-encoding
+# of the marker namespace is out of scope; instead every ambiguous collision
+# is treated as a refusal by the retirement writer below.
+status_marker_collision_siblings() {  # <task-id>
+  local task=$1
+  local len=${#task} i ch v out
+  local variants
+  case "$task" in *.*|*_*) ;; *) return 0 ;; esac
+  variants=$task
+  for ((i = 0; i < len; i++)); do
+    ch=${task:i:1}
+    case "$ch" in .|_) ;; *) continue ;; esac
+    out=''
+    for v in $variants; do
+      out="$out ${v:0:i}.${v:i+1} ${v:0:i}_${v:i+1}"
+    done
+    variants=$out
+  done
+  for v in $variants; do
+    [ -n "$v" ] && [ "$v" != "$task" ] || continue
+    case "$v" in .*) continue ;; esac
+    printf '%s\n' "$v"
+  done | sort -u
+}
+
 _status_presentation_signature_valid() {
   local value=$1 size ident encoded
   [ "$value" = unverifiable ] && return 0
@@ -1259,13 +1290,17 @@ status_presentation_marker_commit() {
 
 status_retire_presentation_task() {  # <state> <task-id>
   local state=$1 task=$2 lock manifest tmp data row_task ident offset backstop extra rc=0 found=0
-  local signal_marker heartbeat_marker daemon_marker
+  local signal_marker heartbeat_marker daemon_marker turn_ended_signal_marker sibling
   lock="$state/.status-presentation-lock"
   manifest="$state/.status-presentation-cursor"
   tmp="$manifest.tmp.$$"
   signal_marker=$(status_signal_seen_marker_path "$state" "$task")
   heartbeat_marker=$(status_heartbeat_seen_marker_path "$state" "$task")
   daemon_marker=$(status_daemon_seen_marker_path "$state" "$task")
+  # The watcher's signal-seen marker for the state/<task>.turn-ended file,
+  # named exactly as bin/fm-wake-lib.sh's fm_wake_signal_seen_path names it
+  # (this lib cannot source wake-lib).
+  turn_ended_signal_marker="$state/.seen-$(printf '%s' "$task.turn-ended" | tr '.' '_')"
 
   # A remote-home teardown can legitimately retire an endpoint ID that has no
   # status log in that home. Do not contend with that home's unrelated status
@@ -1277,7 +1312,8 @@ status_retire_presentation_task() {  # <state> <task-id>
     && [ ! -L "$state/.$task.open-decisions-cursor" ] \
     && [ ! -e "$signal_marker" ] && [ ! -L "$signal_marker" ] \
     && [ ! -e "$heartbeat_marker" ] && [ ! -L "$heartbeat_marker" ] \
-    && [ ! -e "$daemon_marker" ] && [ ! -L "$daemon_marker" ]; then
+    && [ ! -e "$daemon_marker" ] && [ ! -L "$daemon_marker" ] \
+    && [ ! -e "$turn_ended_signal_marker" ] && [ ! -L "$turn_ended_signal_marker" ]; then
     if [ ! -e "$manifest" ] && [ ! -L "$manifest" ]; then
       return 0
     fi
@@ -1298,6 +1334,18 @@ EOF
   fi
 
   fm_lock_acquire_wait "$lock" || return 1
+  # Marker-ambiguous task ids refuse while a colliding sibling is live: the
+  # sibling's status/meta anchors prove its watcher still owns the shared
+  # marker names, and this retirement cannot tell its markers from ours.
+  while IFS= read -r sibling; do
+    [ -n "$sibling" ] || continue
+    if [ -e "$state/$sibling.meta" ] || [ -L "$state/$sibling.meta" ] \
+      || [ -e "$state/$sibling.status" ] || [ -L "$state/$sibling.status" ]; then
+      echo "REFUSED: task id $task is marker-ambiguous with live task $sibling (. and _ normalize to the same watcher marker names); reconcile $sibling first, then retry." >&2
+      fm_lock_release "$lock" || true
+      return 1
+    fi
+  done < <(status_marker_collision_siblings "$task")
   if [ -e "$manifest" ] || [ -L "$manifest" ]; then
     if [ ! -f "$manifest" ] || [ ! -r "$manifest" ] || [ -L "$manifest" ]; then
       rc=1
@@ -1323,8 +1371,15 @@ EOF
     fi
   fi
   if [ "$rc" -eq 0 ]; then
-    rm -f -- "$state/$task.status" "$state/.$task.open-decisions-cursor" \
-      "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
+    # Every notification marker goes BEFORE the status anchor: an interrupted
+    # rm then leaves either the anchor (the next identical invocation re-runs
+    # this writer, which is idempotent, and converges) or nothing at all
+    # (everything already retired). The anchor must never be the surviving
+    # half of a partial cleanup - that dead end is what the status-gc finish
+    # path exists to eliminate.
+    rm -f -- "$state/.$task.open-decisions-cursor" \
+      "$signal_marker" "$heartbeat_marker" "$daemon_marker" \
+      "$turn_ended_signal_marker" "$state/$task.status" || rc=1
   fi
   fm_lock_release "$lock" || rc=1
   return "$rc"
@@ -1333,6 +1388,7 @@ EOF
 status_validate_retire_presentation_task() {  # <state> <task-id>
   local state=$1 task=$2 lock manifest tmp data row_task ident offset backstop extra
   local state_device path signal_marker heartbeat_marker daemon_marker rc=0
+  local turn_ended_signal_marker
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
   state_device=$(_fm_status_file_device "$state") || return 1
   lock="$state/.status-presentation-lock"
@@ -1341,11 +1397,12 @@ status_validate_retire_presentation_task() {  # <state> <task-id>
   signal_marker=$(status_signal_seen_marker_path "$state" "$task")
   heartbeat_marker=$(status_heartbeat_seen_marker_path "$state" "$task")
   daemon_marker=$(status_daemon_seen_marker_path "$state" "$task")
+  turn_ended_signal_marker="$state/.seen-$(printf '%s' "$task.turn-ended" | tr '.' '_')"
 
   fm_lock_try_acquire "$lock" || return 1
   for path in "$manifest" "$tmp" "$state/$task.status" \
     "$state/.$task.open-decisions-cursor" "$signal_marker" \
-    "$heartbeat_marker" "$daemon_marker"; do
+    "$heartbeat_marker" "$daemon_marker" "$turn_ended_signal_marker"; do
     [ -e "$path" ] || [ -L "$path" ] || continue
     if [ ! -f "$path" ] || [ ! -r "$path" ] || [ -L "$path" ] \
       || [ "$(_fm_status_file_device "$path")" != "$state_device" ] \

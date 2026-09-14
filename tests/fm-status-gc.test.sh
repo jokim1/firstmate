@@ -33,6 +33,35 @@ seed_watcher_markers() {  # <state> <id>
   ' _ "$ROOT" "$2"
 }
 
+# Seed the three watcher marker families the janitor retires (heartbeat,
+# status-seen, turn-ended-seen) through the owners that compute their paths.
+seed_retirable_watcher_markers() {  # <state> <id> <tag>
+  FM_STATE_OVERRIDE="$1" bash -c '
+    set -u
+    . "$1/bin/fm-wake-lib.sh"
+    . "$1/bin/fm-push-transition-lib.sh"
+    printf "hb-%s\n" "$3" > "$(_hb_surfaced_path "$2")"
+    printf "seen-status-%s\n" "$3" > "$(fm_wake_signal_seen_path "$STATE" "$STATE/$2.status")"
+    printf "seen-turnended-%s\n" "$3" > "$(fm_wake_signal_seen_path "$STATE" "$STATE/$2.turn-ended")"
+  ' _ "$ROOT" "$2" "$3"
+}
+
+# Seed all four watcher notification marker families through the owners that
+# compute their paths, with distinctive per-marker content so a cross-task
+# deletion or content change is observable byte-for-byte.
+seed_all_watcher_markers() {  # <state> <id> <tag>
+  seed_retirable_watcher_markers "$1" "$2" "$3"
+  FM_STATE_OVERRIDE="$1" bash -c '
+    set -u
+    . "$1/bin/fm-wake-lib.sh"
+    . "$1/bin/fm-push-transition-lib.sh"
+    printf "daemon-%s\n" "$3" > "$(status_daemon_seen_marker_path "$STATE" "$2")"
+  ' _ "$ROOT" "$2" "$3"
+}
+
+# The adversarial-review regressions below answer the four blocking findings
+# of the 2026-09-14 review of this change (report: data/fm-advreview-53-codex).
+
 test_orphaned_finished_status_is_retired_with_its_sidecars() {
   local dir state markers marker out
   dir=$(make_case orphan-retire)
@@ -490,14 +519,16 @@ test_finish_cleanup_retires_partial_records_through_their_writers() {
   printf 'fm.reprotok123\n' > "$state/partial.kimi-turnend-token"
   token_auth="$dir/fakehome/.kimi-code/fm-turn-end.d/fm.reprotok123"
   mkdir -p "$(dirname "$token_auth")"
-  printf 'hook\n' > "$token_auth"
+  # The spawn writer stores this task's exact turn-ended marker path in the
+  # auth record; the retirement validates that content before deregistering.
+  printf '%s\n' "$state/partial.turn-ended" > "$token_auth"
   mkdir -p "$state/partial.inbox"
   FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null 2>/dev/null \
     || fail "priming drain failed"
   markers=$(seed_watcher_markers "$state" partial) || fail "could not seed watcher markers"
 
   rc=0
-  HOME="$dir/fakehome" run_gc "$state" partial --finish-cleanup \
+  PATH="$dir/fakebin:$PATH" HOME="$dir/fakehome" run_gc "$state" partial --finish-cleanup \
     > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
   [ "$rc" -eq 0 ] || fail "finish-cleanup refused a retirable partial record: $(cat "$dir/gc.err")"
   grep -F 'retired orphaned status record' "$dir/gc.out" >/dev/null \
@@ -520,12 +551,12 @@ test_finish_cleanup_preflights_late_pr_refusal() {
   printf 'fm.reprotok123\n' > "$state/partial.kimi-turnend-token"
   token_auth="$dir/fakehome/.kimi-code/fm-turn-end.d/fm.reprotok123"
   mkdir -p "$(dirname "$token_auth")"
-  printf 'hook\n' > "$token_auth"
+  printf '%s\n' "$state/partial.turn-ended" > "$token_auth"
   printf 'foreign check\n' > "$dir/foreign-check"
   ln -s "$dir/foreign-check" "$state/partial.check.sh"
 
   rc=0
-  HOME="$dir/fakehome" run_gc "$state" partial --finish-cleanup \
+  PATH="$dir/fakebin:$PATH" HOME="$dir/fakehome" run_gc "$state" partial --finish-cleanup \
     > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
   [ "$rc" -eq 1 ] || fail "finish-cleanup accepted an unsafe late PR artifact (rc=$rc)"
   [ -f "$state/partial.status" ] || fail "late PR refusal removed the status log"
@@ -610,9 +641,11 @@ test_finish_cleanup_refuses_hardlinked_turnend_auth_target() {
   printf '%s\n' "$token" > "$state/partial.kimi-turnend-token"
   printf 'auth\n' > "$token_auth"
   ln "$token_auth" "$token_auth_link"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
 
   rc=0
-  FM_HOME="$home" HOME="$dir/fakehome" \
+  PATH="$dir/fakebin:$PATH" FM_HOME="$home" HOME="$dir/fakehome" \
     run_gc "$state" partial --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
   [ "$rc" -eq 1 ] || fail "finish-cleanup accepted a hard-linked turn-end auth target (rc=$rc)"
   [ -f "$state/partial.status" ] || fail "hard-link refusal removed the status log"
@@ -854,6 +887,262 @@ test_finish_cleanup_refuses_unfinished_work_and_retires_nothing() {
   pass "finish-cleanup never retires records of unfinished work"
 }
 
+# Review finding 1: --finish-cleanup used to treat absence of /tmp/fm-<id> as
+# proof the endpoint was gone and retired the record of a task whose live
+# window still existed. The positive probe must refuse while any backend
+# inventory shows a live fm-<id> endpoint, and the same record must retire
+# normally once that endpoint is gone.
+test_finish_cleanup_refuses_a_live_tmux_endpoint_and_recovers_after_it_dies() {
+  local dir state rc
+  dir=$(make_case finish-cleanup-live-endpoint)
+  state="$dir/state"
+  mkdir -p "$state"
+  printf 'done: task finished\n' > "$state/liveorphan.status"
+  : > "$state/liveorphan.turn-ended"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
+
+  rc=0
+  FM_FAKE_TMUX_WINDOWS='firstmate:fm-liveorphan' PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" liveorphan --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup retired a record whose endpoint is still alive (rc=$rc)"
+  grep -F 'live backend endpoint' "$dir/gc.err" >/dev/null \
+    || fail "the live-endpoint refusal did not print: $(cat "$dir/gc.err")"
+  grep -F 'fm-liveorphan' "$dir/gc.err" >/dev/null \
+    || fail "the live-endpoint refusal did not name the window: $(cat "$dir/gc.err")"
+  [ -f "$state/liveorphan.status" ] || fail "live-endpoint refusal removed the status log"
+  [ -f "$state/liveorphan.turn-ended" ] || fail "live-endpoint refusal removed task residue"
+
+  rc=0
+  PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" liveorphan --finish-cleanup > "$dir/gc2.out" 2> "$dir/gc2.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "finish-cleanup refused the same record after its endpoint died: $(cat "$dir/gc2.err")"
+  [ ! -e "$state/liveorphan.status" ] || fail "the status log survived finish-cleanup after endpoint death"
+  pass "finish-cleanup refuses a live labeled endpoint and retires the same record once it is gone"
+}
+
+# The same refusal against a REAL live pane on an isolated tmux server (the
+# exact shape the adversarial review reproduced): a window named for the task
+# with a live foreground process, no metadata, no temp root. Absence of
+# /tmp/fm-<id> must not read as endpoint death.
+test_finish_cleanup_refuses_a_real_live_tmux_window() {
+  local real_tmux dir state sock_dir rc
+  real_tmux=$(command -v tmux || true)
+  if [ -z "$real_tmux" ]; then
+    pass "real live-window refusal: tmux not installed; live-socket case skipped"
+    return 0
+  fi
+  dir=$(make_case finish-cleanup-real-live-window)
+  state="$dir/state"
+  mkdir -p "$state"
+  printf 'done: task finished\n' > "$state/liveorphan.status"
+  : > "$state/liveorphan.turn-ended"
+  # The socket dir lives under short /tmp paths: macOS unix socket paths cap
+  # out near 104 characters and $TMPDIR-based case paths already approach it.
+  sock_dir=$(mktemp -d /tmp/fmsgc-sock.XXXXXX) || fail "could not create the tmux socket dir"
+  cat > "$dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+export TMUX_TMPDIR="$sock_dir"
+exec "$real_tmux" "\$@"
+SH
+  chmod +x "$dir/fakebin/tmux"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$sock_dir" \
+    "$real_tmux" new-session -d -s fmlive -n fm-liveorphan -x 200 -y 50 \
+    'exec sleep 600' || fail "could not start the isolated live window"
+
+  rc=0
+  PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" liveorphan --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup retired a record with a real live window (rc=$rc)"
+  grep -F 'live backend endpoint' "$dir/gc.err" >/dev/null \
+    || fail "the real live-window refusal did not print: $(cat "$dir/gc.err")"
+  [ -f "$state/liveorphan.status" ] || fail "real live-window refusal removed the status log"
+  [ -f "$state/liveorphan.turn-ended" ] || fail "real live-window refusal removed task residue"
+
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$sock_dir" \
+    "$real_tmux" kill-session -t fmlive 2>/dev/null || true
+  rc=0
+  PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" liveorphan --finish-cleanup > "$dir/gc2.out" 2> "$dir/gc2.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "finish-cleanup refused the record after the real window died: $(cat "$dir/gc2.err")"
+  [ ! -e "$state/liveorphan.status" ] || fail "the status log survived after the real window died"
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$sock_dir" \
+    "$real_tmux" kill-server 2>/dev/null || true
+  rm -rf "$sock_dir"
+  pass "finish-cleanup refuses a real live tmux window and retires the record once it is gone"
+}
+
+# Review finding 2: two ordinary single-link token files carrying the same
+# token text used to let cleanup of one task deregister the global hook whose
+# auth record named the OTHER task. The registration's content must name the
+# requested task's own turn-ended marker before the deregistration runs.
+test_finish_cleanup_refuses_a_turnend_auth_record_naming_a_live_sibling() {
+  local dir state token token_auth rc
+  dir=$(make_case finish-cleanup-shared-token)
+  state="$dir/state"
+  token=fm.sharedtoken
+  token_auth="$dir/fakehome/.kimi-code/fm-turn-end.d/$token"
+  mkdir -p "$state" "$(dirname "$token_auth")"
+  printf 'done: retired task complete\n' > "$state/retired.status"
+  : > "$state/retired.turn-ended"
+  printf '%s\n' "$token" > "$state/retired.kimi-turnend-token"
+  printf 'backend=tmux\nwindow=firstmate:fm-live\n' > "$state/live.meta"
+  printf 'working: live\n' > "$state/live.status"
+  printf '%s\n' "$token" > "$state/live.kimi-turnend-token"
+  printf '%s\n' "$state/live.turn-ended" > "$token_auth"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
+
+  rc=0
+  PATH="$dir/fakebin:$PATH" HOME="$dir/fakehome" \
+    run_gc "$state" retired --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup deregistered a registration naming a live sibling (rc=$rc)"
+  grep -F 'different task' "$dir/gc.err" >/dev/null \
+    || fail "the shared-token refusal did not print: $(cat "$dir/gc.err")"
+  [ -f "$token_auth" ] || fail "the shared-token refusal deregistered the live sibling's hook"
+  [ -f "$state/retired.kimi-turnend-token" ] || fail "the shared-token refusal removed the requested token"
+  [ -f "$state/live.kimi-turnend-token" ] || fail "the shared-token refusal removed the sibling's token"
+  { [ -f "$state/live.meta" ] && [ -f "$state/live.status" ]; } \
+    || fail "the shared-token refusal touched the sibling's anchors"
+  [ -f "$state/retired.status" ] || fail "the shared-token refusal removed the status log"
+
+  printf '%s\n' "$state/retired.turn-ended" > "$token_auth"
+  rc=0
+  PATH="$dir/fakebin:$PATH" HOME="$dir/fakehome" \
+    run_gc "$state" retired --finish-cleanup > "$dir/gc2.out" 2> "$dir/gc2.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "finish-cleanup refused the same record once the registration named its own task: $(cat "$dir/gc2.err")"
+  [ ! -e "$token_auth" ] || fail "the requested task's own registration was not deregistered"
+  [ ! -e "$state/retired.kimi-turnend-token" ] || fail "the requested token survived its own cleanup"
+  [ -f "$state/live.kimi-turnend-token" ] || fail "the sibling's token was removed by the requested task's cleanup"
+  pass "turn-end cleanup validates the registration's named task and refuses a live sibling's, then retires its own"
+}
+
+# Review finding 3: legal ids a.b and a_b normalize to the same watcher marker
+# names, so retiring one task's markers used to delete the other live task's
+# notification state. The retirement writer must refuse while a colliding
+# sibling's anchors are live.
+test_marker_ambiguous_ids_refuse_while_a_colliding_sibling_is_live() {
+  local dir state rc marker
+  dir=$(make_case marker-ambiguity)
+  state="$dir/state"
+  mkdir -p "$state"
+  printf 'done: dotted task complete\n' > "$state/a.b.status"
+  printf 'backend=tmux\nwindow=firstmate:fm-a_b\n' > "$state/a_b.meta"
+  printf 'working: sibling alive\n' > "$state/a_b.status"
+  seed_all_watcher_markers "$state" a_b sibling >/dev/null \
+    || fail "could not seed sibling markers"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
+
+  rc=0
+  PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" a.b > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "gc retired a.b while its marker sibling a_b was live (rc=$rc)"
+  grep -F 'a_b' "$dir/gc.err" >/dev/null \
+    || fail "the ambiguity refusal did not name the sibling: $(cat "$dir/gc.err")"
+  [ -f "$state/a_b.meta" ] || fail "ambiguity refusal removed the sibling meta"
+  [ -f "$state/a_b.status" ] || fail "ambiguity refusal removed the sibling status"
+  for marker in .seen-a_b_status .seen-a_b_turn-ended .hb-surfaced-a_b .subsuper-seen-status-a_b; do
+    [ -f "$state/$marker" ] || fail "ambiguity refusal removed the sibling marker $marker"
+  done
+  [ "$(cat "$state/.hb-surfaced-a_b")" = "hb-sibling" ] \
+    || fail "ambiguity refusal altered a sibling marker's content"
+  [ -f "$state/a.b.status" ] || fail "ambiguity refusal removed the target's status log"
+
+  rc=0
+  PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" a_b > "$dir/gc2.out" 2> "$dir/gc2.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "gc retired a_b while its marker sibling a.b was live (rc=$rc)"
+  for marker in .seen-a_b_status .seen-a_b_turn-ended .hb-surfaced-a_b .subsuper-seen-status-a_b; do
+    [ -f "$state/$marker" ] || fail "the reverse-direction refusal removed the sibling marker $marker"
+  done
+
+  rc=0
+  PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" a.b --finish-cleanup > "$dir/gc3.out" 2> "$dir/gc3.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup retired a.b while a_b was live (rc=$rc)"
+  [ -f "$state/a_b.status" ] || fail "finish-cleanup ambiguity refusal removed the sibling status"
+
+  rm -f "$state/a_b.meta" "$state/a_b.status"
+  rc=0
+  PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" a.b > "$dir/gc4.out" 2> "$dir/gc4.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "gc refused a.b after its sibling disappeared: $(cat "$dir/gc4.err")"
+  [ ! -e "$state/a.b.status" ] || fail "the target status log survived after the sibling disappeared"
+  for marker in .seen-a_b_status .seen-a_b_turn-ended .hb-surfaced-a_b .subsuper-seen-status-a_b; do
+    [ ! -e "$state/$marker" ] || fail "the stale sibling markers survived after the sibling disappeared: $marker"
+  done
+  pass "marker-ambiguous ids refuse while a colliding sibling is live, in both directions and both paths"
+}
+
+# Review finding 4: the old ordering removed the status anchor and then ran a
+# separate rm for the turn-ended seen marker, so a crash between them stranded
+# a marker behind a missing anchor that no invocation could resume. The anchor
+# now goes LAST; a run fault-injected into that final rm must leave the anchor
+# behind and converge under the second identical invocation.
+test_gc_killed_during_marker_retirement_converges_on_the_next_run() {
+  local dir state rc marker crash
+  dir=$(make_case crash-convergence)
+  state="$dir/state"
+  mkdir -p "$state"
+  printf 'done: crash test done\n' > "$state/crash.status"
+  # Only the three retirable marker families: the daemon marker names the task
+  # as an unrecognized record and the janitor would (correctly) refuse it.
+  seed_retirable_watcher_markers "$state" crash crash >/dev/null \
+    || fail "could not seed crash markers"
+  cat > "$dir/fakebin/rm" <<'SH'
+#!/usr/bin/env bash
+set -u
+# Fault injection: when the final writer rm still has live markers to remove
+# alongside the status anchor, remove the markers and die before the anchor -
+# exactly the interrupt the status-last ordering must survive.
+non_status=() status_args=() existing=0
+for arg in "$@"; do
+  case "$arg" in
+    *.status) status_args+=("$arg") ;;
+    *)
+      non_status+=("$arg")
+      [ -e "$arg" ] && existing=1
+      ;;
+  esac
+done
+if [ "${FM_FAKE_RM_CRASH:-}" = 1 ] && [ "$existing" -eq 1 ] && [ "${#status_args[@]}" -gt 0 ]; then
+  /bin/rm -f "${non_status[@]}"
+  kill -9 "$PPID" 2>/dev/null
+  exit 0
+fi
+exec /bin/rm "$@"
+SH
+  chmod +x "$dir/fakebin/rm"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
+
+  rc=0
+  FM_FAKE_RM_CRASH=1 PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" crash > "$dir/kill.out" 2> "$dir/kill.err" || rc=$?
+  [ "$rc" -ne 0 ] || fail "the fault-injected first run unexpectedly completed (rc=$rc)"
+  [ -f "$state/crash.status" ] || fail "the killed run removed the status anchor, recreating the dead end"
+  for marker in .seen-crash_status .seen-crash_turn-ended .hb-surfaced-crash; do
+    [ ! -e "$state/$marker" ] || fail "the killed run left a marker behind alongside the anchor: $marker"
+  done
+
+  rc=0
+  FM_FAKE_RM_CRASH=1 PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" crash > "$dir/second.out" 2> "$dir/second.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the second run did not converge after the killed run: $(cat "$dir/second.err")"
+  grep -F 'retired orphaned status record' "$dir/second.out" >/dev/null \
+    || fail "the converged run did not report retirement: $(cat "$dir/second.out")"
+  [ ! -e "$state/crash.status" ] || fail "the converged run left the status anchor behind"
+
+  rc=0
+  PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" crash > "$dir/third.out" 2> "$dir/third.err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the post-completion rerun refused instead of no-oping (rc=$rc): $(cat "$dir/third.err")"
+  pass "a run killed between marker and anchor retirement converges under the second identical invocation"
+}
+
 test_invalid_and_absent_ids_refuse() {
   local dir state rc
   dir=$(make_case invalid-id)
@@ -861,10 +1150,21 @@ test_invalid_and_absent_ids_refuse() {
   rc=0
   run_gc "$state" "../escape" > "$dir/escape.out" 2> "$dir/escape.err" || rc=$?
   [ "$rc" -eq 2 ] || fail "a path-unsafe id was not rejected as a usage error (rc=$rc)"
+  # An absent anchor over a completely clean record is the idempotent rerun of
+  # an already-completed retirement: a successful no-op, not a refusal.
   rc=0
   run_gc "$state" absent > "$dir/absent.out" 2> "$dir/absent.err" || rc=$?
-  [ "$rc" -eq 1 ] || fail "an absent status log was not refused (rc=$rc)"
-  pass "path-unsafe ids and absent status logs never reach retirement"
+  [ "$rc" -eq 0 ] || fail "an absent status log over no records was not a clean no-op (rc=$rc): $(cat "$dir/absent.err")"
+  # An absent anchor behind ANY surviving record is a partial state no
+  # invocation can resume: refused, with the residue named.
+  printf 'orphaned token\n' > "$state/absent.kimi-turnend-token"
+  rc=0
+  run_gc "$state" absent > "$dir/residue.out" 2> "$dir/residue.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "an absent status log behind surviving records was not refused (rc=$rc)"
+  grep -F 'absent.kimi-turnend-token' "$dir/residue.err" >/dev/null \
+    || fail "the absent-anchor refusal did not name the surviving record: $(cat "$dir/residue.err")"
+  [ -f "$state/absent.kimi-turnend-token" ] || fail "the absent-anchor refusal removed the residue"
+  pass "path-unsafe ids refuse, absent anchors no-op only over clean records, and absent anchors behind residue name it"
 }
 
 test_orphaned_finished_status_is_retired_with_its_sidecars
@@ -900,3 +1200,8 @@ test_finish_cleanup_refuses_when_a_writer_preserves_its_record
 test_finish_cleanup_retires_only_its_own_gone_herdr_journal
 test_finish_cleanup_refuses_records_no_writer_owns_and_retires_nothing
 test_finish_cleanup_refuses_unfinished_work_and_retires_nothing
+test_finish_cleanup_refuses_a_live_tmux_endpoint_and_recovers_after_it_dies
+test_finish_cleanup_refuses_a_real_live_tmux_window
+test_finish_cleanup_refuses_a_turnend_auth_record_naming_a_live_sibling
+test_marker_ambiguous_ids_refuse_while_a_colliding_sibling_is_live
+test_gc_killed_during_marker_retirement_converges_on_the_next_run

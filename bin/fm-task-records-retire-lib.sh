@@ -14,7 +14,14 @@
 #       from state/<id>.<harness>-turnend-token, remove the registered hook
 #       auth file it names, then remove the token file itself. Both halves
 #       are deregistration through the control plane's own path contract,
-#       never a hand-computed rm of a harness config.
+#       never a hand-computed rm of a harness config. The auth record's
+#       CONTENT must name exactly this task's own state/<id>.turn-ended marker
+#       (the spawn writer stored that exact path in the file): a record naming
+#       any other path belongs to another task even when the token text is
+#       identical, so two ordinary same-token files can never let cleanup of
+#       one task deregister a live sibling's global hook. Identity and content
+#       are rebound immediately before removal so a replacement race fails
+#       closed.
 #   fm_task_records_retire_busy <state-dir> <id> <gen>
 #       Retire the busy-state incarnation through bin/fm-busy-event.sh (the
 #       only writer of the busy record) with an exact gen when known, with
@@ -54,6 +61,7 @@ FM_TASK_RECORDS_RETIRE_BIN=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 fm_task_records_validate_turnend() {  # <grok|kimi> <state-dir> <id>
   local harness=$1 state_dir=$2 id=$3 token_path token='' path inode
+  local state_real expected auth_content auth_inode
   token_path=$(fm_control_harness_turnend_token_path "$harness" "$state_dir" "$id") || return 1
   [ -e "$token_path" ] || [ -L "$token_path" ] || return 0
   if [ ! -f "$token_path" ] || [ -L "$token_path" ] \
@@ -77,10 +85,31 @@ fm_task_records_validate_turnend() {  # <grok|kimi> <state-dir> <id>
     echo "REFUSED: unsafe task turn-end auth target; preserving task state." >&2
     return 1
   fi
+  # The auth record's CONTENT must name exactly this task's own turn-ended
+  # marker. The spawn writer stored that exact path in the file
+  # (bin/fm-spawn.sh's TURNEND), so a record naming any other path belongs to
+  # another task even when the token text is identical: two ordinary
+  # same-token files must never let this cleanup deregister a live sibling's
+  # global hook. Read it once, then rebind inode and content so a replacement
+  # between validation and the caller's removal fails closed.
+  state_real=$(cd "$state_dir" && pwd -P) || return 1
+  expected="$state_real/$id.turn-ended"
+  auth_content=$(cat "$path") || return 1
+  [ "$auth_content" = "$expected" ] || {
+    echo "REFUSED: turn-end auth record names a different task's marker (not $expected); preserving task state." >&2
+    return 1
+  }
+  auth_inode=$(fm_pr_file_inode "$path") || return 1
+  if [ "$(cat "$path")" != "$auth_content" ] \
+    || [ "$(fm_pr_file_inode "$path")" != "$auth_inode" ]; then
+    echo "REFUSED: turn-end auth record changed while validating; preserving task state." >&2
+    return 1
+  fi
 }
 
 fm_task_records_retire_turnend() {  # <grok|kimi> <state-dir> <id>
   local harness=$1 state_dir=$2 id=$3 token_path token='' path inode
+  local auth_content auth_inode
   token_path=$(fm_control_harness_turnend_token_path "$harness" "$state_dir" "$id") || return 1
   fm_task_records_validate_turnend "$harness" "$state_dir" "$id" || return 1
   if [ -n "$token_path" ] && [ -f "$token_path" ]; then
@@ -93,6 +122,19 @@ fm_task_records_retire_turnend() {  # <grok|kimi> <state-dir> <id>
   # The token file is firstmate-owned state and always goes; the global hook
   # registration it names is removed only when the token resolves to a valid
   # auth path (an empty or invalid token has no registration to retire).
+  if [ -n "$path" ] && { [ -e "$path" ] || [ -L "$path" ]; }; then
+    # Bind the exact record the rm will remove and revalidate through the
+    # writer one final time: a record swapped in after validation fails the
+    # identity/content rebind instead of deregistering a live sibling task.
+    auth_content=$(cat "$path") || return 1
+    auth_inode=$(fm_pr_file_inode "$path") || return 1
+    fm_task_records_validate_turnend "$harness" "$state_dir" "$id" || return 1
+    if [ "$(cat "$path")" != "$auth_content" ] \
+      || [ "$(fm_pr_file_inode "$path")" != "$auth_inode" ]; then
+      echo "REFUSED: turn-end auth record changed while retiring; preserving task state." >&2
+      return 1
+    fi
+  fi
   if [ -n "$path" ]; then
     rm -f -- "$path" || return 1
   fi
