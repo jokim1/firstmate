@@ -1,0 +1,4 @@
+AUTO-FIX-ONLY INPUT: standard no-mistakes note contains ask-user; both finding actions are auto-fix
+state: parked · source: run-step · parked at review: 2 finding(s)
+ASK-USER INPUT: one finding action is ask-user and its file is quoted src/a,b.go
+state: parked · source: run-step · parked at review: 2 finding(s) (ask-user: authority decision)

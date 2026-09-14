@@ -1,0 +1,6 @@
+SCENARIO 1 - auto-fix-only parked review with standard explanatory note
+state: parked · source: run-step · parked at review: 2 finding(s)
+
+SCENARIO 2 - ask-user finding with quoted-comma file field
+finding row: r2,error,"src/a,b.go",,ask-user,changes product behavior
+state: parked · source: run-step · parked at review: 2 finding(s) (ask-user: authority decision)

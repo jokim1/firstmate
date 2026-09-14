@@ -1,0 +1,31 @@
+SCENARIO 1 INPUT - captured no-mistakes axi status:
+run:
+  id: "01RUN"
+  branch: fm/live-auto-fix
+  status: awaiting_approval
+  awaiting_agent: parked 2m10s
+  head: "9e70346b1dba9f9e1dc9f1f7eb70e5df6478c031"
+  pr: ""
+  note: blocking and ask-user review findings park for your decision rather than being silently self-fixed
+  findings[2]{id,severity,file,line,action,description}:
+    r1,warning,a.go,,auto-fix,ignored error
+    r2,error,b.go,,auto-fix,missing nil check
+gate: review
+SCENARIO 1 PRODUCT OUTPUT:
+state: parked · source: run-step · parked at review: 2 finding(s)
+SCENARIO 2 INPUT - same captured record with only ask-user file changed to a quoted comma path:
+run:
+  id: "01RUN"
+  branch: fm/live-quoted-comma
+  status: awaiting_approval
+  awaiting_agent: parked 2m10s
+  head: "22e66e9589d67dab7a24b0ac2552d1c73deaaf73"
+  pr: ""
+  note: blocking and ask-user review findings park for your decision rather than being silently self-fixed
+  findings[2]{id,severity,file,line,action,description}:
+    r1,warning,a.go,,auto-fix,ignored error
+    r2,error,"src/a,b.go",,ask-user,changes product behavior
+gate: review
+SCENARIO 2 PRODUCT OUTPUT:
+state: parked · source: run-step · parked at review: 2 finding(s) (ask-user: authority decision)
+RESULT: both requested executable-reader scenarios passed
