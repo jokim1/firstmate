@@ -53,12 +53,27 @@ FM_TASK_RECORDS_RETIRE_BIN=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$FM_TASK_RECORDS_RETIRE_BIN/fm-busy-lib.sh"
 
 fm_task_records_validate_turnend() {  # <grok|kimi> <state-dir> <id>
-  local harness=$1 state_dir=$2 id=$3 token_path
+  local harness=$1 state_dir=$2 id=$3 token_path token='' path inode
   token_path=$(fm_control_harness_turnend_token_path "$harness" "$state_dir" "$id") || return 1
   [ -e "$token_path" ] || [ -L "$token_path" ] || return 0
   if [ ! -f "$token_path" ] || [ -L "$token_path" ] \
     || [ "$(fm_pr_file_link_count "$token_path")" != 1 ]; then
     echo "REFUSED: unsafe task turn-end token record; preserving task state." >&2
+    return 1
+  fi
+  inode=$(fm_pr_file_inode "$token_path") || return 1
+  IFS= read -r token < "$token_path" || [ -n "$token" ] || return 1
+  if [ ! -f "$token_path" ] || [ -L "$token_path" ] \
+    || [ "$(fm_pr_file_link_count "$token_path")" != 1 ] \
+    || [ "$(fm_pr_file_inode "$token_path")" != "$inode" ]; then
+    echo "REFUSED: unsafe task turn-end token record; preserving task state." >&2
+    return 1
+  fi
+  path=$(fm_control_harness_turnend_auth_path "$harness" "$token") || return 1
+  [ -n "$path" ] || return 0
+  [ -e "$path" ] || [ -L "$path" ] || return 0
+  if [ ! -f "$path" ] || [ -L "$path" ]; then
+    echo "REFUSED: unsafe task turn-end auth target; preserving task state." >&2
     return 1
   fi
 }
