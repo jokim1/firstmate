@@ -97,6 +97,24 @@ SH
 exit 0
 SH
   chmod +x "$fb/sleep"
+  cat > "$fb/playbot-lanes.mjs" <<'JS'
+import fs from "node:fs";
+
+const [command, ...args] = process.argv.slice(2);
+switch (command) {
+  case "agent-state":
+    process.stdout.write("alive");
+    break;
+  case "composer-state":
+    process.stdout.write("empty");
+    break;
+  case "send":
+    fs.appendFileSync(process.env.FM_PLAYBOT_TEST_LOG, `${args.join(" ")}\n`);
+    break;
+  default:
+    process.exit(1);
+}
+JS
   # Stub ssh transport for the remote-secondmate legs, selected via FM_SSH_BIN.
   # Records the full remote invocation and exits FM_FAKE_SSH_RC (default 0).
   cat > "$fb/fake-ssh" <<'SH'
@@ -420,6 +438,62 @@ test_confirmed_ring_closes_captain_hold() {
     fail "a confirmed doorbell left the captain-held task open"
   fi
   pass "fm-send --resolve-key: a confirmed doorbell closes captain-held work"
+}
+
+test_playbot_confirmed_answer_closes_decision() {
+  local dir fb log home rc out
+  dir="$TMP_ROOT/playbot-confirmed"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/playbot.log"; : > "$log"
+  home=$(setup_home playbot-confirmed)
+  fm_write_meta "$home/state/pb.meta" "window=playbot:thread-pb" "backend=playbot" "kind=ship"
+  printf 'needs-decision [key=playbot-choice]: approve or reject\n' > "$home/state/pb.status"
+
+  rc=0
+  env PATH="$fb:$PATH" FM_PLAYBOT_LANES_OVERRIDE="$fb/playbot-lanes.mjs" \
+    FM_PLAYBOT_TEST_LOG="$log" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
+    "$SEND" pb --resolve-key playbot-choice "approve it" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "a confirmed Playbot answer should succeed"
+  grep -F 'resolved [key=playbot-choice]: answered: approve it' "$home/state/pb.status" >/dev/null \
+    || fail "a confirmed Playbot answer did not close the decision: $(cat "$home/state/pb.status")"
+  out=$(drain_out "$home")
+  if printf '%s' "$out" | grep -F 'OPEN DECISIONS' >/dev/null; then
+    fail "the decision stayed open after a confirmed Playbot answer: $out"
+  fi
+  grep -qF 'approve it' "$home/state/pb.inbox/001.msg" \
+    || fail "the Playbot inbox record did not preserve the answer"
+  assert_contains "$(cat "$log")" "Firstmate instruction waiting" \
+    "the Playbot lane should receive the inbox doorbell"
+  pass "fm-send --resolve-key: confirmed Playbot delivery closes the decision"
+}
+
+test_playbot_confirmed_answer_closes_captain_hold() {
+  local dir fb log home rc
+  command -v tasks-axi >/dev/null 2>&1 || { pass "Playbot captain-held confirmed delivery (tasks-axi unavailable)"; return; }
+  dir="$TMP_ROOT/playbot-hold-confirmed"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/playbot.log"; : > "$log"
+  home=$(setup_home playbot-hold-confirmed)
+  mkdir -p "$home/data" "$home/config"
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  (cd "$home" && tasks-axi add playbot-hold "Choose the Playbot held option" --repo sample --start >/dev/null) \
+    || fail "could not create the Playbot captain-held fixture"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" hold playbot-hold \
+      --reason "waiting for the captain" >/dev/null \
+    || fail "could not hold the Playbot fixture for the captain"
+  fm_write_meta "$home/state/pb.meta" "window=playbot:thread-pb" "backend=playbot" "kind=ship"
+  printf 'captain-held [key=playbot-hold]: transferred\n' > "$home/state/pb.status"
+
+  rc=0
+  env PATH="$fb:$PATH" FM_PLAYBOT_LANES_OVERRIDE="$fb/playbot-lanes.mjs" \
+    FM_PLAYBOT_TEST_LOG="$log" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
+    "$SEND" pb --resolve-key playbot-hold "approve it" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "a confirmed Playbot captain-held answer should succeed"
+  if FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" open playbot-hold; then
+    fail "a confirmed Playbot answer left the captain-held task open"
+  fi
+  pass "fm-send --resolve-key: confirmed Playbot delivery closes captain-held work"
 }
 
 # The real local failure - an unwritable record - is the case that must never
@@ -845,6 +919,8 @@ test_skipped_ring_leaves_decision_open
 test_unconfirmed_ring_verdicts_leave_decision_open
 test_failed_ring_leaves_captain_hold_open
 test_confirmed_ring_closes_captain_hold
+test_playbot_confirmed_answer_closes_decision
+test_playbot_confirmed_answer_closes_captain_hold
 test_failed_enqueue_does_not_close
 test_multiple_keys_close_together
 test_local_secondmate_answer_marked_and_closed

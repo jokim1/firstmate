@@ -299,7 +299,7 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
     return 2
   fi
   case "$verdict" in
-    empty) return 0 ;;
+    ''|empty) return 0 ;;
     send-failed) return 2 ;;
     pending) return 4 ;;
     pending-unproven) return 5 ;;
