@@ -1,0 +1,1 @@
+[firstmate/tag-carveout/gpt-5.6-terra-medium] Captain, firstmate / tag-carveout is assigned to gpt-5.6-terra at medium effort; the harness is Pi. No project work was performed or inspected in this update.
