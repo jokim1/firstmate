@@ -1,0 +1,12 @@
+run:
+  id: "01RUN"
+  branch: __BRANCH__
+  status: awaiting_approval
+  awaiting_agent: parked 2m10s
+  head: "__HEAD__"
+  pr: ""
+  note: blocking and ask-user review findings park for your decision rather than being silently self-fixed
+  findings[2]{id,severity,file,line,action,description}:
+    r1,warning,a.go,,auto-fix,ignored error
+    r2,error,b.go,,auto-fix,missing nil check
+gate: review
