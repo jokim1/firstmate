@@ -38,6 +38,25 @@ SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-windows)
+    session=''
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = -t ] && [ "$#" -gt 1 ]; then
+        session=$2
+        break
+      fi
+      shift
+    done
+    state=${FM_STATE_OVERRIDE:-${FM_HOME:-}/state}
+    for meta in "$state"/*.meta; do
+      [ -f "$meta" ] || continue
+      target=$(sed -n 's/^window=//p' "$meta" | head -1)
+      case "$target" in
+        "$session":dead-*) ;;
+        "$session":*) printf '%s\n' "${target#*:}" ;;
+      esac
+    done
+    ;;
   display-message) case "$*" in *dead-*) exit 1 ;; *) printf '%%1\n' ;; esac ;;
   capture-pane)
     case "$*" in
