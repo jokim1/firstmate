@@ -1,0 +1,21 @@
+$ gh pr view https://github.com/jokim1/firstmate/pull/50 --json state -q .state
+MERGED
+$ FM_HOME=<isolated-home> bin/fm-pr-check.sh live-pr-50 https://github.com/jokim1/firstmate/pull/50
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision with a foreground checkpoint: bin/fm-watch-checkpoint.sh --seconds 180.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+armed: state/live-pr-50.check.sh
+$ bin/fm-watch.sh (bounded, real GitHub CLI, device-drifted registration, post-pr metadata keys)
+check: /Users/josephkim/.no-mistakes/worktrees/9ffe04aa3c01/01M2FS1CBMHDY6GA8XWMN4G8KJ/.tmp-live-pr-poll-validation/home/state/live-pr-50.check.sh: merged
+$ remaining poll artifacts
+$ persisted metadata tail
+mode=local-only
+pr=https://github.com/jokim1/firstmate/pull/50
+pr_head=44aa92d7e5a997f10ef18ab0af5c0b4728207d70
+control_relaunch_tx=live-validation
+decisions_reviewed=1
+decision_keys=nm-live
