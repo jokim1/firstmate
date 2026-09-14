@@ -1191,6 +1191,42 @@ pass "unreachable no-ledger remote state remains explicit with no local respawn 
 # sees the fixture root rather than the source script path used by fm-send.
 publish_healthy_watcher_identity "$PARENT/state" "$PARENT" "$REMOTE_ROOT/bin/fm-watch.sh"
 resolve_ios_pending
+printf 'done: remote task complete\n' > "$PARENT/state/ios.status"
+: > "$PARENT/state/ios.turn-ended"
+: > "$PARENT/state/ios.progress"
+printf 'malformed\n' > "$PARENT/state/.status-presentation-cursor"
+cp "$PARENT/state/ios.meta" "$TMP_ROOT/ios-before-presentation-refusal.meta"
+cp "$PARENT/state/ios.status" "$TMP_ROOT/ios-before-presentation-refusal.status"
+cp "$PARENT/state/procevent/remote-reply-ios.source" \
+  "$TMP_ROOT/ios-before-presentation-refusal.source"
+cp "$PARENT/data/secondmates.md" "$TMP_ROOT/secondmates-before-presentation-refusal.md"
+cp "$REMOTE_HOME/state/parent-route/ios.meta" \
+  "$TMP_ROOT/remote-ios-before-presentation-refusal.meta"
+cp "$HERDR_LOG" "$TMP_ROOT/herdr-before-presentation-refusal.log"
+if remote_env "$ROOT/bin/fm-teardown.sh" ios >/dev/null 2>&1; then
+  fail "remote retirement accepted a malformed presentation cursor"
+fi
+assert_present "$REMOTE_HOME" "presentation refusal removed the remote home"
+cmp -s "$TMP_ROOT/ios-before-presentation-refusal.meta" "$PARENT/state/ios.meta" \
+  || fail "presentation refusal changed parent route metadata"
+cmp -s "$TMP_ROOT/ios-before-presentation-refusal.status" "$PARENT/state/ios.status" \
+  || fail "presentation refusal changed task status"
+cmp -s "$TMP_ROOT/ios-before-presentation-refusal.source" \
+  "$PARENT/state/procevent/remote-reply-ios.source" \
+  || fail "presentation refusal changed reply source state"
+cmp -s "$TMP_ROOT/secondmates-before-presentation-refusal.md" "$PARENT/data/secondmates.md" \
+  || fail "presentation refusal changed the registry route"
+cmp -s "$TMP_ROOT/remote-ios-before-presentation-refusal.meta" \
+  "$REMOTE_HOME/state/parent-route/ios.meta" \
+  || fail "presentation refusal changed remote route metadata"
+cmp -s "$TMP_ROOT/herdr-before-presentation-refusal.log" "$HERDR_LOG" \
+  || fail "presentation refusal reached the remote endpoint"
+assert_present "$PARENT/state/ios.turn-ended" "presentation refusal removed turn-end state"
+assert_present "$PARENT/state/ios.progress" "presentation refusal removed progress state"
+assert_present "$PARENT/state/.status-presentation-cursor" \
+  "presentation refusal removed the malformed cursor"
+rm -f "$PARENT/state/.status-presentation-cursor"
+pass "remote retirement preflights presentation state before either host mutates"
 SIBLING_CREATE=$("$REMOTE_ROOT/bin/herdr" workspace create --cwd "$REMOTE_ROOT" \
   --label 2ndmate-macos --no-focus --session fm-remote)
 SIBLING_WORKSPACE=$(printf '%s' "$SIBLING_CREATE" | jq -r '.result.workspace.workspace_id')
