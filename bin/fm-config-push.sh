@@ -3,7 +3,7 @@
 # Usage: fm-config-push.sh [--help]
 #
 # Mid-session convergence for inherited local material such as
-# config/crew-dispatch.json, config/backend, or data/captain-shared.md updates.
+# config/crew-dispatch.json, config/backend, or shared-data updates.
 # This discovers live secondmate homes from state/*.meta, backfills
 # home= from data/secondmates.md for older meta records, and reuses the same
 # propagation machinery as bootstrap, but deliberately does not
@@ -11,7 +11,7 @@
 # After a successful per-home propagation that changes any allowlisted config/*
 # item, local routes receive the generation-specific literal-content pointer from
 # fm-config-inherit-lib.sh. Remote routes receive one durable marked reread nudge
-# through their SSH route. Unchanged config and data/captain-shared.md-only
+# through their SSH route. Unchanged config and shared-data-only
 # updates send no reread unless a previous send failure is pending for that home.
 # Warnings-only skips exit 0; real propagation or reread-send errors exit non-zero.
 set -u

@@ -171,7 +171,7 @@
 #   still win over the file's tokens.
 #   A --secondmate spawn also propagates the primary's declared inherited local
 #   material, so the secondmate's OWN crewmates inherit primary config and the
-#   secondmate receives the primary's read-only shared captain-preference file
+#   secondmate receives the primary's read-only shared data files
 #   (fm-config-inherit-lib.sh). A successful launch clears pending inherited
 #   config reread generations because the new agent reads the converged files.
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
