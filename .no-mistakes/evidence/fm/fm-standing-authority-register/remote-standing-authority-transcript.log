@@ -1,0 +1,15 @@
+SCENARIO: remote sender pushes primary standing authority over the routed protocol
+quarantined: data/standing-authority.md.remote-quarantine-20260914T135816Z-43306 (replaced)
+pushed: data/standing-authority.md
+DESTINATION_MODE=444
+DESTINATION_CONTENT_BEGIN
+# Standing authority
+
+primary grant
+DESTINATION_CONTENT_END
+QUARANTINED_DRIFT=/tmp/fm-standing-authority-remote.CQ5ErS/remote-home/data/standing-authority.md.remote-quarantine-20260914T135816Z-43306
+SCENARIO: sender mirrors primary absence without silently retaining stale authority
+quarantined: data/standing-authority.md.remote-quarantine-20260914T135819Z-45657 (removed)
+removed: data/standing-authority.md
+DESTINATION_AFTER_ABSENCE=absent
+QUARANTINE_COUNT=2
