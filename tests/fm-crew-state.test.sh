@@ -301,21 +301,18 @@ run:
 EOF
 }
 
+captured_parked_status() {  # <fixture> <branch>
+  sed \
+    -e "s|__BRANCH__|$2|" \
+    -e "s|__HEAD__|${FM_FAKE_RUN_HEAD:-abc1234}|" \
+    "$ROOT/tests/assets/$1"
+}
+
 run_parked() {  # <branch>
-  cat <<EOF
-run:
-  id: "01RUN"
-  branch: $1
-  status: awaiting_approval
-  awaiting_agent: parked 2m10s
-  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
-  pr: ""
-  note: blocking and ask-user review findings park for your decision rather than being silently self-fixed
-  findings[2]{id,severity,file,line,action,description}:
-    r1,warning,a.go,,auto-fix,ignored error
-    r2,error,"src/a,b.go",,ask-user,changes product behavior
-gate: review
-EOF
+  # Captured ask-user output, with only the file field changed to exercise TOON
+  # quoting. Branch and head placeholders bind the capture to the throwaway repo.
+  captured_parked_status no-mistakes-axi-status-ask-user-parked.toon "$1" |
+    sed 's|,b.go,,ask-user,|,"src/a,b.go",,ask-user,|'
 }
 
 run_parked_scalar_gate_running() {  # <branch>
@@ -353,20 +350,7 @@ EOF
 }
 
 run_parked_auto_fix_only() {  # <branch>
-  cat <<EOF
-run:
-  id: "01RUN"
-  branch: $1
-  status: awaiting_approval
-  awaiting_agent: parked 2m10s
-  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
-  pr: ""
-  note: blocking and ask-user review findings park for your decision rather than being silently self-fixed
-  findings[2]{id,severity,file,line,action,description}:
-    r1,warning,a.go,,auto-fix,ignored error
-    r2,error,b.go,,auto-fix,missing nil check
-gate: review
-EOF
+  captured_parked_status no-mistakes-axi-status-auto-fix-parked.toon "$1"
 }
 
 run_passed() {  # <branch>
