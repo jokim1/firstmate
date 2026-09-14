@@ -2606,7 +2606,7 @@ SH
     [ "$rc" -eq 0 ] || fail "$mutation watcher failed: $(cat "$dir/watch.err")"
     out=$(cat "$dir/watch.out")
     case "$out" in
-      "check: rejected unauthenticated state checks:"*"task-a.check.sh"*) ;;
+      "check: merge watching stopped - PR poll rejected as unauthenticated:"*"task-a"*) ;;
       *) fail "$mutation on a renumbered registration was not refused: $out" ;;
     esac
     [ "$(fm_pr_sha256 "$state/task-a.pr-poll-registration")" = "$registration_sha" ] \
@@ -2754,6 +2754,264 @@ SH
   pass "device re-record publication waits without rewriting its registration"
 }
 
+# Simulate a macOS remount by rewriting only the recorded device component of
+# a registration or retirement receipt in place. Rewriting through cat keeps
+# the file's inode, so exactly one thing drifts, matching the 2026-09-14
+# incident where live device numbers changed and every recorded byte matched.
+drift_recorded_device() {  # <file>
+  local file=$1 tmp
+  tmp="$file.drift-tmp"
+  awk '$0 ~ /^[0-9]+:[0-9]+$/ { sub(/^[0-9]+:/, "99999999:") } { print }' "$file" > "$tmp" \
+    || { rm -f "$tmp"; return 1; }
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+  chmod 0600 "$file"
+}
+
+# Rewrite the recorded inode component instead, simulating a file that was
+# actually replaced and must lose authentication.
+drift_recorded_inode() {  # <file>
+  local file=$1 tmp
+  tmp="$file.drift-tmp"
+  awk '$0 ~ /^[0-9]+:[0-9]+$/ { sub(/:[0-9]+$/, ":1") } { print }' "$file" > "$tmp" \
+    || { rm -f "$tmp"; return 1; }
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+  chmod 0600 "$file"
+}
+
+test_device_drift_does_not_disarm_pr_poll() {
+  local dir state before after rc
+  dir=$(make_case device-drift-not-disarmed)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/1 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm device-drift poll: $(cat "$dir/seed.err")"
+  drift_recorded_device "$state/task-a.pr-poll-registration"
+  ! fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "recorded device drift bypassed strict authentication before repair"
+  add_stop_custom_check "$dir"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "device-drift watcher cycle failed: $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in check:*task-a.check.sh:*merged) ;; *) fail "device-drift poll did not surface its merge: $(cat "$dir/watch.out")" ;; esac
+  assert_poll_absent "$state" task-a
+  ! grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+    || fail "an authenticated drifted poll was reported as disarmed: $(cat "$dir/watch.out")"
+
+  dir=$(make_case device-drift-receipt-refused)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/2 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm receipt-refusal poll: $(cat "$dir/seed.err")"
+  fm_pr_poll_snapshot_capture "$state" task-a "$POLL" \
+    || fail "could not snapshot drifted-device receipt fixture"
+  fm_pr_poll_retirement_publish "$state" task-a "$POLL" merged \
+    || fail "could not publish drifted-device receipt fixture"
+  drift_recorded_device "$state/task-a.pr-poll-retirement"
+  before=$(poll_artifact_snapshot "$state" task-a)
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/restart.out" 2> "$dir/restart.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "device-drift receipt refusal watcher failed: $(cat "$dir/restart.err")"
+  grep -F 'rejected unauthenticated PR poll retirement receipts' "$dir/restart.out" >/dev/null \
+    || fail "device-drifted receipt was not rejected: $(cat "$dir/restart.out")"
+  [ -f "$state/task-a.check.sh" ] && [ -f "$state/task-a.pr-poll" ] \
+    && [ -f "$state/task-a.pr-poll-registration" ] \
+    || fail "device-drifted receipt authorized canonical poll deletion"
+  after=$(poll_artifact_snapshot "$state" task-a)
+  [ "$after" = "$before" ] || fail "device-drifted receipt changed poll artifacts"
+  pass "recorded device drift keeps active polls armed but cannot authorize receipt recovery"
+}
+
+test_recorded_inode_drift_still_disarms_pr_poll() {
+  local dir state rc
+  dir=$(make_case inode-drift-disarms)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/3 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm inode-drift poll: $(cat "$dir/seed.err")"
+  drift_recorded_inode "$state/task-a.pr-poll-registration"
+  if fm_pr_poll_artifacts_valid "$state" task-a "$POLL"; then
+    fail "recorded inode drift left a replaced file authenticated"
+  fi
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "inode-drift watcher cycle failed: $(cat "$dir/watch.err")"
+  grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+    || fail "rejected PR poll did not name its lost merge watching: $(cat "$dir/watch.out")"
+  grep -F 'task-a' "$dir/watch.out" >/dev/null \
+    || fail "rejected PR poll wake did not name the affected task: $(cat "$dir/watch.out")"
+  grep -F 'bin/fm-pr-check.sh' "$dir/watch.out" >/dev/null \
+    || fail "rejected PR poll wake did not name the re-arm path: $(cat "$dir/watch.out")"
+  [ -e "$state/task-a.check.sh" ] || fail "rejected PR poll lost its runnable check"
+  pass "recorded inode drift still disarms, and the wake names the stopped merge watching"
+}
+
+test_meta_key_order_does_not_disarm_pr_poll() {
+  local dir state rc
+  dir=$(make_case meta-key-order-not-disarmed)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/1 >/dev/null 2>/dev/null \
+    || fail "could not arm poll for the meta key-order fixture"
+  printf 'control_relaunch_tx=1234.20260914T090000Z.99\n' >> "$state/task-a.meta"
+  printf 'decisions_reviewed=1\ndecision_keys=nm-1\n' >> "$state/task-a.meta"
+  fm_pr_metadata_identity_parse "$state/task-a.meta" \
+    || fail "meta with relaunch and captain-hold keys after pr= failed the poll identity parse"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "meta key order after pr= disarmed a byte-identical poll"
+  add_stop_custom_check "$dir"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "meta key-order watcher cycle failed: $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in check:*task-a.check.sh:*merged) ;; *) fail "meta key-order poll did not surface its merge: $(cat "$dir/watch.out")" ;; esac
+  assert_poll_absent "$state" task-a
+
+  printf 'not-a-key-line\n' >> "$state/task-a.meta"
+  if fm_pr_metadata_identity_parse "$state/task-a.meta"; then
+    fail "junk without a key was accepted after pr="
+  fi
+  pass "poll authentication does not depend on meta key order"
+}
+
+test_rejected_poll_families_keep_the_merge_loss_warning() {
+  local dir state suffix shape external rc
+  for suffix in pr-poll-registration pr-poll; do
+    for shape in regular symlink directory; do
+      dir=$(make_case "rejected-${suffix}-${shape}")
+      state="$dir/home/state"
+      write_task_meta "$dir" task-a
+      run_check_entry "$dir" task-a https://github.com/o/r/pull/1 >/dev/null 2>"$dir/seed.err" \
+        || fail "could not arm $suffix $shape poll: $(cat "$dir/seed.err")"
+      case "$shape" in
+        regular) printf 'invalid\n' > "$state/task-a.$suffix" ;;
+        symlink)
+          external="$dir/$suffix-target"
+          printf 'invalid\n' > "$external"
+          rm -f "$state/task-a.$suffix"
+          ln -s "$external" "$state/task-a.$suffix"
+          ;;
+        directory)
+          rm -f "$state/task-a.$suffix"
+          mkdir "$state/task-a.$suffix"
+          ;;
+      esac
+      set +e
+      run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+      rc=$?
+      set -e
+      [ "$rc" -eq 0 ] || fail "$suffix $shape rejection watcher failed: $(cat "$dir/watch.err")"
+      grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+        || fail "$suffix $shape rejection hid the lost merge watching: $(cat "$dir/watch.out")"
+      grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+        || fail "$suffix $shape rejection omitted the PR-poll wake row"
+      ! grep "$(printf '\tcheck\tunauthenticated-state-checks\t')" "$state/.wake-queue" >/dev/null \
+        || fail "$suffix $shape rejection was misclassified as a generic check"
+    done
+  done
+
+  dir=$(make_case rejected-poll-with-custom-check)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/4 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm combined-rejection poll: $(cat "$dir/seed.err")"
+  drift_recorded_inode "$state/task-a.pr-poll-registration"
+  printf '#!/usr/bin/env bash\nprintf "unsafe\\n"\n' > "$state/z-custom.check.sh"
+  chmod 0700 "$state/z-custom.check.sh"
+  set +e
+  run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "combined rejection watcher failed: $(cat "$dir/watch.err")"
+  grep -F 'rejected unauthenticated state checks' "$dir/watch.out" >/dev/null \
+    || fail "combined rejection wake omitted the generic check warning: $(cat "$dir/watch.out")"
+  grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+    || fail "combined rejection wake omitted the lost merge warning: $(cat "$dir/watch.out")"
+  [ "$(wc -l < "$state/.wake-queue" | tr -d ' ')" -eq 2 ] \
+    || fail "combined rejection did not enqueue exactly both warnings"
+  grep "$(printf '\tcheck\tunauthenticated-state-checks\t')" "$state/.wake-queue" >/dev/null \
+    || fail "combined rejection omitted the generic wake row"
+  grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+    || fail "combined rejection omitted the PR-poll wake row"
+
+  dir=$(make_case rejected-poll-with-actionable-check)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/5 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm actionable-check rejection poll: $(cat "$dir/seed.err")"
+  drift_recorded_inode "$state/task-a.pr-poll-registration"
+  printf '#!/usr/bin/env bash\nprintf "actionable-check\\n"\n' > "$state/z-custom.check.sh"
+  chmod 0700 "$state/z-custom.check.sh"
+  FM_HOME="$dir/home" "$REGISTER" z-custom >/dev/null \
+    || fail "could not register actionable custom check"
+  set +e
+  run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "actionable-check rejection watcher failed: $(cat "$dir/watch.err")"
+  grep -F 'actionable-check' "$dir/watch.out" >/dev/null \
+    || fail "rejection warning prevented the actionable custom check from executing: $(cat "$dir/watch.out")"
+  grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+    || fail "actionable custom check starved the durable PR-poll wake row"
+  grep -F 'merge watching stopped' "$state/.wake-queue" >/dev/null \
+    || fail "actionable custom check stripped the lost merge warning from its durable row"
+
+  dir=$(make_case rejected-poll-with-valid-merge)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  write_task_meta "$dir" task-b
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/6 >/dev/null 2>"$dir/task-a.err" \
+    || fail "could not arm rejected poll beside valid merge: $(cat "$dir/task-a.err")"
+  run_check_entry "$dir" task-b https://github.com/o/r/pull/7 >/dev/null 2>"$dir/task-b.err" \
+    || fail "could not arm valid merge beside rejected poll: $(cat "$dir/task-b.err")"
+  drift_recorded_inode "$state/task-a.pr-poll-registration"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "valid-merge rejection watcher failed: $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in
+    check:*task-b.check.sh:*merged) ;;
+    *) fail "rejected poll starved the valid merge notification: $(cat "$dir/watch.out")" ;;
+  esac
+  assert_poll_absent "$state" task-b
+  [ -e "$state/task-a.check.sh" ] || fail "rejected poll was removed while the valid poll ran"
+  grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+    || fail "valid merged poll dropped the durable rejection row"
+  grep -F 'merge watching stopped' "$state/.wake-queue" >/dev/null \
+    || fail "valid merged poll stripped the lost merge warning from its durable row"
+
+  dir=$(make_case poll-shape-overrides-custom-trust)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/8 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm custom-trust rejection poll: $(cat "$dir/seed.err")"
+  chmod 0700 "$state/task-a.check.sh"
+  FM_HOME="$dir/home" "$REGISTER" task-a >/dev/null \
+    || fail "could not register poll-shaped check as a custom check"
+  set +e
+  run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "custom-trust rejection watcher failed: $(cat "$dir/watch.err")"
+  grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+    || fail "custom trust masked the rejected PR poll warning: $(cat "$dir/watch.out")"
+  grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+    || fail "custom trust diverted a poll-shaped check from the PR-poll wake row"
+  ! grep "$(printf '\tcheck\tunauthenticated-state-checks\t')" "$state/.wake-queue" >/dev/null \
+    || fail "custom trust misclassified a rejected poll as a generic check"
+  [ -e "$state/task-a.check.sh" ] || fail "custom-trust rejection removed the poll check"
+  pass "all malformed poll families warn of merge loss without rejection starvation"
+}
+
 test_parser_matrix
 test_gitlab_merge_watch
 test_merged_poll_retires_once
@@ -2774,6 +3032,10 @@ test_external_merge_transition_retires_only_terminal_poll
 test_retirement_refuses_replacement_and_nonterminal_results
 test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
+test_device_drift_does_not_disarm_pr_poll
+test_recorded_inode_drift_still_disarms_pr_poll
+test_meta_key_order_does_not_disarm_pr_poll
+test_rejected_poll_families_keep_the_merge_loss_warning
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
 test_rejected_metacharacter_bytes_are_inert

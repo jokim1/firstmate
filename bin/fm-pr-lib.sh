@@ -332,7 +332,14 @@ fm_pr_metadata_identity_parse() {
       x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*)
         ;;
       *)
-        [ "$seen_pr" -eq 0 ] || post_pr_invalid=1
+        # Meta gains keys from many append-only writers (relaunch
+        # transactions, captain holds), so key order after pr= is not
+        # stable. Only well-formed key=value lines are tolerated there;
+        # the binding invariants above (exactly one canonical pr=, valid
+        # pr_head format) still carry the authentication check.
+        if [ "$seen_pr" -eq 1 ]; then
+          [[ "$line" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*= ]] || post_pr_invalid=1
+        fi
         ;;
     esac
   done < "$file"
@@ -731,9 +738,11 @@ fm_pr_poll_registration_rerecord_device() {  # <state> <id> <template>
 }
 
 fm_pr_poll_snapshot_capture() {
-  local state=$1 id=$2 template=$3 registration
+  local state=$1 id=$2 template=$3 registration data check
   fm_pr_poll_artifacts_valid "$state" "$id" "$template" || return 1
   registration="$state/$id.pr-poll-registration"
+  data="$state/$id.pr-poll"
+  check="$state/$id.check.sh"
   FM_PR_POLL_SNAPSHOT_REG_HASH=$(fm_pr_sha256 "$registration") || return 1
   FM_PR_POLL_SNAPSHOT_REG_IDENTITY=$(fm_pr_file_identity "$registration") || return 1
   FM_PR_POLL_SNAPSHOT_ID=$id
@@ -744,17 +753,19 @@ fm_pr_poll_snapshot_capture() {
   FM_PR_POLL_SNAPSHOT_NUMBER=$FM_PR_DATA_NUMBER
   FM_PR_POLL_SNAPSHOT_DATA_HASH=$FM_PR_REG_DATA_HASH
   FM_PR_POLL_SNAPSHOT_TEMPLATE_HASH=$FM_PR_REG_TEMPLATE_HASH
-  FM_PR_POLL_SNAPSHOT_DATA_IDENTITY=$FM_PR_REG_DATA_IDENTITY
-  FM_PR_POLL_SNAPSHOT_CHECK_IDENTITY=$FM_PR_REG_CHECK_IDENTITY
+  FM_PR_POLL_SNAPSHOT_DATA_IDENTITY=$(fm_pr_file_identity "$data") || return 1
+  FM_PR_POLL_SNAPSHOT_CHECK_IDENTITY=$(fm_pr_file_identity "$check") || return 1
 }
 
 fm_pr_poll_snapshot_matches() {
-  local state=$1 id=$2 template=$3 registration reg_hash reg_identity
+  local state=$1 id=$2 template=$3 registration reg_hash reg_identity data_identity check_identity
   [ -n "$FM_PR_POLL_SNAPSHOT_ID" ] && [ "$id" = "$FM_PR_POLL_SNAPSHOT_ID" ] || return 1
   fm_pr_poll_artifacts_valid "$state" "$id" "$template" || return 1
   registration="$state/$id.pr-poll-registration"
   reg_hash=$(fm_pr_sha256 "$registration") || return 1
   reg_identity=$(fm_pr_file_identity "$registration") || return 1
+  data_identity=$(fm_pr_file_identity "$state/$id.pr-poll") || return 1
+  check_identity=$(fm_pr_file_identity "$state/$id.check.sh") || return 1
   [ "$FM_PR_DATA_PROVIDER" = "$FM_PR_POLL_SNAPSHOT_PROVIDER" ] || return 1
   [ "$FM_PR_DATA_URL" = "$FM_PR_POLL_SNAPSHOT_URL" ] || return 1
   [ "$FM_PR_DATA_HOST" = "$FM_PR_POLL_SNAPSHOT_HOST" ] || return 1
@@ -762,8 +773,8 @@ fm_pr_poll_snapshot_matches() {
   [ "$FM_PR_DATA_NUMBER" = "$FM_PR_POLL_SNAPSHOT_NUMBER" ] || return 1
   [ "$FM_PR_REG_DATA_HASH" = "$FM_PR_POLL_SNAPSHOT_DATA_HASH" ] || return 1
   [ "$FM_PR_REG_TEMPLATE_HASH" = "$FM_PR_POLL_SNAPSHOT_TEMPLATE_HASH" ] || return 1
-  [ "$FM_PR_REG_DATA_IDENTITY" = "$FM_PR_POLL_SNAPSHOT_DATA_IDENTITY" ] || return 1
-  [ "$FM_PR_REG_CHECK_IDENTITY" = "$FM_PR_POLL_SNAPSHOT_CHECK_IDENTITY" ] || return 1
+  [ "$data_identity" = "$FM_PR_POLL_SNAPSHOT_DATA_IDENTITY" ] || return 1
+  [ "$check_identity" = "$FM_PR_POLL_SNAPSHOT_CHECK_IDENTITY" ] || return 1
   [ "$reg_hash" = "$FM_PR_POLL_SNAPSHOT_REG_HASH" ] || return 1
   [ "$reg_identity" = "$FM_PR_POLL_SNAPSHOT_REG_IDENTITY" ]
 }
@@ -1089,9 +1100,7 @@ fm_pr_poll_retirement_discard_obsolete() {
   current_reg_hash=$(fm_pr_sha256 "$registration") || return 1
   current_reg_identity=$(fm_pr_file_identity "$registration") || return 1
   if [ "$current_reg_hash" = "$FM_PR_RETIRE_REG_HASH" ] \
-    && [ "$current_reg_identity" = "$FM_PR_RETIRE_REG_IDENTITY" ] \
-    && [ "$FM_PR_REG_DATA_IDENTITY" = "$FM_PR_RETIRE_DATA_IDENTITY" ] \
-    && [ "$FM_PR_REG_CHECK_IDENTITY" = "$FM_PR_RETIRE_CHECK_IDENTITY" ]; then
+    || [ "$current_reg_identity" = "$FM_PR_RETIRE_REG_IDENTITY" ]; then
     return 1
   fi
   fm_pr_poll_retirement_remove_exact "$receipt" "$state_device" \
