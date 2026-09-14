@@ -1,0 +1,4 @@
+$ live classifier fm_backend_agent_state herdr default:wX8:p2
+alive
+$ target bin/fm-crew-state.sh alive-herdr
+state: unknown · source: pane · harness state unavailable (unknown codex-unverified)

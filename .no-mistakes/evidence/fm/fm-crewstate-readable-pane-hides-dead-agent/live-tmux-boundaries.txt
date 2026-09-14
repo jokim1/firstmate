@@ -1,0 +1,15 @@
+$ tmux capture-pane -p -t nm-live:shell
+
+
+
+
+
+$ target classifier and crew state for readable shell-only pane
+classifier: dead
+state: unknown · source: none · backend target gone: nm-live:shell (agent gone, pane shell remains)
+
+$ tmux display-message -p -t nm-live:ambiguous #{pane_current_command}
+sleep
+$ target classifier and crew state for readable non-agent foreground process
+classifier: ambiguous
+state: unknown · source: pane · harness state unavailable (unknown codex-unverified)

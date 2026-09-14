@@ -1,0 +1,10 @@
+$ herdr-backed pane transcript (last 20 lines via current product adapter)
+josephkim@omega firstmate %
+$ base commit fm-crew-state.sh fm-kimi-usability-audit
+state: unknown · source: pane · harness state unavailable (unknown codex-unverified)
+
+$ target commit bin/fm-crew-state.sh fm-kimi-usability-audit
+state: unknown · source: none · backend target gone: default:wWW:p2 (agent gone, pane shell remains)
+
+$ target classifier fm_backend_agent_state herdr default:wWW:p2
+dead
