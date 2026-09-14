@@ -2321,6 +2321,26 @@ test_rejected_poll_families_keep_the_merge_loss_warning() {
     || fail "combined rejection omitted the generic wake row"
   grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
     || fail "combined rejection omitted the PR-poll wake row"
+
+  dir=$(make_case rejected-poll-with-actionable-check)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/5 >/dev/null 2>"$dir/seed.err" \
+    || fail "could not arm actionable-check rejection poll: $(cat "$dir/seed.err")"
+  drift_recorded_inode "$state/task-a.pr-poll-registration"
+  printf '#!/usr/bin/env bash\nprintf "actionable-check\\n"\n' > "$state/z-custom.check.sh"
+  chmod 0700 "$state/z-custom.check.sh"
+  FM_HOME="$dir/home" "$REGISTER" z-custom >/dev/null \
+    || fail "could not register actionable custom check"
+  set +e
+  run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "actionable-check rejection watcher failed: $(cat "$dir/watch.err")"
+  grep -F 'merge watching stopped' "$dir/watch.out" >/dev/null \
+    || fail "actionable custom check starved the lost merge warning: $(cat "$dir/watch.out")"
+  grep "$(printf '\tcheck\tunauthenticated-pr-polls\t')" "$state/.wake-queue" >/dev/null \
+    || fail "actionable custom check starved the durable PR-poll wake row"
   pass "all malformed poll families warn of merge loss without rejection starvation"
 }
 
