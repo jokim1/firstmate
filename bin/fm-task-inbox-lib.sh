@@ -35,11 +35,6 @@
 #   schema=fm-task-inbox.v1
 #   at=<utc timestamp>
 #   delivery=fire-and-forget   present only when the re-ring ladder must ignore it
-#   resolve-status-file=<absolute status file>  optional --resolve-key ledger
-#   resolve-status-pending-line=<pending status line>  repeatable, paired below
-#   resolve-status-line=<resolved status line>  repeatable, written on handled/
-#   resolve-hold-key=<captain-held task id>     repeatable, answered on handled/
-#   resolve-answer=<single-line answer text>    paired with resolve-hold-key
 #   --
 #   <exact message text; newlines are legal; a marked secondmate request keeps
 #    its from-firstmate marker and corr token verbatim in this body>
@@ -80,8 +75,6 @@ _FM_TASK_INBOX_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # recursively duplicate the full backend graph for every inbox consumer.
 # shellcheck source=/dev/null
 . "$_FM_TASK_INBOX_LIB_DIR/fm-wake-lib.sh"
-# shellcheck source=/dev/null
-. "$_FM_TASK_INBOX_LIB_DIR/fm-classify-lib.sh"
 # shellcheck source=/dev/null
 . "$_FM_TASK_INBOX_LIB_DIR/fm-backend.sh"
 
@@ -159,18 +152,11 @@ _fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode]
     printf 'schema=%s\n' "$FM_TASK_INBOX_SCHEMA"
     printf 'at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     [ "$delivery_mode" != fire-and-forget ] || printf 'delivery=fire-and-forget\n'
-    [ -z "${FM_TASK_INBOX_RESOLVE_STATUS_FILE:-}" ] || printf 'resolve-status-file=%s\n' "$FM_TASK_INBOX_RESOLVE_STATUS_FILE"
-    [ -z "${FM_TASK_INBOX_RESOLVE_STATUS_PENDING_LINES:-}" ] || printf '%s' "$FM_TASK_INBOX_RESOLVE_STATUS_PENDING_LINES"
-    [ -z "${FM_TASK_INBOX_RESOLVE_STATUS_LINES:-}" ] || printf '%s' "$FM_TASK_INBOX_RESOLVE_STATUS_LINES"
-    [ -z "${FM_TASK_INBOX_RESOLVE_HOLD_KEYS:-}" ] || printf '%s' "$FM_TASK_INBOX_RESOLVE_HOLD_KEYS"
-    [ -z "${FM_TASK_INBOX_RESOLVE_ANSWER:-}" ] || printf 'resolve-answer=%s\n' "$FM_TASK_INBOX_RESOLVE_ANSWER"
     printf -- '--\n'
     printf '%s' "$text"
   } > "$tmp" && mv "$tmp" "$rec" || status=1
   [ "$status" -eq 0 ] || { rm -f "$tmp"; return 1; }
-  fm_task_inbox_publish_pending_resolutions "$rec" || status=2
   printf '%s' "$rec"
-  return "$status"
 }
 
 # Durably enqueue one steer: temp-write, then atomic rename into the next
@@ -181,10 +167,10 @@ fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode]
   mkdir -p "$dir/handled" || return 1
   lock="$dir/.seq.lock"
   fm_task_inbox_lock_acquire "$lock" || return 1
-  rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=$?
+  rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=1
   fm_lock_release "$lock"
+  [ "$status" -eq 0 ] || return 1
   printf '%s' "$rec"
-  return "$status"
 }
 
 # Durably enqueue one steer at most once: when a record with the exact same
@@ -244,11 +230,11 @@ fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mod
     status=1
   fi
   if [ "$status" -eq 0 ] && [ -z "$rec" ]; then
-    rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=$?
+    rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=1
   fi
   fm_lock_release "$lock"
+  [ "$status" -eq 0 ] || return 1
   printf '%s' "$rec"
-  return "$status"
 }
 
 # The exact enqueued text back out of a record.
@@ -261,148 +247,6 @@ fm_task_inbox_body() {  # <record-path>
       return 0
     fi
   done < "$1"
-  return 1
-}
-
-fm_task_inbox_header_values() {  # <record-path> <name>
-  local rec=$1 name=$2 line
-  [ -f "$rec" ] || return 1
-  while IFS= read -r line; do
-    [ "$line" != -- ] || return 0
-    case "$line" in
-      "$name="*) printf '%s\n' "${line#*=}" ;;
-    esac
-  done < "$rec"
-}
-
-fm_task_inbox_header_values_follow_move() {  # <root-record-path> <name>
-  local rec=$1 name=$2 values handled
-  if values=$(fm_task_inbox_header_values "$rec" "$name"); then
-    printf '%s' "$values"
-    [ -z "$values" ] || printf '\n'
-    return 0
-  fi
-  handled="${rec%/*}/handled/${rec##*/}"
-  fm_task_inbox_header_values "$handled" "$name"
-}
-
-fm_task_inbox_publish_pending_resolutions() {  # <record-path>
-  local rec=$1 inbox state status_file pending_lines line rc=0
-  inbox=${rec%/*}
-  state=${inbox%/*}
-  status_file=$(fm_task_inbox_header_values_follow_move "$rec" resolve-status-file) || return 1
-  status_file=$(printf '%s\n' "$status_file" | head -1)
-  [ -n "$status_file" ] || return 0
-  [ "${status_file%/*}" = "$state" ] || return 1
-  case "${status_file##*/}" in *.status) ;; *) return 1 ;; esac
-  pending_lines=$(fm_task_inbox_header_values_follow_move "$rec" resolve-status-pending-line) || return 1
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    rc=0
-    fm_wake_status_append_self_announced "${status_file%/*}" "$status_file" "$line" || rc=$?
-    [ "$rc" -ne 2 ] || return 1
-  done <<EOF
-$pending_lines
-EOF
-}
-
-fm_task_inbox_resolve_marker() {  # <state-dir> <task-id> <record-path>
-  printf '%s/%s.inbox/.resolved/%s\n' "$1" "$2" "${3##*/}"
-}
-
-fm_task_inbox_resolve_acknowledged() {  # <state-dir> <task-id> <handled-record>
-  local state=$1 task=$2 rec=$3 marker status_file answer line pending key pending_key mode delivery resolved_delivery transition index=0 lines='' rc=0
-  marker=$(fm_task_inbox_resolve_marker "$state" "$task" "$rec")
-  [ ! -e "$marker" ] || return 0
-  status_file=$(fm_task_inbox_header_values "$rec" resolve-status-file | head -1)
-  if [ -n "$status_file" ]; then
-    [ "${status_file%/*}" = "$state" ] || return 1
-    case "${status_file##*/}" in *.status) ;; *) return 1 ;; esac
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      index=$((index + 1))
-      pending=$(fm_task_inbox_header_values "$rec" resolve-status-pending-line | sed -n "${index}p")
-      [ -n "$pending" ] || return 1
-      key=$(_fm_decision_key "$line") || return 1
-      pending_key=$(_fm_decision_key "$pending") || return 1
-      [ "$pending_key" = "$key" ] || return 1
-      mode=$(_fm_status_tag_value "$pending" mode) || return 1
-      [ "$mode" = local ] || return 1
-      delivery=$(_fm_status_tag_value "$pending" delivery) || return 1
-      _fm_delivery_token_ok "$delivery" || return 1
-      resolved_delivery=$(_fm_status_tag_value "$line" delivery) || return 1
-      [ "$resolved_delivery" = "$delivery" ] || return 1
-      transition=$(status_delivery_transition_state "$status_file" "$key" "$delivery") || return 1
-      case "$transition" in
-        pending)
-          rc=0
-          fm_wake_status_append_self_announced "${status_file%/*}" "$status_file" "$line" || rc=$?
-          [ "$rc" -ne 2 ] || return 1
-          ;;
-        resolved|superseded) continue ;;
-        *) return 1 ;;
-      esac
-      [ "$(status_delivery_transition_state "$status_file" "$key" "$delivery")" = resolved ] || return 1
-    done <<EOF
-$(fm_task_inbox_header_values "$rec" resolve-status-line)
-EOF
-  fi
-  answer=$(fm_task_inbox_header_values "$rec" resolve-answer | head -1)
-  if [ -n "$answer" ]; then
-    while IFS= read -r key; do
-      [ -n "$key" ] || continue
-      lines="${lines}${key}"$'\t'"${answer}"$'\t'$'\n'
-    done <<EOF
-$(fm_task_inbox_header_values "$rec" resolve-hold-key)
-EOF
-    if [ -n "$lines" ]; then
-      printf '%s' "$lines" | "$_FM_TASK_INBOX_LIB_DIR/fm-captain-hold.sh" answers \
-        --source "a firstmate answer acknowledged from $task inbox" >/dev/null 2>&1 || return 1
-    fi
-  fi
-  mkdir -p "${marker%/*}" || return 1
-  : > "$marker" || return 1
-}
-
-fm_task_inbox_resolve_handled() {  # <state-dir> <task-id>
-  local state=$1 task=$2 dir inbox lock rec rc=0
-  inbox=$(fm_task_inbox_dir "$state" "$task")
-  dir=$(fm_task_inbox_handled_dir "$state" "$task")
-  [ -d "$dir" ] || return 0
-  lock="$inbox/.seq.lock"
-  fm_task_inbox_lock_acquire "$lock" || return 1
-  for rec in "$dir"/*.msg; do
-    [ -e "$rec" ] || continue
-    fm_task_inbox_resolve_acknowledged "$state" "$task" "$rec" || { rc=1; break; }
-  done
-  fm_lock_release "$lock"
-  return "$rc"
-}
-
-fm_task_inbox_hold_resolution_pending() {  # <state-dir> <task-id> <hold-key>
-  local state=$1 task=$2 hold=$3 dir rec
-  dir=$(fm_task_inbox_dir "$state" "$task")
-  [ -d "$dir" ] || return 1
-  for rec in "$dir"/*.msg; do
-    [ -f "$rec" ] || continue
-    fm_task_inbox_record_has_pending_hold "$state" "$task" "$hold" "$rec" && return 0
-  done
-  for rec in "$dir/handled"/*.msg; do
-    [ -f "$rec" ] || continue
-    fm_task_inbox_record_has_pending_hold "$state" "$task" "$hold" "$rec" && return 0
-  done
-  return 1
-}
-
-fm_task_inbox_record_has_pending_hold() {  # <state-dir> <task-id> <hold-key> <record>
-  local state=$1 task=$2 hold=$3 rec=$4 marker key
-  marker=$(fm_task_inbox_resolve_marker "$state" "$task" "$rec")
-  [ ! -e "$marker" ] || return 1
-  while IFS= read -r key; do
-    [ "$key" != "$hold" ] || return 0
-  done <<EOF
-$(fm_task_inbox_header_values "$rec" resolve-hold-key)
-EOF
   return 1
 }
 

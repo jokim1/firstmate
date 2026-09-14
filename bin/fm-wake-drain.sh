@@ -442,9 +442,8 @@ EOF
 # Bounded and silent: prints nothing when no decision is open, which is the
 # common case.
 print_open_decisions_section() {
-  local snapshot=${1:-} open task key verb note line display_verb item_bytes=220 global_bytes=4000
-  local output='' pending='' remote_pending='' used=0 shown=0 omitted=0 bytes
-  local answerable=0 pending_count=0 remote_count=0
+  local snapshot=${1:-} open task key verb note line item_bytes=220 global_bytes=4000
+  local output='' used=0 shown=0 omitted=0 bytes
 
   if [ -n "$snapshot" ]; then
     open=$(scan_open_decisions_snapshot "$STATE" "$snapshot") || return 1
@@ -457,8 +456,7 @@ print_open_decisions_section() {
     [ -n "$task" ] || continue
     line="$task"
     [ "$key" = default ] || line="$line [key=$key]"
-    case "$verb" in pending-delivery/*) display_verb=pending-delivery ;; *) display_verb=$verb ;; esac
-    line="$line $display_verb: $note"
+    line="$line $verb: $note"
     # The shared cut counts the item's own characters; the trailing newline this
     # section's global budget also pays for is this caller's, so the per-item
     # allowance passed down is one short of the cap.
@@ -469,24 +467,8 @@ print_open_decisions_section() {
       omitted=$((omitted + 1))
       continue
     fi
-    case "$verb" in
-      pending-delivery/*)
-        if [ "$verb" = pending-delivery/remote ]; then
-          remote_pending="$remote_pending$line
+    output="$output$line
 "
-          remote_count=$((remote_count + 1))
-        else
-          pending="$pending$line
-"
-          pending_count=$((pending_count + 1))
-        fi
-        ;;
-      *)
-      output="$output$line
-"
-      answerable=$((answerable + 1))
-      ;;
-    esac
     used=$((used + bytes))
     shown=$((shown + 1))
   done <<EOF
@@ -494,22 +476,16 @@ $open
 EOF
 
   [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
-  if [ "$answerable" -gt 0 ]; then
-    printf 'OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):\n' || return 1
-    printf '%s' "$output" || return 1
-  fi
+  printf 'OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):\n' || return 1
+  printf '%s' "$output" || return 1
   if [ "$omitted" -gt 0 ]; then
     printf 'OPEN DECISIONS: %d more omitted (byte cap)\n' "$omitted" || return 1
   fi
-  if [ "$answerable" -gt 0 ]; then
-    printf "OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'\n" || return 1
-  fi
-  if [ "$pending_count" -gt 0 ]; then
-    printf 'PENDING DELIVERIES (answers already sent; awaiting worker acknowledgement - do not resend):\n%s' "$pending" || return 1
-  fi
-  if [ "$remote_count" -gt 0 ]; then
-    printf 'REMOTE PENDING DELIVERIES (answers already sent; automatic acknowledgement is unavailable - reconcile the local ledger only after the remote mate reports):\n%s' "$remote_pending" || return 1
-  fi
+  # Answerer-closes hint, printed at exactly the moment an answer gets written:
+  # the send that answers a listed decision also closes it, so closure never
+  # depends on the busy worker writing a matching resolved line (contract:
+  # bin/fm-send.sh header).
+  printf "OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'\n" || return 1
 }
 
 # Print the RECORD DIVERGENCE section: every captain call whose two records

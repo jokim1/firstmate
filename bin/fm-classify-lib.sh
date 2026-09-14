@@ -126,7 +126,6 @@ fm_utc_iso_to_epoch() {  # <timestamp>
 # below for the status-fold contract. The transfer verb is written only after
 # fm-captain-hold.sh has verified the corresponding captain-held backlog item.
 FM_CLASSIFY_RESOLVE_VERB_DEFAULT='resolved'
-FM_CLASSIFY_PENDING_DELIVERY_VERB_DEFAULT='pending-delivery'
 FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT='captain-held'
 
 # Return the last non-blank line of a status file (empty if missing/blank).
@@ -288,10 +287,9 @@ status_paused_until() {  # <status-line> -> epoch on stdout
 # after a later, unrelated event": a subsequent done/paused/working line silently
 # masks a still-open needs-decision. status_open_decisions is the ONE authoritative
 # statement of the status-fold contract that fixes this - a needs-decision/blocked
-# line OPENS a keyed decision, a pending-delivery answer keeps it open until the
-# worker's inbox acknowledgement catches up, and only an explicit resolution or
-# a verified captain-held backlog transfer referencing that key CLOSES it; a
-# later unrelated terminal line never clears an open captain decision.
+# line OPENS a keyed decision, and only an explicit resolution or a verified
+# captain-held backlog transfer referencing that key CLOSES it; a later unrelated
+# terminal line never clears an open captain decision.
 # Who WRITES the closing line is owned elsewhere: the answering firstmate closes
 # at answer time through fm-send's --resolve-key (bin/fm-send.sh header), and a
 # worker self-closes only a blocker that cleared without an answer (bin/fm-brief.sh
@@ -429,25 +427,6 @@ _fm_decision_slug_ok() {  # <slug>
     *) return 0 ;;
   esac
 }
-_fm_status_tag_value() {  # <status-line> <tag-name>
-  local prefix rest value
-  prefix=${1%%:*}
-  case "$prefix" in
-    *"[$2="*']'*) ;;
-    *) return 1 ;;
-  esac
-  rest=${prefix#*"[$2="}
-  value=${rest%%]*}
-  _fm_decision_slug_ok "$value" || return 1
-  printf '%s' "$value"
-}
-
-_fm_delivery_token_ok() {  # <token>
-  case "$1" in
-    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 status_line_note() {  # <status-line> -> text after the first colon, trimmed
   local n k
   case "$1" in
@@ -492,9 +471,8 @@ EOF
   printf '%s' "$out"
 }
 # Fold ONE status line into an existing "<key>\t<verb>\t<note>\n"-per-line open
-# set, applying the same needs-decision/blocked/pending-delivery opens and
-# resolved/captain-held closes rule status_open_decisions documents above. Pure
-# text transform, no file I/O.
+# set, applying the same needs-decision/blocked-opens, resolved/captain-held-closes
+# rule status_open_decisions documents above. Pure text transform, no file I/O.
 # This is the ONE place the per-line open/resolved rule is written; both the
 # whole-file fold (status_open_decisions) and the incremental cursor-backed fold
 # (status_open_decisions_incremental) below call this instead of re-deriving the
@@ -544,8 +522,7 @@ _fm_is_pending_reply_escalation() {  # <key> <note>
 }
 
 _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb>
-  local open=$1 line=$2 resolve=$3 held=$4 pending verb key note mode delivery
-  pending=${FM_CLASSIFY_PENDING_DELIVERY_VERB:-$FM_CLASSIFY_PENDING_DELIVERY_VERB_DEFAULT}
+  local open=$1 line=$2 resolve=$3 held=$4 verb key note
   # Blank-line guard. A `case` glob answers "does this line hold any non-space
   # character" in one pattern match; the equivalent ${line//[[:space:]]/} costs
   # tens of milliseconds per line under bash 3.2's global bracket-class
@@ -560,42 +537,13 @@ _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb
   _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")" \
     || { printf '%s' "$open"; return 0; }
   case "$verb" in
-    "$pending")
-      mode=$(_fm_status_tag_value "$line" mode) || { printf '%s' "$open"; return 0; }
-      case "$mode" in
-        local)
-          delivery=$(_fm_status_tag_value "$line" delivery) || { printf '%s' "$open"; return 0; }
-          _fm_delivery_token_ok "$delivery" || { printf '%s' "$open"; return 0; }
-          verb="$pending/local/$delivery"
-          ;;
-        remote) verb="$pending/remote" ;;
-        *) printf '%s' "$open"; return 0 ;;
-      esac
-      note=$(status_line_note "$line")
-      open=$(_fm_decision_drop "$open" "$key")
-      [ -n "$open" ] && open="${open}"$'\n'
-      open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\n'
-      ;;
     needs-decision|blocked)
       note=$(status_line_note "$line")
       open=$(_fm_decision_drop "$open" "$key")
       [ -n "$open" ] && open="${open}"$'\n'
       open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\n'
       ;;
-    "$resolve")
-      case "${line%%:*}" in
-        *'[delivery='*)
-          delivery=$(_fm_status_tag_value "$line" delivery) \
-            || { printf '%s' "$open"; return 0; }
-        _fm_delivery_token_ok "$delivery" || { printf '%s' "$open"; return 0; }
-        [ "$(_fm_open_set_verb "$open" "$key")" = "$pending/local/$delivery" ] \
-          || { printf '%s' "$open"; return 0; }
-          ;;
-      esac
-      open=$(_fm_decision_drop "$open" "$key")
-      [ -n "$open" ] && open="${open}"$'\n'
-      ;;
-    "$held")
+    "$resolve"|"$held")
       open=$(_fm_decision_drop "$open" "$key")
       [ -n "$open" ] && open="${open}"$'\n'
       ;;
@@ -645,39 +593,6 @@ _fm_open_set_verb() {  # <open-set> <key>
 $1
 EOF
   return 0
-}
-
-status_delivery_transition_state() {  # <status-file> <key> <delivery-token>
-  local f=$1 key=$2 delivery=$3 line resolve held pending open='' before after
-  local verb line_delivery applied=0 saw_pending=0 matching
-  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 1
-  _fm_delivery_token_ok "$delivery" || return 1
-  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
-  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
-  pending=${FM_CLASSIFY_PENDING_DELIVERY_VERB:-$FM_CLASSIFY_PENDING_DELIVERY_VERB_DEFAULT}
-  matching="$pending/local/$delivery"
-  while IFS= read -r line || [ -n "$line" ]; do
-    before=$(_fm_open_set_verb "$open" "$key")
-    verb=$(status_line_verb "$line")
-    line_delivery=
-    if [ "$verb" = "$resolve" ]; then
-      line_delivery=$(_fm_status_tag_value "$line" delivery 2>/dev/null || true)
-    fi
-    open=$(_fm_decision_fold_line "$open" "$line" "$resolve" "$held")
-    after=$(_fm_open_set_verb "$open" "$key")
-    [ "$after" != "$matching" ] || saw_pending=1
-    if [ "$before" = "$matching" ] && [ "$after" != "$matching" ] \
-      && [ "$verb" = "$resolve" ] && [ "$line_delivery" = "$delivery" ]; then
-      applied=1
-    fi
-  done < "$f"
-  if [ "$(_fm_open_set_verb "$open" "$key")" = "$matching" ]; then
-    printf 'pending'
-  elif [ "$applied" = 1 ]; then
-    printf 'resolved'
-  elif [ "$saw_pending" = 1 ]; then
-    printf 'superseded'
-  fi
 }
 
 # The verb that last moved <key> in a status stream, which is what tells a
@@ -822,7 +737,7 @@ _fm_open_decisions_cursor_path() {  # <status-file>
 # Version 4 was already spent on the bracketed-tag parser change above, and a
 # cursor persisted under that reading predates this one, so it must still be
 # discarded and rebuilt from byte 0 under the new reading.
-FM_OPEN_DECISIONS_FOLD_VERSION=6
+FM_OPEN_DECISIONS_FOLD_VERSION=5
 
 # Portable device:inode identity for the rotation/recreation check below.
 _fm_open_decisions_file_ident() {  # <file> -> strongest available identity

@@ -155,11 +155,10 @@
 # Decision closure (answerer-closes): pass --resolve-key <key> (repeatable,
 # before the message) when this send answers an open keyed needs-decision: or
 # blocked: record in the target task's state/<id>.status. fm-send itself
-# appends a delivery-state line to that status file. A proven typed-plane
-# delivery closes the captain-facing OPEN DECISIONS record with
-# "resolved [key=<key>]: answered: <capped excerpt>". An inbox-plane send writes
-# "pending-delivery [key=<key>]: answered: <capped excerpt>" instead, because the
-# worker has not acknowledged the durable inbox record yet. A reserved key
+# appends the closing resolved line to that status file only after delivery, so
+# the captain-facing OPEN DECISIONS record never claims an answer that did not
+# reach the worker. Ordinary keys close with
+# "resolved [key=<key>]: answered: <capped excerpt>". A reserved key
 # (pending-reply-* today; bin/fm-classify-lib.sh's reserved-key guard) is
 # closed with the owning library's vocabulary note
 # (fm_pending_reply_close_note_for_key / fm_pending_reply_resolved_note), so
@@ -167,12 +166,12 @@
 # transition and is never written for those keys. If this send cannot produce
 # a note the guard will accept, or the structural key would be lost to the
 # status-line cap, it refuses before sending and names the cause rather than
-# exiting 0 on a silent no-op. After a delivered typed close it also re-folds and
-# fails loudly if the named key is still open. On the inbox plane the
-# pending-delivery line happens at ENQUEUE time, and the key stays visible to
-# OPEN DECISIONS until the asynchronous handled/ acknowledgement catches up. On
-# the typed plane it still waits for the confirmed submit. The append is LOCAL
-# for every target kind -
+# exiting 0 on a silent no-op. After a delivered close it also re-folds and
+# fails loudly if the named key is still open. On the local inbox plane the
+# close waits for a successful initial doorbell; a skipped or failed doorbell
+# leaves the decision and any captain-held task open while the watcher re-rings.
+# On the typed plane it waits for the confirmed submit. The close is a LOCAL
+# append for every target kind -
 # crewmate, scout, local secondmate, and remote secondmate alike - because the
 # open-decision ledger fm-wake-drain folds lives in this home's own state dir
 # (a remote mate's escalations reach it through the parent-replies ingest);
@@ -541,7 +540,6 @@ RESOLVE_STATUS_FILE=
 # longer owns also keeps the common path free of any backlog read.
 RESOLVE_STATUS_KEYS=
 RESOLVE_HOLD_KEYS=
-RESOLVE_REMOTE_HOLD_STATUS_KEYS=
 
 # Resolve a --resolve-key key that the status log no longer owns to the
 # captain-held task that carries it: the key as a task id itself (the collapsed
@@ -604,13 +602,6 @@ if [ -n "$RESOLVE_KEYS" ]; then
   for k in $RESOLVE_KEYS; do
     case "$resolve_open_set" in
       "$k"$'\t'*|*$'\n'"$k"$'\t'*)
-        resolve_open_line=$(printf '%s' "$resolve_open_set" | awk -F '\t' -v key="$k" '$1 == key { print; exit }')
-        case "$resolve_open_line" in
-          "$k"$'\t'"pending-delivery/"*$'\t'*)
-            echo "error: --resolve-key '$k' is already pending delivery in $RESOLVE_STATUS_FILE; do not resend the answer. Wait for the worker to acknowledge the existing inbox record, or inspect the task inbox if it is stuck." >&2
-            exit 1
-            ;;
-        esac
         RESOLVE_STATUS_KEYS="${RESOLVE_STATUS_KEYS}${RESOLVE_STATUS_KEYS:+ }$k"
         continue
         ;;
@@ -619,14 +610,7 @@ if [ -n "$RESOLVE_KEYS" ]; then
     # captain-held task is exactly this case, and it is answerable - just
     # through the other ledger - so check there before refusing.
     if resolved_hold_id=$(fm_send_hold_resolved_id "$RESOLVE_TASK_ID" "$k"); then
-      if fm_task_inbox_hold_resolution_pending "$STATE" "$RESOLVE_TASK_ID" "$resolved_hold_id"; then
-        echo "error: --resolve-key '$k' already has an answer pending acknowledgement in $STATE/$RESOLVE_TASK_ID.inbox; do not resend it." >&2
-        exit 1
-      fi
       RESOLVE_HOLD_KEYS="${RESOLVE_HOLD_KEYS}${RESOLVE_HOLD_KEYS:+ }$resolved_hold_id"
-      if [ "$TARGET_BACKEND" = remote ]; then
-        RESOLVE_REMOTE_HOLD_STATUS_KEYS="${RESOLVE_REMOTE_HOLD_STATUS_KEYS}${RESOLVE_REMOTE_HOLD_STATUS_KEYS:+ }$k"
-      fi
       continue
     fi
     echo "error: --resolve-key '$k': no open decision or blocker with that key in $RESOLVE_STATUS_FILE, and no captain-held task '$k' or '$RESOLVE_TASK_ID-decision-$k' still open (already closed or mistyped). Re-check the OPEN DECISIONS listing, then resend without that key or with the right one; nothing was sent." >&2
@@ -635,7 +619,7 @@ if [ -n "$RESOLVE_KEYS" ]; then
   # Refuse before send when a named status-log key cannot actually close: a
   # reserved key with an answered: note is a silent no-op in the fold.
   resolve_excerpt=$(printf '%s' "$*" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
-  for k in $RESOLVE_STATUS_KEYS $RESOLVE_REMOTE_HOLD_STATUS_KEYS; do
+  for k in $RESOLVE_STATUS_KEYS; do
     probe=$(fm_send_resolve_close_note "$k" "$resolve_excerpt")
     if ! _fm_decision_key_transition_allowed "$k" "$probe"; then
       echo "error: --resolve-key '$k' cannot take effect: this key is reserved for its owning library, and this send cannot produce a close note that library's fold will accept. Refusing rather than writing a silent no-op; nothing was sent." >&2
@@ -647,24 +631,6 @@ if [ -n "$RESOLVE_KEYS" ]; then
     if [ "$(status_line_verb "$FM_LINE_CAP_LINE")" != resolved ] || [ "$probe_key" != "$k" ]; then
       echo "error: --resolve-key cannot close a decision key of length ${#k}: its ${#probe_line}-character close record exceeds the $FM_LINE_CAP_DEFAULT-character status-line cap, and truncation would remove the structural key delimiter. Refusing rather than writing an ineffective close; nothing was sent." >&2
       exit 1
-    fi
-    probe_mode=
-    probe_delivery=
-    case "$TARGET_BACKEND:$TARGET_HARNESS:$*" in
-      remote:*) probe_mode=remote; probe_line="pending-delivery [key=$k] [mode=$probe_mode]: $probe" ;;
-      *:*:/*|*:codex:\$*) probe_line= ;;
-      *) probe_mode=local; probe_delivery=0000000000000000; probe_line="pending-delivery [key=$k] [mode=$probe_mode] [delivery=$probe_delivery]: $probe" ;;
-    esac
-    if [ -n "$probe_line" ]; then
-      fm_cap_line_var "$probe_line"
-      probe_key=$(_fm_decision_key "$FM_LINE_CAP_LINE") || probe_key=
-      capped_mode=$(_fm_status_tag_value "$FM_LINE_CAP_LINE" mode) || capped_mode=
-      capped_delivery=$(_fm_status_tag_value "$FM_LINE_CAP_LINE" delivery) || capped_delivery=
-      if [ "$(status_line_verb "$FM_LINE_CAP_LINE")" != pending-delivery ] || [ "$probe_key" != "$k" ] \
-        || [ "$capped_mode" != "$probe_mode" ] || [ "$capped_delivery" != "$probe_delivery" ]; then
-        echo "error: --resolve-key cannot mark pending delivery for decision key of length ${#k}: its ${#probe_line}-character pending-delivery record exceeds the $FM_LINE_CAP_DEFAULT-character status-line cap, and truncation would remove structural metadata. Refusing rather than writing an ineffective pending-delivery state; nothing was sent." >&2
-        exit 1
-      fi
     fi
   done
 fi
@@ -699,59 +665,6 @@ fm_send_close_resolved_keys() {  # <answer-text>
         ;;
     esac
   done
-}
-
-# Mark each answered decision as delivered only to the steering inbox.
-# The worker has not acknowledged the record until it moves the message to
-# handled/, so the status fold keeps pending-delivery visible in OPEN DECISIONS.
-fm_send_mark_pending_delivery_keys() {  # <answer-text>
-  local note=$1 k line pending_note append_rc
-  note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
-  for k in $RESOLVE_STATUS_KEYS $RESOLVE_REMOTE_HOLD_STATUS_KEYS; do
-    pending_note=$(fm_send_resolve_close_note "$k" "$note")
-    line="pending-delivery [key=$k] [mode=remote]: $pending_note"
-    fm_cap_line_var "$line"
-    append_rc=0
-    fm_wake_status_append_self_announced "$STATE" "$RESOLVE_STATUS_FILE" "$FM_LINE_CAP_LINE" || append_rc=$?
-    if [ "$append_rc" -eq 2 ]; then
-      echo "error: the answer was recorded for $T, but decision key '$k' could not be marked pending-delivery in $RESOLVE_STATUS_FILE. The decision remains open; do not resend without inspecting $STATE." >&2
-      return 1
-    fi
-  done
-}
-
-fm_send_prepare_inbox_resolve_metadata() {  # <answer-text>
-  local note=$1 k close_note line pending_line hold lines='' pending_lines='' holds='' delivery
-  FM_TASK_INBOX_RESOLVE_STATUS_FILE=
-  FM_TASK_INBOX_RESOLVE_STATUS_PENDING_LINES=
-  FM_TASK_INBOX_RESOLVE_STATUS_LINES=
-  FM_TASK_INBOX_RESOLVE_HOLD_KEYS=
-  FM_TASK_INBOX_RESOLVE_ANSWER=
-  [ -n "$RESOLVE_KEYS" ] || return 0
-  note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
-  if [ -n "$RESOLVE_STATUS_KEYS" ]; then
-    delivery=$(fm_pending_reply_new_id)
-    _fm_delivery_token_ok "$delivery" || return 1
-    FM_TASK_INBOX_RESOLVE_STATUS_FILE=$RESOLVE_STATUS_FILE
-    for k in $RESOLVE_STATUS_KEYS; do
-      close_note=$(fm_send_resolve_close_note "$k" "$note")
-      line="resolved [key=$k] [delivery=$delivery]: $close_note"
-      pending_line="pending-delivery [key=$k] [mode=local] [delivery=$delivery]: $close_note"
-      fm_cap_line_var "$line"
-      lines="${lines}resolve-status-line=${FM_LINE_CAP_LINE}"$'\n'
-      fm_cap_line_var "$pending_line"
-      pending_lines="${pending_lines}resolve-status-pending-line=${FM_LINE_CAP_LINE}"$'\n'
-    done
-    FM_TASK_INBOX_RESOLVE_STATUS_PENDING_LINES=$pending_lines
-    FM_TASK_INBOX_RESOLVE_STATUS_LINES=$lines
-  fi
-  if [ -n "$RESOLVE_HOLD_KEYS" ]; then
-    for hold in $RESOLVE_HOLD_KEYS; do
-      holds="${holds}resolve-hold-key=${hold}"$'\n'
-    done
-    FM_TASK_INBOX_RESOLVE_HOLD_KEYS=$holds
-    FM_TASK_INBOX_RESOLVE_ANSWER=$note
-  fi
 }
 
 # Feed the answered captain-held tasks to the ONE keyed-answer intake, as keyed
@@ -1023,8 +936,7 @@ else
       echo "error: steer not sent to remote secondmate $TARGET_REMOTE_ID (the remote steering-inbox record could not be written; the remote leg's stderr above has the reason)" >&2
       exit 1
     fi
-    # The remote record is durable delivery to the remote inbox, not a worker
-    # handled/ acknowledgement.
+    # The remote record is durable delivery, exactly as a local enqueue is.
     if [ -n "$PENDING_REPLY_CORR" ]; then
       if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
         :
@@ -1038,9 +950,8 @@ else
       fi
     fi
     if [ -n "$RESOLVE_KEYS" ]; then
-      # fm-on starts the remote command with an empty environment, so
-      # parent-local acknowledgement metadata cannot cross this boundary.
-      fm_send_mark_pending_delivery_keys "$RESOLVE_ANSWER_TEXT" || exit 1
+      fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1
+      fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
     fi
     exit 0
   fi
@@ -1074,14 +985,6 @@ else
       echo "error: steer not sent to $INBOX_TASK_ID: the task retired or changed endpoint during target resolution" >&2
       exit 1
     fi
-    if ! fm_send_prepare_inbox_resolve_metadata "$RESOLVE_ANSWER_TEXT"; then
-      fm_lock_release "$INBOX_META_LOCK"
-      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      fi
-      echo "error: steer not sent to $INBOX_TASK_ID: could not create valid acknowledgement metadata" >&2
-      exit 1
-    fi
     if [ "${FM_SEND_IDEMPOTENT:-0}" = 1 ]; then
       INBOX_RECORD=$(fm_task_inbox_write_idempotent "$STATE" "$INBOX_TASK_ID" "$MESSAGE" \
         "${FIRE_AND_FORGET_ID:+fire-and-forget}") || inbox_write_rc=$?
@@ -1091,26 +994,10 @@ else
     fi
     if [ "${inbox_write_rc:-0}" -ne 0 ]; then
       fm_lock_release "$INBOX_META_LOCK"
-      if [ "${inbox_write_rc:-0}" -eq 2 ]; then
-        if [ -n "$PENDING_REPLY_CORR" ]; then
-          if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
-            :
-          else
-            delivery_commit_status=$?
-            if [ "$delivery_commit_status" = 2 ]; then
-              echo "notice: the steer was recorded at $INBOX_RECORD, but its pending-reply delivery commit failed; a durable recovery marker was stored and the watcher will reconcile it. Do not resend." >&2
-            else
-              echo "warning: reply-tracking-degraded (steer delivered, do not resend): the steer was durably recorded at $INBOX_RECORD, but its pending-reply delivery commit and recovery marker both failed, so the reply expectation for this request may not reconcile on its own. Inspect $STATE." >&2
-            fi
-          fi
-        fi
-        echo "error: the answer was recorded at $INBOX_RECORD, but its pending-delivery transition could not be published. Do not resend; inspect $RESOLVE_STATUS_FILE and the inbox record." >&2
-      else
-        if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-          fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-        fi
-        echo "error: steer not sent to $INBOX_TASK_ID: its inbox record could not be written under $STATE/$INBOX_TASK_ID.inbox" >&2
+      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
       fi
+      echo "error: steer not sent to $INBOX_TASK_ID: its inbox record could not be written under $STATE/$INBOX_TASK_ID.inbox" >&2
       exit 1
     fi
     fm_lock_release "$INBOX_META_LOCK"
@@ -1137,8 +1024,6 @@ else
         fi
       fi
     fi
-    # The inbox writer publishes pending-delivery before releasing its sequence
-    # lock, so acknowledgement cannot overtake the matching transition.
     # Ring the doorbell, best-effort: no ring outcome changes the exit status,
     # because the watcher owns loss detection from here, either through its
     # bounded re-ring ladder or direct unavailable-endpoint recovery.
@@ -1149,6 +1034,10 @@ else
       2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
       3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;
     esac
+    if [ "$ring_rc" -eq 0 ] && [ -n "$RESOLVE_KEYS" ]; then
+      fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1
+      fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
+    fi
     exit 0
   fi
   # Slash commands open a completion popup in some TUIs (verified on codex);
