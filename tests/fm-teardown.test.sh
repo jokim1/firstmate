@@ -2928,6 +2928,46 @@ test_forced_secondmate_preflights_child_records_before_mutation() {
   pass "forced secondmate teardown preflights descendant records before mutation"
 }
 
+test_forced_secondmate_refuses_fifo_busy_generation_without_hanging() {
+  local case_dir home child=child-a rc
+  case_dir=$(make_case child-busy-gen-fifo)
+  write_meta "$case_dir" local-only secondmate
+  configure_secondmate_with_tmux_children "$case_dir"
+  home="$case_dir/secondmate-home"
+  mkfifo "$home/state/$child.busy-gen"
+  : > "$case_dir/treehouse.log"
+  : > "$case_dir/tmux.log"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/treehouse.log'" \
+    'exit 0' > "$case_dir/fakebin/treehouse"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' \"\$*\" >> '$case_dir/tmux.log'" \
+    'exit 0' > "$case_dir/fakebin/tmux"
+  chmod +x "$case_dir/fakebin/treehouse" "$case_dir/fakebin/tmux"
+
+  rc=0
+  # shellcheck source=bin/fm-timeout-lib.sh
+  . "$ROOT/bin/fm-timeout-lib.sh"
+  fm_run_timed 3 env \
+    "FM_ROOT_OVERRIDE=$ROOT" \
+    "FM_STATE_OVERRIDE=$case_dir/state" \
+    "FM_DATA_OVERRIDE=$case_dir/data" \
+    "FM_CONFIG_OVERRIDE=$case_dir/config" \
+    "PATH=$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 124 ] || fail "forced teardown hung while reading a FIFO busy generation"
+  [ "$rc" -ne 0 ] || fail "forced teardown accepted a FIFO child busy generation"
+  [ ! -s "$case_dir/treehouse.log" ] || fail "FIFO refusal returned a child worktree"
+  ! grep -Eq '^kill-(window|pane)' "$case_dir/tmux.log" \
+    || fail "FIFO refusal killed a child endpoint"
+  [ -p "$home/state/$child.busy-gen" ] || fail "FIFO refusal changed the unsafe busy generation"
+  [ -f "$home/state/$child.meta" ] && [ -d "$case_dir/child-a-wt" ] \
+    || fail "FIFO refusal removed child state or worktree"
+  [ -f "$case_dir/state/task-x1.meta" ] && [ -d "$home" ] \
+    || fail "FIFO refusal removed parent state"
+  pass "forced secondmate teardown refuses FIFO busy generations promptly"
+}
+
 test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed() {
   local case_dir home log closed rc
   case_dir=$(make_case herdr-child-unconfirmed-close)
@@ -5212,6 +5252,7 @@ test_herdr_flat_teardown_preflight_refuses_before_changes
 test_forced_secondmate_herdr_child_preflight_refuses_before_changes
 test_forced_secondmate_teardown_holds_descendant_lifecycle_locks
 test_forced_secondmate_preflights_child_records_before_mutation
+test_forced_secondmate_refuses_fifo_busy_generation_without_hanging
 test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed
 test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconfirmed
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close

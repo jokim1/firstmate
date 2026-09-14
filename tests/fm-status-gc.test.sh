@@ -660,6 +660,42 @@ test_finish_cleanup_preflights_unsafe_busy_state() {
   pass "finish-cleanup preflights both busy-state files before any mutation"
 }
 
+test_finish_cleanup_preflights_status_presentation_retirement() {
+  local dir home state token rc
+  dir=$(make_case finish-cleanup-presentation-preflight)
+  home="$dir/home"
+  state="$home/state"
+  token=AbCdEfGhIjKlMnOpQrStUv
+  mkdir -p "$state" "$dir/fakebin"
+  printf 'done: trial ok\n' > "$state/partial.status"
+  : > "$state/partial.turn-ended"
+  printf '!\n' > "$state/partial.kimi-turnend-token"
+  printf 'malformed\n' > "$state/.status-presentation-cursor"
+  {
+    printf 'version=2\ntask_id=partial\nprojection_id=%s\nhome=%s\n' "$token" "$home"
+    printf 'session=default\nworkspace_id=wA\ntab_id=wA:t1\npane_id=wA:p1\n'
+    printf 'parent_workspace_id=w0\nparent_label=firstmate\nworkspace_label=└ partial · p:%s\ntask_label=fm-partial\n' "$token"
+  } > "$state/partial.herdr-presentation"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    "case \"\${1:-} \${2:-}\" in" \
+    '  "workspace list") printf "%s\\n" '\''{"result":{"workspaces":[]}}'\'' ;;' \
+    '  *) exit 1 ;;' \
+    'esac' > "$dir/fakebin/herdr"
+  chmod +x "$dir/fakebin/herdr"
+
+  rc=0
+  FM_HOME="$home" PATH="$dir/fakebin:$PATH" \
+    run_gc "$state" partial --finish-cleanup > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "finish-cleanup accepted a malformed presentation cursor (rc=$rc)"
+  [ -f "$state/partial.status" ] || fail "presentation refusal removed the status log"
+  [ -f "$state/partial.turn-ended" ] || fail "presentation refusal removed task residue"
+  [ -f "$state/partial.kimi-turnend-token" ] || fail "presentation refusal removed the token record"
+  [ -f "$state/partial.herdr-presentation" ] || fail "presentation refusal retired Herdr state first"
+  [ -f "$state/.status-presentation-cursor" ] || fail "presentation refusal removed the malformed cursor"
+  pass "finish-cleanup preflights status presentation retirement before mutation"
+}
+
 test_finish_cleanup_retires_an_intact_busy_incarnation() {
   local dir state rc
   dir=$(make_case finish-cleanup-busy-incarnation)
@@ -830,6 +866,7 @@ test_finish_cleanup_refuses_symlinked_turnend_token_without_mutation
 test_finish_cleanup_preflights_turnend_auth_target
 test_finish_cleanup_preflights_unsafe_residue
 test_finish_cleanup_preflights_unsafe_busy_state
+test_finish_cleanup_preflights_status_presentation_retirement
 test_finish_cleanup_retires_an_intact_busy_incarnation
 test_finish_cleanup_refuses_when_a_writer_preserves_its_record
 test_finish_cleanup_retires_only_its_own_gone_herdr_journal

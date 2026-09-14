@@ -107,8 +107,8 @@ fm_task_records_retire_busy() {  # <state-dir> <id> <gen>
   fi
 }
 
-fm_task_records_validate_busy_cleanup() {  # <state-dir> <id> <gen>
-  local state_dir=$1 id=$2 gen=${3:-} current state_device artifact
+fm_task_records_validate_busy_shapes() {  # <state-dir> <id>
+  local state_dir=$1 id=$2 state_device artifact
   fm_task_id_path_safe "$id" || return 1
   [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 1
   state_device=$(fm_pr_file_device "$state_dir") || return 1
@@ -121,6 +121,21 @@ fm_task_records_validate_busy_cleanup() {  # <state-dir> <id> <gen>
       return 1
     fi
   done
+}
+
+fm_task_records_read_busy_gen() {  # <state-dir> <id> [<recorded-gen>]
+  local state_dir=$1 id=$2 recorded_gen=${3:-}
+  fm_task_records_validate_busy_shapes "$state_dir" "$id" || return 1
+  if [ -n "$recorded_gen" ]; then
+    printf '%s' "$recorded_gen"
+  elif [ -e "$state_dir/$id.busy-gen" ]; then
+    fm_busy_current_gen "$state_dir" "$id"
+  fi
+}
+
+fm_task_records_validate_busy_cleanup() {  # <state-dir> <id> <gen>
+  local state_dir=$1 id=$2 gen=${3:-} current
+  fm_task_records_validate_busy_shapes "$state_dir" "$id" || return 1
   if [ -e "$state_dir/$id.busy-gen" ] || [ -L "$state_dir/$id.busy-gen" ]; then
     current=$(fm_busy_current_gen "$state_dir" "$id") || return 1
     [ "$gen" = "$current" ]

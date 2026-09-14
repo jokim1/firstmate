@@ -781,6 +781,22 @@ _fm_status_file_mtime() {  # <status-file>
   fi
 }
 
+_fm_status_file_device() {
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    LC_ALL=C /usr/bin/stat -f '%d' "$1" 2>/dev/null
+  else
+    LC_ALL=C stat -c '%d' "$1" 2>/dev/null
+  fi
+}
+
+_fm_status_file_link_count() {
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    LC_ALL=C /usr/bin/stat -f '%l' "$1" 2>/dev/null
+  else
+    LC_ALL=C stat -c '%h' "$1" 2>/dev/null
+  fi
+}
+
 # Private scratch path for a one-shot span read, alongside the status file the
 # same way the cursor above is, and PID-scoped so concurrent readers of one log
 # (the watcher and the away-mode daemon both classify the same stream) never
@@ -1309,6 +1325,48 @@ EOF
   if [ "$rc" -eq 0 ]; then
     rm -f -- "$state/$task.status" "$state/.$task.open-decisions-cursor" \
       "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
+  fi
+  fm_lock_release "$lock" || rc=1
+  return "$rc"
+}
+
+status_validate_retire_presentation_task() {  # <state> <task-id>
+  local state=$1 task=$2 lock manifest tmp data row_task ident offset backstop extra
+  local state_device path signal_marker heartbeat_marker daemon_marker rc=0
+  [ -d "$state" ] && [ ! -L "$state" ] || return 1
+  state_device=$(_fm_status_file_device "$state") || return 1
+  lock="$state/.status-presentation-lock"
+  manifest="$state/.status-presentation-cursor"
+  tmp="$manifest.tmp.$$"
+  signal_marker=$(status_signal_seen_marker_path "$state" "$task")
+  heartbeat_marker=$(status_heartbeat_seen_marker_path "$state" "$task")
+  daemon_marker=$(status_daemon_seen_marker_path "$state" "$task")
+
+  fm_lock_try_acquire "$lock" || return 1
+  for path in "$manifest" "$tmp" "$state/$task.status" \
+    "$state/.$task.open-decisions-cursor" "$signal_marker" \
+    "$heartbeat_marker" "$daemon_marker"; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    if [ ! -f "$path" ] || [ ! -r "$path" ] || [ -L "$path" ] \
+      || [ "$(_fm_status_file_device "$path")" != "$state_device" ] \
+      || [ "$(_fm_status_file_link_count "$path")" != 1 ]; then
+      rc=1
+      break
+    fi
+  done
+  if [ "$rc" -eq 0 ] && { [ -e "$manifest" ] || [ -L "$manifest" ]; }; then
+    if ! data=$(LC_ALL=C command cat "$manifest" 2>/dev/null); then
+      rc=1
+    else
+      while IFS=$(printf '\t') read -r row_task ident offset backstop extra; do
+        [ -n "$row_task" ] || continue
+        if [ -n "$extra" ] || [ -z "$ident" ]; then rc=1; break; fi
+        case "$offset:$backstop" in *[!0-9:]*) rc=1; break ;; esac
+        [ -n "$offset" ] || { rc=1; break; }
+      done <<EOF
+$data
+EOF
+    fi
   fi
   fm_lock_release "$lock" || rc=1
   return "$rc"

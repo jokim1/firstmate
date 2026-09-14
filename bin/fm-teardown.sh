@@ -1186,10 +1186,7 @@ RECORDED_META_PR_HEAD=$(grep '^pr_head=' "$META" | tail -1 | cut -d= -f2- || tru
 # tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
 # (/tmp/fm-<id>/); absent for tasks spawned before that change, so tolerate empty.
 TASK_TMP=$(grep '^tasktmp=' "$META" | cut -d= -f2- || true)
-BUSY_GEN=$(fm_meta_get "$META" busy_gen)
-if [ -z "$BUSY_GEN" ]; then
-  BUSY_GEN=$(cat "$STATE/$ID.busy-gen" 2>/dev/null || true)
-fi
+BUSY_GEN=$(fm_task_records_read_busy_gen "$STATE" "$ID" "$(fm_meta_get "$META" busy_gen)") || exit 1
 ORCA_WORKTREE_ID=$(fm_meta_get "$META" orca_worktree_id)
 ORCA_PATH_MATCH_VERIFIED=0
 CLEANUP_RECOVERY=$TEARDOWN_CLEANUP_RECOVERY
@@ -3871,10 +3868,8 @@ validate_firstmate_home_children_removal() {
     [ -e "$child_meta" ] || continue
     child_id=$(basename "$child_meta" .meta)
     fm_backend_validate_task_endpoint "$child_meta" "$child_id" || return 1
-    child_busy_gen=$(meta_value "$child_meta" busy_gen)
-    if [ -z "$child_busy_gen" ]; then
-      child_busy_gen=$(cat "$sub_state/$child_id.busy-gen" 2>/dev/null || true)
-    fi
+    child_busy_gen=$(fm_task_records_read_busy_gen \
+      "$sub_state" "$child_id" "$(meta_value "$child_meta" busy_gen)") || return 1
     fm_task_records_validate_cleanup "$sub_state" "$child_id" "$child_busy_gen" || return 1
     child_wt=$(meta_value "$child_meta" worktree)
     child_kind=$(meta_value "$child_meta" kind)
@@ -4113,10 +4108,8 @@ cleanup_firstmate_home_children() {
     fm_task_records_retire_turnend grok "$sub_state" "$child_id" || return 1
     fm_task_records_retire_turnend kimi "$sub_state" "$child_id" || return 1
     fm_task_records_remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
-    child_busy_gen=$(meta_value "$child_meta" busy_gen)
-    if [ -z "$child_busy_gen" ]; then
-      child_busy_gen=$(cat "$sub_state/$child_id.busy-gen" 2>/dev/null || true)
-    fi
+    child_busy_gen=$(fm_task_records_read_busy_gen \
+      "$sub_state" "$child_id" "$(meta_value "$child_meta" busy_gen)") || return 1
     fm_task_records_retire_busy "$sub_state" "$child_id" "$child_busy_gen" || return 1
     status_retire_presentation_task "$sub_state" "$child_id" || return 1
     fm_backlog_atomic_transition remove "$sub_state/$child_id.meta" "task record" "$sub_state" || return 1
