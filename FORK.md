@@ -34,7 +34,7 @@ New upstream work arrives by rebasing the overlay stack onto upstream `main`.
 The owner of that rebase is the operator-private script `data/patch-queue/rebase-lila-main.sh` in the operator's private home (not this repo).
 Do not reimplement or invent a second rebase path.
 
-Each patch carries a retire-when condition and is dropped once upstream covers it.
+The operator-private queue discipline owns patch retirement, and [`patch-queue-prune`](.agents/skills/patch-queue-prune/SKILL.md) owns the recurring adversarial audit that proposes retirements and consolidations.
 Conflicts are never auto-resolved: on conflict the rebase stops, and a human or supervised agent resolves deliberately.
 
 ## What a rebase means for checkouts
