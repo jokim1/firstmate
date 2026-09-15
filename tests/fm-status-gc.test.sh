@@ -1164,7 +1164,7 @@ test_marker_collision_check_is_linear_in_task_id_length() {
 # now goes LAST; a run fault-injected into that final rm must leave the anchor
 # behind and converge under the second identical invocation.
 test_gc_killed_during_marker_retirement_converges_on_the_next_run() {
-  local dir state rc marker crash
+  local dir state rc marker
   dir=$(make_case crash-convergence)
   state="$dir/state"
   mkdir -p "$state"

@@ -1339,16 +1339,21 @@ while [ ! -f "$TMP_ROOT/launch.entered" ]; do
   [ "$launch_wait" -le 1500 ] || fail "remote respawn never reached its blocked launch"
   sleep 0.02
 done
-remote_env "$ROOT/bin/fm-teardown.sh" ios > "$TMP_ROOT/teardown-serialized.out" 2>&1 &
-teardown_pid=$!
-sleep 0.2
-kill -0 "$teardown_pid" 2>/dev/null || fail "remote retirement bypassed an active remote respawn"
+teardown_rc=0
+remote_env "$ROOT/bin/fm-teardown.sh" ios > "$TMP_ROOT/teardown-serialized.out" 2>&1 \
+  || teardown_rc=$?
+[ "$teardown_rc" -eq 1 ] \
+  || fail "remote retirement did not refuse an active remote respawn (rc=$teardown_rc)"
+assert_grep 'task set is locked' "$TMP_ROOT/teardown-serialized.out" \
+  "remote retirement did not report the active remote respawn"
 assert_present "$REMOTE_HOME" "remote retirement removed the home during an active remote respawn"
 touch "$TMP_ROOT/launch.release"
 if ! wait "$spawn_retirement_pid"; then
   printf 'serialized respawn output:\n%s\n' "$(cat "$TMP_ROOT/spawn-retirement.out")" >&2
   fail "serialized remote respawn failed"
 fi
+remote_env "$ROOT/bin/fm-teardown.sh" ios > "$TMP_ROOT/teardown-serialized.out" 2>&1 &
+teardown_pid=$!
 sleep 0.2
 kill -0 "$teardown_pid" 2>/dev/null || fail "remote retirement bypassed an active backlog handoff"
 touch "$TMP_ROOT/handoff.release"
