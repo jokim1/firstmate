@@ -68,6 +68,9 @@ The refusal is the work list for finishing the interrupted teardown through the 
    A colliding sibling that starts spawning inside the final GC step remains outside this procedure's coverage.
    Then re-run `FM_HOME=<home> bin/fm-status-gc.sh <id>` after every family named by the first refusal has been retired safely.
    Once the remaining shape is exact, the janitor retires the status log, open-decisions cursor, presentation-cursor row, and watcher notification markers through their existing owners.
+   This final run can still refuse when its scan matches the task id as text inside an unrelated task's archived `handled/*.msg` prose; if so, STOP and leave the status log in place.
+   NEVER bypass that refusal or hand-delete the log.
+   The inert status log has bounded cost, while bypassing the fail-closed check risks destroying unlanded work.
 
 For a journal-only orphan, perform the colliding-sibling check and the Herdr journal step only.
 For a tmux-class backend orphan, replace the endpoint-probe part of step 4 with a HUMAN check of every tmux session for a pane named `fm-<id>`, and proceed only when none exists.
