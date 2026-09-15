@@ -65,7 +65,7 @@ Immediately before every janitor invocation and every file retirement, re-check 
    For a valid version 2 Herdr journal, source `bin/fm-backend.sh`, load the Herdr adapter with `fm_backend_source herdr`, validate it with `fm_backend_herdr_projection_journal_snapshot <journal> <id>`, and probe the captured session and pane with `fm_backend_herdr_pane_agent_state <session> <pane>`.
    Proceed only when the probe returns exactly `dead`, retain the validated session and pane for later checks, and STOP on `live`, `no-agent`, `unknown`, version 1, an invalid journal, an unavailable probe, or any other result.
 2. After step 1 and the immediate metadata and temp-root re-check, run `FM_HOME=<home> bin/fm-status-gc.sh <id>`.
-   The janitor can complete retirement immediately when only its exact leak shape remains, so this first invocation is destructive and must never precede the collision and endpoint checks.
+   This order is deliberate: the janitor can complete retirement immediately when only its exact leak shape remains, so this first invocation is destructive and must never precede the collision and endpoint checks.
    If it reports successful retirement, the procedure is complete.
    Otherwise retain its complete refusal and treat every named record as a candidate that must be inspected individually before retirement.
    A path in another task's subdirectory may be a false positive caused by active or archived prose that mentions the target id, and correspondence investigating the stranded record can make the refusal stronger by adding more matching prose.
@@ -100,7 +100,10 @@ Immediately before every janitor invocation and every file retirement, re-check 
 
 For a journal-only orphan, perform step 1's collision and Herdr endpoint checks and step 4 only; do not invoke the janitor because there is no readable status log.
 For an orphan that a human identifies as tmux-class, every endpoint check in this procedure is a HUMAN check for a window named `fm-<id>` across every live tmux server, and the runbook proceeds only when none exists.
-On each server, use `tmux list-windows -a -F '#{session_name}:#{window_name}'`; use `bin/fm-teardown.sh`'s socket enumeration as the authority for the complete server set rather than checking only the default socket.
+Best-effort enumeration covers sockets in the default directory: `find "/tmp/tmux-$(id -u)" -maxdepth 1 -type s -exec tmux -S {} list-windows -a -F '#{socket_path}:#{session_name}:#{window_name}' \;`.
+A task window on a socket under a custom `TMUX_TMPDIR` is invisible to that command, and nothing available to this procedure can enumerate every such server.
+STOP unless the human can positively account for every tmux server on the machine; doubt means stop.
+The complete fix is id-keyed endpoint enumeration in code, which is out of scope under the Firstmate code freeze.
 The tmux endpoint check must remain human because a window label is not a machine-safe id-keyed ownership proof after metadata is gone.
 For optional depth, see the home-local `data/fm-teardown-cleanup-firstprinciples/report.md` when present; it may be absent in other homes and is not required to execute this runbook.
 
