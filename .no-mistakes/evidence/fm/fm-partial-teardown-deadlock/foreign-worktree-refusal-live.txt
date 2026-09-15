@@ -1,0 +1,29 @@
+SCENARIO: ordinary teardown refuses a shared live slot atomically
+BEFORE task records:
+.last-watcher-beat
+fm-coll-dead.meta
+fm-coll-dead.status
+fm-coll-live.meta
+COMMAND: bin/fm-teardown.sh fm-coll-dead --force
+EXIT: 1
+STDERR:
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no live watcher process holds this home lock (last beat: 0s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REFUSED: task fm-coll-dead's recorded worktree /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-teardown-tests.5crluS/live-slot-refusal-evidence/pool/7/firstmate is also task fm-coll-live's recorded worktree.
+Returning that pool slot would kill fm-coll-live's processes and reset its copy, so nothing was changed - not even with --force.
+Reconcile whichever record is wrong (bin/fm-crew-state.sh fm-coll-dead; bin/fm-crew-state.sh fm-coll-live), then re-run teardown.
+The collision refusal stands: pass --retire-foreign-worktree (with --force) once the other record is confirmed the slot's live owner, and teardown will retire this dead record without returning the slot.
+AFTER task records:
+.guard-watcher-stale-banner
+.last-watcher-beat
+fm-coll-dead.meta
+fm-coll-dead.status
+fm-coll-live.meta
+AFTER slot: present
+AFTER live tmux endpoint:
+fm-fm-coll-live:sleep

@@ -1,0 +1,34 @@
+SCENARIO: retire stale record while preserving foreign live slot
+BEFORE task records:
+state/.last-watcher-beat
+state/fm-coll-dead.meta
+state/fm-coll-dead.status
+state/fm-coll-live.meta
+BEFORE slot: present
+BEFORE live tmux endpoint:
+fm-fm-coll-live:sleep
+COMMAND: bin/fm-teardown.sh fm-coll-dead --force --retire-foreign-worktree
+EXIT: 0
+STDOUT:
+teardown fm-coll-dead complete (window fmcoll:fm-fm-coll-dead, worktree /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-teardown-tests.8Hwi27/live-slot-collision-evidence/pool/7/firstmate, foreign slot owned by live task fm-coll-live: record retired without returning the slot)
+Backlog: fm-coll-dead just finished (this home keeps no markdown backlog at /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-teardown-tests.8Hwi27/live-slot-collision-evidence/data/backlog.md). Update /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-teardown-tests.8Hwi27/live-slot-collision-evidence/data/backlog.md - move fm-coll-dead to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+STDERR:
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no live watcher process holds this home lock (last beat: 0s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+task fm-coll-dead recorded slot /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-teardown-tests.8Hwi27/live-slot-collision-evidence/pool/7/firstmate belongs to live task fm-coll-live; retiring fm-coll-dead without returning the slot or touching its copy
+AFTER task records:
+state/.guard-watcher-stale-banner
+state/.last-watcher-beat
+state/.wake-queue
+state/.wake-queue.seq
+state/.watcher-down
+state/fm-coll-live.meta
+state/home-summary.json
+AFTER slot: present
+AFTER live tmux endpoint:
+fm-fm-coll-live:sleep

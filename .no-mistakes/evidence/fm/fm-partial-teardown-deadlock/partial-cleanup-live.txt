@@ -1,0 +1,13 @@
+SCENARIO: finish meta-less partial cleanup through the real product CLI and installed backend inventory
+BEFORE state records:
+home/state/nm-live-partial-0915.inbox
+home/state/nm-live-partial-0915.kimi-turnend-token
+home/state/nm-live-partial-0915.status
+home/state/nm-live-partial-0915.turn-ended
+BEFORE Kimi registration: present
+COMMAND: bin/fm-status-gc.sh nm-live-partial-0915 --finish-cleanup
+EXIT: 0
+OUTPUT:
+retired orphaned status record for task nm-live-partial-0915 (done: trial complete)
+AFTER state records:
+AFTER Kimi registration: absent
