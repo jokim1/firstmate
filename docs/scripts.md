@@ -135,6 +135,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-promote.sh`          | Promote a scout task in place to a protected ship task with an explicit delivery mode, and write the ship instructions carrying that mode's definition of done |
 | `fm-teardown.sh`         | Fail-closed teardown: return landed ship worktrees, require completed scout deliverables, retire secondmate homes, or retire a proven stale record without touching a foreign-owned pool slot |
 | `fm-status-gc.sh`        | Retire a finished task's orphaned status record, or finish a terminal interrupted cleanup through each record family's owner |
+| `fm-task-records-retire-lib.sh` | Shared writer-owned preflight and retirement for volatile per-task records |
 | `fm-harness.sh`          | Detect the running harness, resolve crew or secondmate harness, model, and effort, and validate the native-only `ultra` effort |
 | `fm-lock.sh`             | Per-home firstmate session lock                                                      |
 | `fm-x-lib.sh`            | Shared Relay config, relay, and reply-threading helpers                              |
