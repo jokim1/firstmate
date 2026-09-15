@@ -49,9 +49,10 @@ The refusal is the work list for finishing the interrupted teardown through the 
 1. Run `FM_HOME=<home> bin/fm-status-gc.sh <id>` and retain its complete refusal before changing anything.
    The janitor enumerates every surviving record family and fails closed on unknown records, so its refusal defines the exact remaining work rather than a partial glob-based guess.
 2. Before retiring anything, check for every different legal sibling id that becomes the same marker key when `.` and `_` are normalized to `_`.
-   Inspect the current backlog and state records for those sibling ids, and STOP if any colliding sibling exists.
+   Inspect the current backlog, state records, and durable `data/<sibling-id>/` task records for those sibling ids, and STOP if any colliding sibling exists.
    The notification marker families normalize separators, so two legal ids such as `a.b` and `a_b` can alias and cleanup for one can otherwise retire the other's markers.
-3. If the refusal names a Grok or Kimi turn-end token, read the token from `state/<id>.<harness>-turnend-token` and resolve the corresponding firstmate-owned registry entry through `fm_control_harness_turnend_auth_path` in `bin/fm-control-lib.sh`.
+3. If the refusal names a Grok or Kimi turn-end token, source `bin/fm-control-lib.sh`, read the token from `state/<id>.<harness>-turnend-token`, and resolve the corresponding firstmate-owned registry entry with `fm_control_harness_turnend_auth_path <harness> <token>`.
+   REFUSE if the helper fails or returns no path.
    Require the registry entry's contents to match the canonical absolute `<state>/<id>.turn-ended` path exactly, and REFUSE on a missing, unreadable, or mismatched entry.
    Only after an exact match may the registry entry, the task token, and `state/<id>.turn-ended` be retired.
    Matching the registry entry's contents is mandatory because trusting the token text alone can deregister a different live task's hook.
@@ -65,7 +66,7 @@ The refusal is the work list for finishing the interrupted teardown through the 
 For a journal-only orphan, perform the colliding-sibling check and the Herdr journal step only.
 For a tmux-class backend orphan, replace the endpoint-probe part of step 4 with a HUMAN check of every tmux session for a pane named `fm-<id>`, and proceed only when none exists.
 The tmux endpoint check must remain human because no machine-safe id-keyed endpoint proof exists after metadata is gone.
-For the evaluation rationale and end-to-end proof transcript, see `data/fm-teardown-cleanup-firstprinciples/report.md` when it is present in this home.
+For optional depth, see the home-local `data/fm-teardown-cleanup-firstprinciples/report.md` when present; it may be absent in other homes and is not required to execute this runbook.
 
 ## A live crewmate claiming the pipeline is dead
 
