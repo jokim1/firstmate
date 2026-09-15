@@ -44,10 +44,15 @@ If the worktree or ownership cannot be reconciled safely, leave all state intact
 ## Finish a partial teardown after metadata is gone
 
 Use this procedure when a task has surviving records but no `state/<id>.meta`, including when `bin/fm-status-gc.sh <id>` refuses and names those survivors.
-The refusal is the work list for finishing the interrupted teardown through the existing record owners.
+Do not run this procedure while anything might spawn the same task id; if there is any doubt that the id could be respawned, STOP.
+A fresh same-id spawn can publish a new registry entry and turn-end token before its metadata appears, making those live records indistinguishable from the dead records this procedure retires.
+The registry check can then pass and delete live replacement hook state, and a later GC refusal detects the replacement only after that damage.
+Immediately before each file retirement in steps 3 and 4 and before the final GC in step 5, re-check that `state/<id>.meta` is absent and STOP if it exists.
 
 1. Run `FM_HOME=<home> bin/fm-status-gc.sh <id>` and retain its complete refusal before changing anything.
-   The janitor enumerates every surviving record family and fails closed on unknown records, so its refusal defines the exact remaining work rather than a partial glob-based guess.
+   Treat the refusal as a candidate list and check every named record individually before retiring it.
+   A record in another task's subdirectory is usually a false positive caused by archived prose that mentions the target id, and correspondence investigating the stranded record can make the refusal stronger by adding more matching prose.
+   This scanner limitation is tracked as `fm-statusgc-scan-matches-message-text`.
 2. Before retiring anything, check for every different legal sibling id that becomes the same marker key when `.` and `_` are normalized to `_`.
    Inspect the current backlog, state records, and durable `data/<sibling-id>/` task records for those sibling ids, and STOP if any colliding sibling exists.
    The notification marker families normalize separators, so two legal ids such as `a.b` and `a_b` can alias and cleanup for one can otherwise retire the other's markers.
@@ -66,11 +71,11 @@ The refusal is the work list for finishing the interrupted teardown through the 
 5. Immediately before the final GC, repeat the colliding-sibling check from step 2 and STOP if a sibling has appeared since the first check.
    The check is point-in-time, so repeat it at the last moment before the destructive step.
    A colliding sibling that starts spawning inside the final GC step remains outside this procedure's coverage.
-   Then re-run `FM_HOME=<home> bin/fm-status-gc.sh <id>` after every family named by the first refusal has been retired safely.
+   Then re-run `FM_HOME=<home> bin/fm-status-gc.sh <id>` after every confirmed target-owned family from the first refusal has been retired safely.
    Once the remaining shape is exact, the janitor retires the status log, open-decisions cursor, presentation-cursor row, and watcher notification markers through their existing owners.
    This final run can still refuse when its scan matches the task id as text inside an unrelated task's archived `handled/*.msg` prose; if so, STOP and leave the status log in place.
    NEVER bypass that refusal or hand-delete the log.
-   The inert status log has bounded cost, while bypassing the fail-closed check risks destroying unlanded work.
+   `bin/fm-supervise-daemon.sh` continues to scan every retained `state/*.status` log, but bypassing the fail-closed check risks destroying unlanded work.
 
 For a journal-only orphan, perform the colliding-sibling check and the Herdr journal step only.
 For a tmux-class backend orphan, replace the endpoint-probe part of step 4 with a HUMAN check of every tmux session for a pane named `fm-<id>`, and proceed only when none exists.
