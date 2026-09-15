@@ -34,7 +34,7 @@ New upstream work arrives by rebasing the overlay stack onto upstream `main`.
 The owner of that rebase is the operator-private script `data/patch-queue/rebase-lila-main.sh` in the operator's private home (not this repo).
 Do not reimplement or invent a second rebase path.
 
-Each patch carries a retire-when condition, and the private home named above decides retirement, requiring proof and per-item approval rather than apparent upstream coverage.
+Patch retirement happens only on the captain's explicit per-patch word: manual, evidence-backed, and never automated by a proof engine.
 Conflicts are never auto-resolved: on conflict the rebase stops, and a human or supervised agent resolves deliberately.
 
 ## What a rebase means for checkouts
