@@ -581,7 +581,7 @@ These skills are agent-only references, not captain-invocable slash commands; lo
 - `fmx-respond` - load on an `x-mention <request_id>` `check:` wake to handle the mention, on an `x-mode-error ...` `check:` wake to report the Relay configuration blocker, on a `public-followup ...` `check:` wake or a startup-surfaced public commitment, and on any milestone or terminal wake for a Relay-linked task before posting its completion follow-up; relevant only when Relay is on.
 - `firstmate-codexapp` - load before coordinating a visible Codex Desktop thread, evaluating a Codex App backend request, or reconciling Codex Desktop host-tool smoke evidence for Firstmate work.
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
-- `patch-queue-prune` - load automatically at every `lila-main` upstream rebase and when `data/patch-queue/README.md`'s rebase records show roughly six weeks without a rebase; separately, the captain may invoke the pass at any time.
+- `patch-queue-prune` - load automatically at every `lila-main` upstream rebase and when its rebase records show roughly six weeks without a rebase and no readable, unambiguous prune report is newer than that rebase; separately, the captain may invoke the pass at any time.
 
 ## 14. Relay
 

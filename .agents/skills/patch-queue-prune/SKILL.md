@@ -2,7 +2,7 @@
 name: patch-queue-prune
 description: >-
   Agent-only adversarial audit of the fork's lila-main patch stack that argues every carried patch toward consolidation or removal.
-  Load automatically at every lila-main upstream rebase and when the patch-queue rebase records show roughly six weeks without a rebase; separately, the captain may invoke the pass at any time.
+  Load automatically at every lila-main upstream rebase and when the patch-queue rebase records show roughly six weeks without a rebase and no prune report is newer than that rebase; separately, the captain may invoke the pass at any time.
   Owns the pass trigger and its staleness backstop, the per-patch evidence procedure with executable proof of redundancy as the only bar for a drop, the consolidation-first ordering and its one-owner-guarantee criterion, the refusal cases, and the report the captain reads.
 user-invocable: false
 metadata:
@@ -20,10 +20,13 @@ This pass identifies how to shrink the stack without repeating either failure: c
 This recurring pass has exactly two automatic triggers:
 
 - At every `lila-main` upstream rebase, inside the rebase job, after the per-fetch retire scan the queue discipline already requires.
-- As a staleness backstop: when roughly six weeks have passed with no rebase, the pass is due, and any agent that observes that staleness fires it.
+- As a staleness backstop: when roughly six weeks have passed with no rebase and no completed prune report is newer than the latest rebase, the pass is due, and any agent that observes both conditions fires it.
 
 Separately, the captain may invoke the pass at any time; a direct request is not an automatic trigger.
 The rebase records in `data/patch-queue/README.md` own the dates; judge staleness from them, never from a timer.
+Locate completed prune reports at `data/patch-queue-prune-<date>/report.md`, or at the executing task's report file when the pass ran inside a task.
+Use the ISO `YYYY-MM-DD` date in the fixed path, or the ISO completion date recorded in the task report, and compare the newest completed report date with the newest rebase record date in `data/patch-queue/README.md`.
+If no report exists, it cannot be read, or its completion date or identity as a prune report is ambiguous, there is no qualifying completion report and the staleness backstop fires.
 There is no calendar job and no scheduler: the rebase is the trigger, the backstop is a staleness observation against existing records, and this pass manufactures no second recurring mechanism.
 An ordinary fetch must never be mistaken for a rebase and does not fire the pass by itself; this exclusion does not suppress the staleness trigger when the observer finds that roughly six weeks have passed without a rebase.
 Never fire on upstream PR activity alone or on a cadence.
@@ -82,6 +85,7 @@ This pass must never, on its own authority:
 
 The pass produces a self-contained report - the executing task's report file, or `data/patch-queue-prune-<date>/report.md` when run outside a task - containing:
 
+- Its completion date in ISO `YYYY-MM-DD` form and the latest rebase record date audited.
 - A summary with the current and projected stack sizes, and the counts proposed for dropping, consolidation, and keeping.
 - A per-patch recommendation: propose dropping, propose consolidation into a named fold, or keep, with the recorded commands and output behind every proposed drop, the capability statement, and for every keep the one-line reason (load-bearing, evidence gap, or fork-only divergence).
 - The note that every proposed stack change waits for the captain's explicit approval of that specific item before any commit starts, then lands only through the rebase procedure under the standing adversarial-review bar recorded with the queue discipline.
