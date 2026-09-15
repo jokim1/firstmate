@@ -57,6 +57,9 @@ The refusal is the work list for finishing the interrupted teardown through the 
    Only after an exact match may the registry entry, the task token, and `state/<id>.turn-ended` be retired.
    Matching the registry entry's contents is mandatory because trusting the token text alone can deregister a different live task's hook.
 4. If the refusal names `state/<id>.herdr-presentation`, source `bin/fm-backend.sh`, load the Herdr adapter with `fm_backend_source herdr`, and validate the journal with `fm_backend_herdr_projection_journal_snapshot <journal> <id>`.
+   If `$FM_BACKEND_HERDR_JOURNAL_VERSION` is `1`, STOP without probing or retiring it because the snapshot leaves the session and pane empty and the probe therefore returns `unknown`.
+   This stop is the correct outcome, not a failure: leave the version 1 journal in place, where it is inert for task ownership because no send, capture, Treehouse, or general task-ownership path reads it.
+   Clearing a version 1 journal would require a code change and is deliberately outside this runbook.
    Probe the validated `$FM_BACKEND_HERDR_JOURNAL_SESSION` and `$FM_BACKEND_HERDR_JOURNAL_PANE_ID` with `fm_backend_herdr_pane_agent_state <session> <pane>`, and retire the display journal only when the result is exactly `dead`.
    STOP the runbook on `live`, `no-agent`, `unknown`, an invalid journal, an unavailable probe, or any other result.
    This recovery-grade check is mandatory because assuming the pane is dead can delete the durable endpoint record of a worker that is still running.
