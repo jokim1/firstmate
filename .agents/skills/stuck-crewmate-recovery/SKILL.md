@@ -60,7 +60,10 @@ The refusal is the work list for finishing the interrupted teardown through the 
    Probe the validated `$FM_BACKEND_HERDR_JOURNAL_SESSION` and `$FM_BACKEND_HERDR_JOURNAL_PANE_ID` with `fm_backend_herdr_pane_agent_state <session> <pane>`, and retire the display journal only when the result is exactly `dead`.
    STOP the runbook on `live`, `no-agent`, `unknown`, an invalid journal, an unavailable probe, or any other result.
    This recovery-grade check is mandatory because assuming the pane is dead can delete the durable endpoint record of a worker that is still running.
-5. Re-run `FM_HOME=<home> bin/fm-status-gc.sh <id>` after every family named by the first refusal has been retired safely.
+5. Immediately before the final GC, repeat the colliding-sibling check from step 2 and STOP if a sibling has appeared since the first check.
+   The check is point-in-time, so repeat it at the last moment before the destructive step.
+   A colliding sibling that starts spawning inside the final GC step remains outside this procedure's coverage.
+   Then re-run `FM_HOME=<home> bin/fm-status-gc.sh <id>` after every family named by the first refusal has been retired safely.
    Once the remaining shape is exact, the janitor retires the status log, open-decisions cursor, presentation-cursor row, and watcher notification markers through their existing owners.
 
 For a journal-only orphan, perform the colliding-sibling check and the Herdr journal step only.
