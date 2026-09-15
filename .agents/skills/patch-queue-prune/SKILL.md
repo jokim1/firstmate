@@ -17,15 +17,15 @@ This pass shrinks the stack without repeating either failure: consolidation firs
 
 ## Trigger
 
-Load and run this pass:
+This recurring pass has exactly two triggers:
 
 - At every `lila-main` upstream rebase, inside the rebase job, after the per-fetch retire scan the queue discipline already requires.
-- When the captain asks for a patch-stack prune, refactor, or simplification audit.
 - As a staleness backstop: when roughly six weeks have passed with no rebase, the pass is due, and any agent that observes that staleness fires it.
 
 The rebase records in `data/patch-queue/README.md` own the dates; judge staleness from them, never from a timer.
 There is no calendar job and no scheduler: the rebase is the trigger, the backstop is a staleness observation against existing records, and this pass manufactures no second recurring mechanism.
-Never fire on a plain fetch, on upstream PR activity alone, or on a cadence.
+An ordinary fetch must never be mistaken for a rebase and does not fire the pass by itself; this exclusion does not suppress the staleness trigger when the observer finds that roughly six weeks have passed without a rebase.
+Never fire on upstream PR activity alone or on a cadence.
 
 ## Relationship to queue discipline
 
@@ -45,8 +45,9 @@ Audit every patch on the stack, taken from the stack table plus the overlay git 
    - The same test PASSES against upstream tip without the patch, cherry-picking the test alone onto upstream tip when the test itself is fork-only.
    Record both executions with exact commands and output.
    An argument from the diff, a reading of upstream changes, or a judgment that upstream looks like it covers the behavior is never sufficient; that is the failure shape this pass exists to kill.
-4. A fork-only standing divergence whose `retire-when` names a fork-internal condition (for example CI shard count or fork test load) cannot pass against upstream tip by construction.
-   Its proof is the recorded executable check of its own `retire-when` condition instead.
+4. A patch whose redundancy cannot be proven by those two executions is kept, never dropped.
+   This includes a fork-only standing divergence, such as CI shard count, that has no upstream counterpart against which the patch's test can pass.
+   Retiring such a patch anyway is a capability-narrowing decision that requires the captain's explicit per-item word; this pass cannot make it.
 5. Before a drop lands, a reviewer must see the two recorded executions, the upstream evidence behind them (the commit, PR, or issue present on tip), and a capability statement naming any behavior that is lost.
    Any lost behavior makes the retire capability-narrowing, which `data/patch-queue/README.md` rule 1 reserves for the captain's explicit per-item word; this pass never grants itself that authority.
 
