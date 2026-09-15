@@ -44,6 +44,8 @@ If the worktree or ownership cannot be reconciled safely, leave all state intact
 ## Finish a partial teardown after metadata is gone
 
 Use this procedure when a task has surviving records but no `state/<id>.meta`, including when `bin/fm-status-gc.sh <id>` refuses and names those survivors.
+This procedure manages this failure class rather than removing it.
+Removing the failure class belongs to separate prevention work.
 Do not run this procedure while anything might spawn the same task id; if there is any doubt that the id could be respawned, STOP.
 A fresh same-id spawn can publish a new registry entry and turn-end token before its metadata appears, making those live records indistinguishable from the dead records this procedure retires.
 The registry check can then pass and delete live replacement hook state, and a later GC refusal detects the replacement only after that damage.
