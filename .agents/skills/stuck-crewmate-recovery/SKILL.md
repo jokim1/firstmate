@@ -3,6 +3,7 @@ name: stuck-crewmate-recovery
 description: >-
   Agent-only playbook for stuck or missing ordinary Firstmate direct reports.
   Use when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
+  Also use when a task has surviving records but no state/<id>.meta, including when bin/fm-status-gc.sh refuses that shape and names the surviving families.
   Also use on the inverse case: a live crewmate reporting the no-mistakes pipeline dead, unreachable, or timed out.
   Reconciles recorded work before escalating from targeted inspection through safe relaunch or failure.
 user-invocable: false
@@ -39,6 +40,32 @@ Before relaunch, prove that no live agent still owns the recorded task and that 
 Preserve its uncommitted changes and commits, keep the same task identity, and resume or relaunch the recorded harness in that existing worktree with the same brief plus a concise progress note.
 Do not use a fresh generic spawn while the recorded worktree is unaccounted for, because allocating another worktree can split one task across two copies.
 If the worktree or ownership cannot be reconciled safely, leave all state intact and report the task failed or blocked with the conflicting evidence.
+
+## Finish a partial teardown after metadata is gone
+
+Use this procedure when a task has surviving records but no `state/<id>.meta`, including when `bin/fm-status-gc.sh <id>` refuses and names those survivors.
+The refusal is the work list for finishing the interrupted teardown through the existing record owners.
+
+1. Run `FM_HOME=<home> bin/fm-status-gc.sh <id>` and retain its complete refusal before changing anything.
+   The janitor enumerates every surviving record family and fails closed on unknown records, so its refusal defines the exact remaining work rather than a partial glob-based guess.
+2. Before retiring anything, check for every different legal sibling id that becomes the same marker key when `.` and `_` are normalized to `_`.
+   Inspect the current backlog and state records for those sibling ids, and STOP if any colliding sibling exists.
+   The notification marker families normalize separators, so two legal ids such as `a.b` and `a_b` can alias and cleanup for one can otherwise retire the other's markers.
+3. If the refusal names a Grok or Kimi turn-end token, read the token from `state/<id>.<harness>-turnend-token` and resolve the corresponding firstmate-owned registry entry through `fm_control_harness_turnend_auth_path` in `bin/fm-control-lib.sh`.
+   Require the registry entry's contents to match the canonical absolute `<state>/<id>.turn-ended` path exactly, and REFUSE on a missing, unreadable, or mismatched entry.
+   Only after an exact match may the registry entry, the task token, and `state/<id>.turn-ended` be retired.
+   Matching the registry entry's contents is mandatory because trusting the token text alone can deregister a different live task's hook.
+4. If the refusal names `state/<id>.herdr-presentation`, source `bin/fm-backend.sh`, load the Herdr adapter with `fm_backend_source herdr`, and validate the journal with `fm_backend_herdr_projection_journal_snapshot <journal> <id>`.
+   Probe the validated `$FM_BACKEND_HERDR_JOURNAL_SESSION` and `$FM_BACKEND_HERDR_JOURNAL_PANE_ID` with `fm_backend_herdr_pane_agent_state <session> <pane>`, and retire the display journal only when the result is exactly `dead`.
+   STOP the runbook on `live`, `no-agent`, `unknown`, an invalid journal, an unavailable probe, or any other result.
+   This recovery-grade check is mandatory because assuming the pane is dead can delete the durable endpoint record of a worker that is still running.
+5. Re-run `FM_HOME=<home> bin/fm-status-gc.sh <id>` after every family named by the first refusal has been retired safely.
+   Once the remaining shape is exact, the janitor retires the status log, open-decisions cursor, presentation-cursor row, and watcher notification markers through their existing owners.
+
+For a journal-only orphan, perform the colliding-sibling check and the Herdr journal step only.
+For a tmux-class backend orphan, replace the endpoint-probe part of step 4 with a HUMAN check of every tmux session for a pane named `fm-<id>`, and proceed only when none exists.
+The tmux endpoint check must remain human because no machine-safe id-keyed endpoint proof exists after metadata is gone.
+For the evaluation rationale and end-to-end proof transcript, see `data/fm-teardown-cleanup-firstprinciples/report.md` when it is present in this home.
 
 ## A live crewmate claiming the pipeline is dead
 
