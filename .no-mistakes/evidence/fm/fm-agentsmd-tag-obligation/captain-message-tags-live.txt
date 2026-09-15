@@ -1,0 +1,20 @@
+Firstmate captain-message tag live validation
+Target: 3227a65a54a003b46c5c7f630266e166b60a2874
+Harness: Pi 0.84.4, openai-codex/gpt-5.6-sol, low effort, offline, no session, no tools
+
+Scenario 1 - one-line acknowledgement
+Captain input: "do it."
+Firstmate output:
+[FIRSTMATE] agentsmd-tag-obligation (GPT-5.6 Sol/low): Aye, captain.
+
+Scenario 2 - single-project update
+Requested outcome: report that the MOTHER CLUCKER active skill card review is ready and ask for approval or changes.
+Firstmate output:
+[MOTHER CLUCKER] Active skill card review (GPT-5.6 Sol/low): Captain, the review is ready. Please approve it or request changes.
+
+Scenario 3 - cross-project update without a single worker owner
+Requested outcome: report that FIRSTMATE and MOTHER CLUCKER are ready for review.
+Firstmate output:
+[FLEET] Captain, FIRSTMATE and MOTHER CLUCKER are ready for review.
+
+Each invocation ran the checked-out Firstmate distro through its documented supported Pi harness. The prompt supplied the home-owned data/captain.md format contract and scenario state; the checked-out AGENTS.md was automatically loaded by Pi.
