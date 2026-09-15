@@ -225,6 +225,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/patch-queue-prune/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/playbot-lanes/SKILL.md",
       "audience": "agent-runtime"
     },
