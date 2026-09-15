@@ -46,42 +46,62 @@ If the worktree or ownership cannot be reconciled safely, leave all state intact
 Use this procedure when a task has surviving records but no `state/<id>.meta`, including when `bin/fm-status-gc.sh <id>` refuses and names candidate records for inspection.
 This procedure manages this failure class rather than removing it.
 Removing the failure class belongs to separate prevention work.
+`bin/fm-status-gc.sh` does not probe backend endpoints and can report success after retiring records whose worker is still running; this defect is tracked as `fm-statusgc-retires-live-endpoint`.
+Once metadata is gone, the recorded backend class is gone too, so neither the janitor nor this procedure can machine-prove endpoint death except from a valid version 2 Herdr journal.
+For every shape without that journal, require a HUMAN to identify the original backend, inspect every plausible endpoint, and confirm that the worker is gone before any janitor invocation or manual retirement; STOP if the backend or endpoint state cannot be established.
+An agent must STOP and escalate the exact endpoint check to its supervising human, then resume only after the human returns the result.
+A complete machine-safe remedy requires code for id-keyed endpoint discovery and is outside this documentation-only procedure.
 Do not run this procedure while anything might spawn the same task id; if there is any doubt that the id could be respawned, STOP.
 A fresh same-id spawn can publish a new registry entry and turn-end token before its metadata appears, making those live records indistinguishable from the dead records this procedure retires.
 The registry check can then pass and delete live replacement hook state, and a later GC refusal detects the replacement only after that damage.
-Immediately before each file retirement in steps 3 and 4 and before the final GC in step 5, re-check that `state/<id>.meta` is absent and STOP if it exists.
+Before starting, confirm that `/tmp/fm-<id>` is absent and STOP if it exists.
+That temp root is durable evidence that a spawn ran for this id and cleanup never finished, and the janitor's surviving-records refusal can hide it until after a manual retirement.
+Immediately before every janitor invocation and every file retirement, re-check that `state/<id>.meta` and `/tmp/fm-<id>` are both absent, repeat the applicable endpoint check, and STOP on any doubt or changed result.
 
-1. Run `FM_HOME=<home> bin/fm-status-gc.sh <id>` and retain its complete refusal before changing anything.
-   Treat the refusal as a candidate list and check every named record individually before retiring it.
-   A record in another task's subdirectory is usually a false positive caused by archived prose that mentions the target id, and correspondence investigating the stranded record can make the refusal stronger by adding more matching prose.
-   This scanner limitation is tracked as `fm-statusgc-scan-matches-message-text`.
-2. Before retiring anything, check for every different legal sibling id that becomes the same marker key when `.` and `_` are normalized to `_`.
+1. Before invoking the janitor or retiring anything, check for every different legal sibling id that becomes the same marker key when `.` and `_` are normalized to `_`.
    Inspect the current backlog, state records, and durable `data/<sibling-id>/` task records for those sibling ids, and STOP if any colliding sibling exists.
    The notification marker families normalize separators, so two legal ids such as `a.b` and `a_b` can alias and cleanup for one can otherwise retire the other's markers.
+   Also perform the required endpoint check before invoking the janitor.
+   For a valid version 2 Herdr journal, source `bin/fm-backend.sh`, load the Herdr adapter with `fm_backend_source herdr`, validate it with `fm_backend_herdr_projection_journal_snapshot <journal> <id>`, and probe the captured session and pane with `fm_backend_herdr_pane_agent_state <session> <pane>`.
+   Proceed only when the probe returns exactly `dead`, retain the validated session and pane for later checks, and STOP on `live`, `no-agent`, `unknown`, version 1, an invalid journal, an unavailable probe, or any other result.
+2. After step 1 and the immediate metadata and temp-root re-check, run `FM_HOME=<home> bin/fm-status-gc.sh <id>`.
+   The janitor can complete retirement immediately when only its exact leak shape remains, so this first invocation is destructive and must never precede the collision and endpoint checks.
+   If it reports successful retirement, the procedure is complete.
+   Otherwise retain its complete refusal and treat every named record as a candidate that must be inspected individually before retirement.
+   A path in another task's subdirectory may be a false positive caused by active or archived prose that mentions the target id, and correspondence investigating the stranded record can make the refusal stronger by adding more matching prose.
+   A `pending-replies/<corr>` record can instead be a genuine task binding and must not be dismissed as a text match.
+   This scanner limitation is tracked as `fm-statusgc-scan-matches-message-text`.
+   STOP on a task-set lock, a home-wide status id, an unreadable status log, a last line other than `done:` or `failed:`, an unanswered decision, a temp root, or any record family not covered by steps 3 and 4.
 3. If the refusal names a Grok or Kimi turn-end token, source `bin/fm-control-lib.sh`, read the token from `state/<id>.<harness>-turnend-token`, and resolve the corresponding firstmate-owned registry entry with `fm_control_harness_turnend_auth_path <harness> <token>`.
+   Immediately before retiring any file, repeat step 1's endpoint check and the metadata and temp-root checks above.
    REFUSE if the helper fails or returns no path.
    Require the registry entry's contents to match the canonical absolute `<state>/<id>.turn-ended` path exactly, and REFUSE on a missing, unreadable, or mismatched entry.
    Only after an exact match may the registry entry, the task token, and `state/<id>.turn-ended` be retired.
+   The exact-content match proves ownership only, not that the worker is dead, so it never replaces the endpoint check.
    Matching the registry entry's contents is mandatory because trusting the token text alone can deregister a different live task's hook.
-4. If the refusal names `state/<id>.herdr-presentation`, source `bin/fm-backend.sh`, load the Herdr adapter with `fm_backend_source herdr`, and validate the journal with `fm_backend_herdr_projection_journal_snapshot <journal> <id>`.
+   If a prior attempt removed the registry entry but left the token or marker, this runbook cannot safely finish that partially retired shape; STOP and leave the remaining records intact.
+4. If the refusal names `state/<id>.herdr-presentation` or the orphan is journal-only, source `bin/fm-backend.sh`, load the Herdr adapter with `fm_backend_source herdr`, and validate the journal with `fm_backend_herdr_projection_journal_snapshot <journal> <id>`.
    If `$FM_BACKEND_HERDR_JOURNAL_VERSION` is `1`, STOP without probing or retiring it because the snapshot leaves the session and pane empty and the probe therefore returns `unknown`.
    This stop is the correct outcome for this manual runbook, which leaves the version 1 journal untouched.
-   Other owners may still consume or retire the journal, including `bin/fm-herdr-session-cleanup.sh`.
    Probe the validated `$FM_BACKEND_HERDR_JOURNAL_SESSION` and `$FM_BACKEND_HERDR_JOURNAL_PANE_ID` with `fm_backend_herdr_pane_agent_state <session> <pane>`, and retire the display journal only when the result is exactly `dead`.
    STOP the runbook on `live`, `no-agent`, `unknown`, an invalid journal, an unavailable probe, or any other result.
    This recovery-grade check is mandatory because assuming the pane is dead can delete the durable endpoint record of a worker that is still running.
-5. Immediately before the final GC, repeat the colliding-sibling check from step 2 and STOP if a sibling has appeared since the first check.
+   Other owners may still consume or retire a journal this runbook leaves untouched, including `bin/fm-herdr-session-cleanup.sh`.
+5. Immediately before the final GC, repeat the colliding-sibling check from step 1 and STOP if a sibling has appeared since the first check.
    The check is point-in-time, so repeat it at the last moment before the destructive step.
    A colliding sibling that starts spawning inside the final GC step remains outside this procedure's coverage.
-   Then re-run `FM_HOME=<home> bin/fm-status-gc.sh <id>` after every confirmed target-owned family from the first refusal has been retired safely.
-   Once the remaining shape is exact, the janitor retires the status log, open-decisions cursor, presentation-cursor row, and watcher notification markers through their existing owners.
-   This final run can still refuse when its scan matches the task id as text inside an unrelated task's archived `handled/*.msg` prose; if so, STOP and leave the status log in place.
+   Repeat the applicable endpoint check, using the retained validated Herdr session and pane from step 4 or a fresh HUMAN check for every other shape, then re-check the metadata and temp root.
+   Re-run `FM_HOME=<home> bin/fm-status-gc.sh <id>` only after every confirmed target-owned family from the first refusal has been retired safely and all gates still pass.
+   The janitor then retires the status log, open-decisions cursor, presentation-cursor row, and watcher notification markers through their existing owners.
+   This final run can still refuse when its scan matches the task id as text inside another task's subdirectory; if so, STOP and leave the status log in place.
    NEVER bypass that refusal or hand-delete the log.
-   `bin/fm-supervise-daemon.sh` continues to scan every retained `state/*.status` log, but bypassing the fail-closed check risks destroying unlanded work.
+   Bypassing it destroys the last durable record of the work and can break other records that point at that log.
+   `bin/fm-supervise-daemon.sh` continues to scan every retained `state/*.status` log, so leaving it in place has an ongoing supervision cost.
 
-For a journal-only orphan, perform the colliding-sibling check and the Herdr journal step only.
-For a tmux-class backend orphan, replace the endpoint-probe part of step 4 with a HUMAN check of every tmux session for a pane named `fm-<id>`, and proceed only when none exists.
-The tmux endpoint check must remain human because no machine-safe id-keyed endpoint proof exists after metadata is gone.
+For a journal-only orphan, perform step 1's collision and Herdr endpoint checks and step 4 only; do not invoke the janitor because there is no readable status log.
+For an orphan that a human identifies as tmux-class, every endpoint check in this procedure is a HUMAN check for a window named `fm-<id>` across every live tmux server, and the runbook proceeds only when none exists.
+On each server, use `tmux list-windows -a -F '#{session_name}:#{window_name}'`; use `bin/fm-teardown.sh`'s socket enumeration as the authority for the complete server set rather than checking only the default socket.
+The tmux endpoint check must remain human because a window label is not a machine-safe id-keyed ownership proof after metadata is gone.
 For optional depth, see the home-local `data/fm-teardown-cleanup-firstprinciples/report.md` when present; it may be absent in other homes and is not required to execute this runbook.
 
 ## A live crewmate claiming the pipeline is dead
