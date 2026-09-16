@@ -1,0 +1,183 @@
+RUN tests/fm-pr-check-security.test.sh
+ok - raw-byte parser accepts canonical URLs and rejects the complete adversarial matrix
+ok - GitLab merge requests are followed on any instance and never wake falsely
+ok - validated merged polls notify once and retire before the next watcher cycle
+ok - a repeat identical merged poll for an already-notified task is absorbed, never queued as a main-blocking row
+ok - a failed upward merge report keeps its poll armed for repair and retry
+ok - staged self-merge and poll interleavings are never silent
+ok - queued merges retain yolo and away-grant after captain return
+ok - poll distinguishes attended authorization from external landing
+ok - accepted merge authority refuses rebound task metadata
+ok - accepted merge authority persists under the lifecycle lock
+ok - teardown cannot race merged-poll authority consumption
+ok - poll retirement preserves a replacement authority record
+ok - a merge detected by the poll is reported upward from a secondmate home exactly once
+ok - a different merged PR for the same task gets its own first notification
+ok - merged poll retirement preserves every persistent secondmate lifecycle artifact
+ok - queue, receipt, and every fixed-path removal crash point recover without loss or repeated execution
+ok - open/red, closed-unmerged, malformed, and forge errors remain armed until an exact merged transition
+ok - replacement, nonterminal, tampered, and custom results receive no deletion authority
+ok - queue failure and untrusted receipts preserve canonical poll evidence
+ok - GitHub and GitLab exact merged results share one retirement path
+ok - PR and teardown entrypoints reject invalid arguments before every side effect
+ok - valid direct and merge flows record exact metadata and reject multiline head metadata
+ok - rejected metacharacter bytes remain inert at generation and watcher time
+ok - static poll is silent except for one merged line and remains watcher-bounded
+ok - interrupted atomic preparation cleans private temporaries and publishes nothing
+ok - concurrent watchers observe only complete private poll publications
+ok - poll publication paths refuse symlinks and directories
+ok - live poll and custom-check artifacts require private single-link files
+ok - post-rename poll validation faults revoke both names and allow a clean retry
+ok - bootstrap does not rewrite unauthenticated checks or emit retired migration diagnostics
+ok - watcher signals promptly stop custom checks and clean private state
+ok - returned custom check descendants are drained on installed and fallback timeout paths
+ok - teardown removes safe poll artifacts and refuses directory-shaped check files without traversal
+RUN tests/fm-procevent-when.test.sh
+ok - arm binds, refuses duplicates, and retire cleans up
+ok - concurrent arms publish exactly one complete watch
+ok - a stable true fires the action exactly once and wakes with the outcome
+ok - a flapping condition never reaches the action
+ok - an action failure wakes with the captured error
+ok - a repeatedly erroring condition wakes firstmate instead of firing
+ok - an expired deadline wakes with never-true
+ok - a late true poll cannot fire after its deadline
+ok - action timeouts terminate the complete process group
+ok - command output staging stays within its byte bound
+ok - a restart after a claimed fire reports ambiguity instead of double-firing
+ok - a mutated spec is refused without executing anything
+ok - mutated action bytes are refused before claiming the fire
+ok - rebind-all refreshes an in-repo watch's trust binding after a self-update and leaves an out-of-repo one alone
+ok - rebind-all matches FM_ROOT through a symlinked checkout path
+ok - rebind-all reaches a watch whose run process was already polling when the self-update landed
+ok - the fire-time reload never observes rebind_one's spec/trust publish mid-rename
+all fm-procevent-when tests passed
+RUN tests/fm-procevent.test.sh
+ok - no configured source means no generated state and no process
+ok - one blocking completion yields exactly one bounded normalized event
+ok - a home reached through a symlinked ancestor runs its sources normally
+not-autohandled: direct-src (left for the handler; still unacknowledged)
+ok - public start owns the process group recorded by its claim
+ok - public start never claims an inherited caller process group
+ok - an unhandled result survives restart and repeat drains, and only explicit acknowledgement stops its re-announcement
+ok - publication cannot race a handled acknowledgement
+ok - handled acknowledgement creation is private and fails safely
+ok - automatic application waits for durable publication and failed publication remains recoverable
+ok - a self-announcing adapter applies quietly and still publishes what it could not apply
+not-autohandled: ends-src (left for the handler; still unacknowledged)
+ok - an adapter-classified terminal result is captured once, announced, and retires its source automatically
+not-autohandled: open-src (left for the handler; still unacknowledged)
+ok - a source stays armed unless its own adapter classifies the result terminal
+not-autohandled: replace-src (left for the handler; still unacknowledged)
+ok - terminal retirement preserves and releases a concurrently replaced registration
+ok - failed terminal retirement is fail-closed and idempotently recoverable
+ok - one Send & End yields exactly one captured result, automatic retirement, and no recurring poll
+ok - an empty board close is captured and recorded handled without ever waking the captain
+ok - a board close carrying the captain's real answer is still announced
+ok - the shipped poll governor bounds an instantly returning source
+ok - a transient Lavish poll interruption is retried quietly and never announced
+not-autohandled: lavish-f224dd2533613d88 (left for the handler; still unacknowledged)
+ok - an interruption that outlives the bounded retries is captured and announced
+not-autohandled: lavish-3a4cefc5371808b5 (left for the handler; still unacknowledged)
+ok - only the exact interruption is retried; an unrelated SERVER_ERROR still surfaces
+not-autohandled: lavish-1aaa3b0d60187df8 (left for the handler; still unacknowledged)
+ok - only the literal two-line interruption enters the quiet retry policy
+ok - arm rejects malformed and out-of-range retry delays before registration
+ok - poll cleanup safely handles an apostrophe-containing TMPDIR
+error: cannot confirm runner identity; source remains registered: lavish-ea5787b7e230b8df
+ok - Lavish classification staging stays bounded while nonmatches stream
+ok - a drained-but-unhandled result survives a replacement session and is retired only by explicit handling, never twice
+ok - pending results preserve numeric order and distinct wake identity
+ok - one owner per canonical source across homes
+ok - retiring a never-completing source stops its runner and its blocked child
+ok - reconcile reaps a runner whose source registration is gone
+not-autohandled: stale-src (left for the handler; still unacknowledged)
+ok - stale-owner recovery removes abandoned output without displacing a live owner
+not-autohandled: cross-home-src (left for the handler; still unacknowledged)
+ok - cross-home stale recovery removes abandoned output from the old state directory
+not-autohandled: race-src (left for the handler; still unacknowledged)
+not-autohandled: race-src (left for the handler; still unacknowledged)
+ok - concurrent stale-claim replacement starts exactly one runner
+ok - an ambiguous leaderless group is preserved without replacement
+ok - a truly dead generation with no surviving group is still safely reclaimed
+ok - reconcile reclaims a dead generation whose state-root identity no longer matches
+ok - retire releases a dead generation's claim instead of refusing forever
+ok - a live generation is never reclaimed, drifted state root or not
+ok - a reused pid never makes its surviving process group reclaimable
+ok - start reclaims a reused-pid claim whose leftovers can still be tidied
+ok - a launch that cannot confirm is announced once per failure episode
+ok - a 64-char source id keeps the launch-failed key within the watcher's marker bound
+ok - reconcile reports a launch it could not confirm instead of counting it as a start
+ok - a launch that finished before confirmation looked is still reported as started
+ok - a zero-padded launch confirm window is honored as base 10
+ok - an unusable launch confirm window is refused by name instead of blamed on the sources
+ok - a dead generation whose leftovers cannot be tidied never keeps owning its source
+ok - claim replacement cannot produce a torn ownership snapshot
+ok - retirement and start share one serialized lifecycle boundary
+ok - detected PID reuse is refused before signalling
+ok - transient identity failure preserves the live source for retry
+ok - bounded home sweep preflights then retires every locally owned source
+ok - home sweep leaves foreign-home claims and runners untouched
+ok - home sweep refuses safely until runner identity is readable
+ok - healthy runtime behavior remains registration-only
+ok - registration rejects unrepresentable newline arguments
+ok - nonzero exit with no output stays armed and silent
+ok - oversized output is bounded rather than published whole or dropped
+ok - live output stays bounded and retirement reaps the whole source group
+ok - stop mismatch evidence preserves the proved-stop boundary
+ok - stop unreadable evidence preserves the proved-stop boundary
+ok - stop unreadable-pgid evidence preserves the proved-stop boundary
+ok - stop nonleader evidence preserves the proved-stop boundary
+ok - invalid output bounds fail closed
+ok - the adapter derives physical identity without newline path corruption
+ok - source-only homes trigger the general supervision guard
+ok - the adapter classifies published poll output safely
+ok - the adapter owns which Lavish results end a source, and payload text cannot forge one
+ok - the adapter owns which Lavish results are silent, and fails closed on everything else
+ok - read presents every annotation and a distinct session-ending message
+ok - read never certifies rows missing declared fields as complete
+ok - read keeps every annotation when the session-ending message is absent
+ok - read surfaces a typed comment on an annotated element
+ok - read still surfaces a typed comment that matches the element text
+ok - read still presents a pure annotation with no comment
+ok - read does not present choice context as a comment
+ok - read still presents a pure message with no selector
+ok - read distinguishes a feedback capture from an ended-with-nothing close
+ok - an adapter with no silence verdict keeps announcing every result
+ok - the published interfaces state the loss limitation and claim no lossless delivery
+registered: floor-src (lavish)
+ok - an orphaned source command obeys the launch floor during its grace window
+ok - a replacement registration starts with one fresh launch floor
+ok - a superseded sleeping runner cannot recreate stale pacing state
+ok - post-commit pacing cleanup cannot veto registration publication
+ok - a pre-reboot monotonic stamp is treated as expired
+ok - an expired owner lease stops a self-relaunching source generation
+ok - a recreated state path does not preserve the old runner
+registered: guard-fail-src (lavish)
+ok - a runner fails closed when its owner guard cannot initialize
+registered: attached-src (lavish)
+ok - a foreground start refreshes its lease while its caller remains attached
+ok - wall-clock corrections do not alter owner lease age
+registered: detached-attached-src (lavish)
+ok - an attached-start keeper stops refreshing after its parent exits
+ok - a detected ambiguous reused-PID group is not signalled
+ok - a detached listener starts reparented, with a live descendant tree under it
+ok - a listener whose owning session is gone stops itself and its whole process group
+ok - reaping the listener stops the process churn under it
+ok - an identical listener in a home whose session is still there is untouched
+ok - retiring a source reaps its reparented listener and every descendant under it
+ok - a stop the guard cannot prove is retried until the expired runner is reaped
+ok - retirement escalates after TERM leaves a surviving child (absent leader)
+ok - retirement escalates after TERM leaves a surviving child (zombie leader)
+ok - an expired runner's guard escalates past a signal-proof child
+guard phase: fresh read 6.223-6.232s, expiry 8s, two full intervals could not finish before 18.223s (deadline 17s)
+guard bound: lease=7s check=6s reaped 12.7s after the last owner activity, documented bound 15s
+ok - an orphaned runner is reaped within the lease plus ONE check interval
+decimal interval: 08 halves to 4s and its listener started
+decimal interval: 010 halves to 5s and its listener started
+ok - a zero-prefixed decimal interval starts its listener and halves as decimal
+ok - one unreadable read does not end a live runner
+ordinary stop: start status=143 retirement=327ms sampled windows=3552/3446ms
+ok - a runner exits on the ordinary stop signal instead of outliving it
+ok - a group whose leader died to something else is still refused, not signalled
+
+all procevent tests passed
