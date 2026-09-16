@@ -1082,6 +1082,32 @@ test_terminal_passed_uses_matching_retirement_receipt_without_forge() {
   pass "terminal passed run uses matching retirement receipt without forge"
 }
 
+test_terminal_passed_no_forge_switch_skips_read_but_keeps_receipt() {
+  reset_fakes
+  local d url read_log out
+  d=$(new_case passed-no-forge-switch)
+  url=https://github.com/o/r/pull/1
+  make_repo_on_branch "$d/wt" fm/feat-dnoforge
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dnoforge.meta" "window=fm:fm-feat-dnoforge" \
+    "worktree=$d/wt" "kind=ship" "pr=$url"
+  read_log="$d/pr-read.log"
+  : > "$read_log"
+  FM_FAKE_PR_READ_LOG=$read_log
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/feat-dnoforge "$url")"
+
+  out=$(FM_CREW_STATE_NO_FORGE=1 run_crew_state "$d" feat-dnoforge)
+  assert_contains "$out" "run passed: PR state unknown (forge read skipped)" "no-forge mode reports skipped read"
+  assert_not_contains "$out" "PR merged" "no-forge mode without a receipt must not report merged"
+  [ ! -s "$read_log" ] || fail "no-forge mode invoked a forge read"
+
+  seed_retired_pr_receipt "$d/state" feat-dnoforge "$url"
+  out=$(FM_CREW_STATE_NO_FORGE=1 run_crew_state "$d" feat-dnoforge)
+  assert_contains "$out" "run passed: PR merged" "no-forge mode still trusts a matching retirement receipt"
+  [ ! -s "$read_log" ] || fail "no-forge mode with a receipt invoked a forge read"
+  pass "terminal passed no-forge mode preserves local receipt evidence"
+}
+
 test_terminal_passed_with_open_pr_does_not_claim_merged() {
   reset_fakes
   local d; d=$(new_case passed-open-pr)
@@ -2739,6 +2765,7 @@ test_top_level_fixing_ci_running_after_green_stays_working
 test_top_level_fixing_done_log_stays_working
 test_terminal_passed
 test_terminal_passed_uses_matching_retirement_receipt_without_forge
+test_terminal_passed_no_forge_switch_skips_read_but_keeps_receipt
 test_terminal_passed_with_open_pr_does_not_claim_merged
 test_terminal_passed_run_pr_overrides_stale_metadata
 test_terminal_passed_without_readable_pr_identity_reports_unknown

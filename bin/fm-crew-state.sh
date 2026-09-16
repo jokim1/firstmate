@@ -16,6 +16,7 @@
 # with no heuristics and no LLM.
 # For a terminal passed no-mistakes run, a matching merge-poll retirement
 # receipt is local merged evidence; otherwise a 5s-bounded forge read is tried.
+# FM_CREW_STATE_NO_FORGE=1 keeps the receipt read but skips the forge fallback.
 # An absent or unreadable PR identity yields an honest unknown, never an
 # optimistic merged claim.
 # Output is one stable, parseable, token-tight line firstmate can read every
@@ -345,6 +346,10 @@ passed_pr_detail() {
     && [ "$FM_PR_RETIRE_PATH" = "$path" ] \
     && [ "$FM_PR_RETIRE_NUMBER" = "$number" ]; then
     printf 'run passed: PR merged'
+    return
+  fi
+  if [ "${FM_CREW_STATE_NO_FORGE:-0}" = 1 ]; then
+    printf 'run passed: PR state unknown (forge read skipped)'
     return
   fi
 
