@@ -88,6 +88,8 @@ FM_PR_RETIRE_REG_HASH=
 FM_PR_RETIRE_REG_IDENTITY=
 FM_PR_RETIRE_RECEIPT_HASH=
 FM_PR_RETIRE_RECEIPT_IDENTITY=
+FM_PR_RECORD_STATE=
+FM_PR_RECORD_MERGED=
 FM_PR_POLL_RETIREMENT_REJECTED=
 
 fm_task_id_path_safe() {
@@ -736,6 +738,96 @@ fm_pr_poll_retirement_receipt_valid() {
   [ "$FM_PR_META_NUMBER" = "$FM_PR_RETIRE_NUMBER" ] || return 1
   FM_PR_RETIRE_RECEIPT_HASH=$(fm_pr_sha256 "$receipt") || return 1
   FM_PR_RETIRE_RECEIPT_IDENTITY=$(fm_pr_file_identity "$receipt") || return 1
+}
+
+fm_pr_github_read_record_with_gh() {  # <owner> <repo> <number>
+  local owner=$1 repo=$2 number=$3 fields line total=0 named=0
+  local state='' merged=''
+  FM_PR_RECORD_STATE=
+  FM_PR_RECORD_MERGED=
+
+  # shellcheck disable=SC2016  # GraphQL variables are literal query syntax.
+  if ! fields=$(gh api graphql \
+    -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){state merged}}}' \
+    -F "owner=$owner" -F "repo=$repo" -F "number=$number" \
+    --jq '.data.repository.pullRequest | "state=" + (.state // ""), "merged=" + (.merged | tostring)' \
+    2>/dev/null) || [ -z "$fields" ]; then
+    return 1
+  fi
+  while IFS= read -r line; do
+    total=$((total + 1))
+    case "$line" in
+      state=*) state=${line#state=} ;;
+      merged=*) merged=${line#merged=} ;;
+      *) continue ;;
+    esac
+    named=$((named + 1))
+  done <<FIELDS
+$fields
+FIELDS
+  if [ "$named" -ne 2 ] || [ "$total" -ne 2 ] || [ -z "$state" ] \
+    || { [ "$merged" != true ] && [ "$merged" != false ]; }; then
+    return 1
+  fi
+
+  # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+  # shellcheck disable=SC2034
+  FM_PR_RECORD_STATE=$state
+  # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+  # shellcheck disable=SC2034
+  FM_PR_RECORD_MERGED=$merged
+}
+
+fm_pr_github_read_record_with_gh_axi() {  # <owner> <repo> <number>
+  local owner=$1 repo=$2 number=$3 output state
+  FM_PR_RECORD_STATE=
+  FM_PR_RECORD_MERGED=
+  if ! output=$(gh-axi pr view "$number" --repo "$owner/$repo" 2>/dev/null); then
+    return 1
+  fi
+  if ! state=$(printf '%s\n' "$output" | awk '
+    $1 == "state:" { count++; value=$2 }
+    END { if (count == 1 && value != "") print value; else exit 1 }
+  '); then
+    return 1
+  fi
+  case "$state" in
+    MERGED|merged)
+      # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+      # shellcheck disable=SC2034
+      FM_PR_RECORD_STATE=MERGED
+      # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+      # shellcheck disable=SC2034
+      FM_PR_RECORD_MERGED=true
+      ;;
+    OPEN|open)
+      # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+      # shellcheck disable=SC2034
+      FM_PR_RECORD_STATE=OPEN
+      # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+      # shellcheck disable=SC2034
+      FM_PR_RECORD_MERGED=false
+      ;;
+    CLOSED|closed)
+      # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+      # shellcheck disable=SC2034
+      FM_PR_RECORD_STATE=CLOSED
+      # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+      # shellcheck disable=SC2034
+      FM_PR_RECORD_MERGED=false
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+fm_pr_github_read_record() {  # <owner> <repo> <number>
+  if command -v gh >/dev/null 2>&1 && fm_pr_github_read_record_with_gh "$@"; then
+    return 0
+  fi
+  command -v gh-axi >/dev/null 2>&1 || return 1
+  fm_pr_github_read_record_with_gh_axi "$@"
 }
 
 fm_pr_poll_retirement_data_valid() {
