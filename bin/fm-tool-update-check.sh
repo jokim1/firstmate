@@ -84,6 +84,11 @@ MAX_LINE=1000
 
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# Sourced for fm_timing_now_ms alone: the sweep deadline needs sub-second time,
+# and that helper already owns the portable EPOCHREALTIME read. Recording stays
+# off, because FM_TIMING_LOG is never set here.
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-line-cap-lib.sh
@@ -149,9 +154,9 @@ fi
 # The smallest bound a probe can be given, because fm_run_timed treats a
 # non-positive bound as no bound.
 PROBE_MIN_SECS=1
-# Both clocks here count whole seconds, so a probe can start when the arithmetic
-# says a second is left while almost none of it really is, and it still gets a
-# full bound.
+# A probe bound is a whole number of seconds, so a probe can start when the
+# arithmetic says a second is left while almost none of it really is, and it
+# still gets a full bound.
 CLOCK_ROUNDING_SECS=1
 # fm_run_timed asks its runner for -k 1, so a probe that does not stop on TERM is
 # only killed a second after its bound.
@@ -188,10 +193,14 @@ record_epoch_now() {
   esac
 }
 
-real_epoch() { date +%s; }
+# The sweep clock counts milliseconds. Whole-second arithmetic gave a budget of N
+# seconds anywhere from N-1 to N seconds of real time, depending on where inside
+# a second the sweep began, so a one-second budget could be gone before the first
+# probe was even issued.
+real_epoch_ms() { fm_timing_now_ms; }
 
 FINDINGS=
-DEADLINE=0
+DEADLINE_MS=0
 INCOMPLETE_REPORTED=0
 
 # Each finding is flattened to a single line here, because the whole report must
@@ -207,7 +216,7 @@ emit() {
 }
 
 budget_exhausted() {
-  [ "$(real_epoch)" -ge "$DEADLINE" ]
+  [ "$(real_epoch_ms)" -ge "$DEADLINE_MS" ]
 }
 
 # True while the sweep budget still has room for another probe. When it does not,
@@ -228,7 +237,8 @@ budget_allows() {
 # PROBE_MIN_SECS, because fm_run_timed treats a non-positive bound as no bound.
 probe_bound() {
   local left
-  left=$((DEADLINE - $(real_epoch)))
+  # Rounded up to whole seconds, which is the granularity a probe bound has.
+  left=$(((DEADLINE_MS - $(real_epoch_ms) + 999) / 1000))
   if [ "$left" -lt "$PROBE_MIN_SECS" ]; then
     printf '%s\n' "$PROBE_MIN_SECS"
   elif [ "$left" -lt "$PROBE_SECS" ]; then
@@ -700,7 +710,7 @@ action_check() {
     return 0
   fi
 
-  DEADLINE=$(($(real_epoch) + BUDGET_SECS))
+  DEADLINE_MS=$(($(real_epoch_ms) + BUDGET_SECS * 1000))
 
   if [ -n "$BUDGET_CUT_FROM" ]; then
     emit "sweep budget ${BUDGET_CUT_FROM}s cut to ${BUDGET_SECS}s to stay inside the watcher check timeout of ${CHECK_TIMEOUT}s"
