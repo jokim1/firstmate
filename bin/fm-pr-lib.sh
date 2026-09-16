@@ -830,6 +830,52 @@ fm_pr_github_read_record() {  # <owner> <repo> <number>
   fm_pr_github_read_record_with_gh_axi "$@"
 }
 
+fm_pr_gitlab_read_record() {  # <host> <path> <number>
+  local host=$1 path=$2 number=$3 project_url json fields line
+  local total=0 named=0 state='' merged=''
+  FM_PR_RECORD_STATE=
+  FM_PR_RECORD_MERGED=
+  command -v glab >/dev/null 2>&1 || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  project_url="https://$host/$path"
+
+  if ! json=$(GITLAB_HOST="$host" glab mr view "$number" -R "$project_url" -F json 2>/dev/null) \
+    || [ -z "$json" ]; then
+    return 1
+  fi
+  if ! fields=$(printf '%s' "$json" | jq -r '
+      if type == "object" and (.state | type == "string") and .state != "" then
+        "state=" + .state,
+        "merged=" + (if .state == "merged" then "true" else "false" end)
+      else
+        error("invalid merge request state")
+      end' 2>/dev/null); then
+    return 1
+  fi
+  while IFS= read -r line; do
+    total=$((total + 1))
+    case "$line" in
+      state=*) state=${line#state=} ;;
+      merged=*) merged=${line#merged=} ;;
+      *) continue ;;
+    esac
+    named=$((named + 1))
+  done <<FIELDS
+$fields
+FIELDS
+  if [ "$named" -ne 2 ] || [ "$total" -ne 2 ] || [ -z "$state" ] \
+    || { [ "$merged" != true ] && [ "$merged" != false ]; }; then
+    return 1
+  fi
+
+  # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+  # shellcheck disable=SC2034
+  FM_PR_RECORD_STATE=$state
+  # Consumed by bin/fm-crew-state.sh passed_pr_detail.
+  # shellcheck disable=SC2034
+  FM_PR_RECORD_MERGED=$merged
+}
+
 fm_pr_poll_retirement_data_valid() {
   local state=$1 id=$2 state_device data data_hash data_identity
   state_device=$(fm_pr_file_device "$state") || return 1

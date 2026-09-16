@@ -137,6 +137,18 @@ case "${1:-} ${2:-}" in
 esac
 exit 1
 SH
+  cat > "$fb/glab" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-} ${2:-}" in
+  "mr view")
+    [ -z "${FM_FAKE_GLAB_READ_LOG:-}" ] || printf '%s|%s\n' "${GITLAB_HOST:-}" "$*" >> "$FM_FAKE_GLAB_READ_LOG"
+    [ "${FM_FAKE_GLAB_READ_FAIL:-0}" = 1 ] && exit 1
+    printf '{"state":"%s"}\n' "${FM_FAKE_GLAB_STATE:-merged}"
+    exit 0 ;;
+esac
+exit 1
+SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -217,7 +229,7 @@ case "${1:-}" in
 esac
 exit 0
 SH
-  chmod +x "$fb/no-mistakes" "$fb/gh" "$fb/gh-axi" "$fb/tmux" "$fb/herdr"
+  chmod +x "$fb/no-mistakes" "$fb/gh" "$fb/gh-axi" "$fb/glab" "$fb/tmux" "$fb/herdr"
   printf '%s\n' "$fb"
 }
 
@@ -276,11 +288,15 @@ reset_fakes() {
   FM_FAKE_PR_READ_FAIL=0
   FM_FAKE_PR_READ_LOG=
   FM_FAKE_PR_STATE_AXI=merged
+  FM_FAKE_GLAB_STATE=merged
+  FM_FAKE_GLAB_READ_FAIL=0
+  FM_FAKE_GLAB_READ_LOG=
   unset FM_FAKE_PR_47_STATE FM_FAKE_PR_47_MERGED FM_FAKE_PR_48_STATE FM_FAKE_PR_48_MERGED
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BUSY_TEXT FM_FAKE_TMUX_MISSING FM_FAKE_TMUX_UNREADABLE
   export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_READ_FAIL FM_FAKE_HERDR_HUSK FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_HERDR_PROCESS FM_FAKE_HERDR_SHELL_PID FM_FAKE_CI_LOGS
   export FM_FAKE_DAEMON_DOWN
   export FM_FAKE_PR_STATE FM_FAKE_PR_MERGED FM_FAKE_PR_READ_FAIL FM_FAKE_PR_READ_LOG FM_FAKE_PR_STATE_AXI
+  export FM_FAKE_GLAB_STATE FM_FAKE_GLAB_READ_FAIL FM_FAKE_GLAB_READ_LOG
   export FM_FAKE_PR_47_STATE FM_FAKE_PR_47_MERGED FM_FAKE_PR_48_STATE FM_FAKE_PR_48_MERGED
 }
 
@@ -1116,6 +1132,58 @@ test_terminal_passed_without_readable_pr_identity_reports_unknown() {
   assert_not_contains "$out" "merged/closed" "unknown PR state must not get the old merged/closed label"
   assert_not_contains "$out" "PR merged" "unknown PR state must not be reported merged"
   pass "terminal passed run without readable PR identity reports unknown"
+}
+
+test_terminal_passed_with_open_gitlab_mr_does_not_claim_merged() {
+  reset_fakes
+  local d read_log out
+  d=$(new_case passed-open-gitlab-mr)
+  make_repo_on_branch "$d/wt" fm/feat-dgitlabopen
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dgitlabopen.meta" "window=fm:fm-feat-dgitlabopen" \
+    "worktree=$d/wt" "kind=ship" "pr=https://git.example.com/group/subgroup/repo/-/merge_requests/9"
+  read_log="$d/glab-read.log"
+  : > "$read_log"
+  FM_FAKE_GLAB_READ_LOG=$read_log
+  FM_FAKE_GLAB_STATE=opened
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/feat-dgitlabopen https://git.example.com/group/subgroup/repo/-/merge_requests/9)"
+  out=$(run_crew_state "$d" feat-dgitlabopen)
+  assert_contains "$out" "run passed: PR open" "open GitLab MR state is named"
+  assert_not_contains "$out" "PR merged" "open GitLab MR must not be reported merged"
+  assert_grep 'git.example.com|mr view 9 -R https://git.example.com/group/subgroup/repo -F json' "$read_log" \
+    "GitLab MR read uses the parsed host and project URL"
+  pass "terminal passed run reads open GitLab MR state"
+}
+
+test_terminal_passed_with_merged_gitlab_mr_reports_merged() {
+  reset_fakes
+  local d out
+  d=$(new_case passed-merged-gitlab-mr)
+  make_repo_on_branch "$d/wt" fm/feat-dgitlabmerged
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dgitlabmerged.meta" "window=fm:fm-feat-dgitlabmerged" \
+    "worktree=$d/wt" "kind=ship" "pr=https://gitlab.com/group/repo/-/merge_requests/10"
+  FM_FAKE_GLAB_STATE=merged
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/feat-dgitlabmerged https://gitlab.com/group/repo/-/merge_requests/10)"
+  out=$(run_crew_state "$d" feat-dgitlabmerged)
+  assert_contains "$out" "run passed: PR merged" "merged GitLab MR is reported merged"
+  pass "terminal passed run reads merged GitLab MR state"
+}
+
+test_terminal_passed_with_failed_gitlab_read_reports_unknown() {
+  reset_fakes
+  local d out
+  d=$(new_case passed-unreadable-gitlab-mr)
+  make_repo_on_branch "$d/wt" fm/feat-dgitlabunknown
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dgitlabunknown.meta" "window=fm:fm-feat-dgitlabunknown" \
+    "worktree=$d/wt" "kind=ship" "pr=https://gitlab.com/group/repo/-/merge_requests/11"
+  FM_FAKE_GLAB_READ_FAIL=1
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/feat-dgitlabunknown https://gitlab.com/group/repo/-/merge_requests/11)"
+  out=$(run_crew_state "$d" feat-dgitlabunknown)
+  assert_contains "$out" "run passed: PR state unknown (unreadable)" "failed GitLab read is honest unknown"
+  assert_not_contains "$out" "PR merged" "failed GitLab read must not be reported merged"
+  pass "terminal passed run handles failed GitLab read"
 }
 
 test_terminal_failed() {
@@ -2674,6 +2742,9 @@ test_terminal_passed_uses_matching_retirement_receipt_without_forge
 test_terminal_passed_with_open_pr_does_not_claim_merged
 test_terminal_passed_run_pr_overrides_stale_metadata
 test_terminal_passed_without_readable_pr_identity_reports_unknown
+test_terminal_passed_with_open_gitlab_mr_does_not_claim_merged
+test_terminal_passed_with_merged_gitlab_mr_reports_merged
+test_terminal_passed_with_failed_gitlab_read_reports_unknown
 test_terminal_failed
 test_terminal_failed_ci_orphan_after_green_reads_done
 test_terminal_failed_ci_orphan_status_only_reads_done
