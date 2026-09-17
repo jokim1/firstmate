@@ -420,6 +420,12 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # matching is case-insensitive.
 FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$'
 
+# Grok 1.0.34 draws its current empty composer with no placeholder: one `❯`
+# content row and a bottom-border title carrying model, effort, and autonomy.
+# The scan below accepts this title only with that complete single-row box, so
+# the vendor string is never sufficient proof by itself.
+FM_COMPOSER_GROK_BOTTOM_TITLE_RE_DEFAULT='^Grok[[:space:]]+[^()]+[[:space:]]+\([^()]+\)[[:space:]]+·[[:space:]]+always-approve$'
+
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
 # text, and only the run's LAST row is ever matched against it.
@@ -702,8 +708,9 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
   local pane=$1 cy=${2:-}
   local line indent left_stripped trimmed kind family side_family
   local top_inner top_spaces='' geometry_check=0 geometry_ambiguous=0
-  local content_inner content_spaces bottom_inner bottom_spaces glyph
+  local content_inner content_spaces bottom_inner bottom_spaces glyph grok_content
   local current_indent='' current_family='' row=0 top=-1 valid=0 content_rows=0
+  local grok_prompt_row=0
   # Complete-box results: the box containing the cursor (cursor mode) or the
   # bottom-most complete box (no cursor).
   FM_COMPOSER_SCAN_BOX_TOP=-1
@@ -797,6 +804,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
       current_indent=$indent
       valid=1
       content_rows=0
+      grok_prompt_row=0
       geometry_ambiguous=0
       geometry_check=1
       top_inner=$trimmed
@@ -828,7 +836,10 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
             # tolerated when the inner still starts and ends with the family's
             # own rule glyph: the corners, family, indent, and every content
             # row's geometry were already proven. Anything else is ambiguity.
-            if ! _fm_composer_titled_bottom_ok "$family" "$bottom_inner" "$top_spaces"; then
+            if ! _fm_composer_titled_bottom_ok "$family" "$bottom_inner" "$top_spaces" \
+               && ! { [ "$content_rows" -eq 1 ] && [ "$grok_prompt_row" = 1 ] \
+                      && _fm_composer_grok_bare_bottom_ok \
+                        "$family" "$bottom_inner" "$top_spaces"; }; then
               geometry_ambiguous=1
             fi
           fi
@@ -881,6 +892,15 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
               double) content_inner=${content_inner#║}; content_inner=${content_inner%║} ;;
               ascii) content_inner=${content_inner#|}; content_inner=${content_inner%|} ;;
             esac
+            grok_content=$content_inner
+            fm_composer_normalize_trim_var grok_content
+            if [ "$content_rows" -eq 1 ]; then
+              case "$grok_content" in
+                '❯'*) grok_prompt_row=1 ;;
+              esac
+            else
+              grok_prompt_row=0
+            fi
             if content_spaces=$(fm_composer_geometry_spaces "$content_inner"); then
               [ "$content_spaces" = "$top_spaces" ] || geometry_ambiguous=1
             else
@@ -898,6 +918,33 @@ EOF
   if [ -n "$cy" ] && [ "$top" -ge 0 ] && [ "$top" -lt "$cy" ]; then
     FM_COMPOSER_SCAN_UNSAFE=1
   fi
+}
+
+# _fm_composer_grok_bare_bottom_ok: 0 only for Grok 1.0.34's exact
+# model/effort/autonomy title on a rounded bottom border whose terminal width
+# still matches the top border. The caller additionally requires exactly one
+# content row beginning with `❯`, so neither this vendor string nor the glyph
+# can carry the empty verdict alone. Mapping the one U+00B7 title separator to
+# one ASCII cell before the existing geometry fold preserves its display width
+# under both UTF-8 locales and LC_ALL=C.
+_fm_composer_grok_bare_bottom_ok() {  # <family> <bottom-inner> <top-spaces>
+  local family=$1 inner=$2 expected=$3 title spaces
+  [ "$family" = rounded ] || return 1
+  fm_composer_normalize_trim_var inner
+  case "$inner" in
+    '─'*'─') ;;
+    *) return 1 ;;
+  esac
+  title=$inner
+  while [ "${title#─}" != "$title" ]; do title=${title#─}; done
+  while [ "${title%─}" != "$title" ]; do title=${title%─}; done
+  fm_composer_normalize_trim_var title
+  fm_composer_idle_matches "$title" "$FM_COMPOSER_GROK_BOTTOM_TITLE_RE_DEFAULT" sensitive \
+    || return 1
+  spaces=${inner//·/.}
+  spaces=${spaces//─/ }
+  spaces=$(printf '%s' "$spaces" | LC_ALL=C sed 's/[!-~]/ /g')
+  [ "$spaces" = "$expected" ]
 }
 
 # 0 when a mismatched bottom border reads as a legitimate TITLE: the trimmed

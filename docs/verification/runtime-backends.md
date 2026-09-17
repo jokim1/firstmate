@@ -600,6 +600,20 @@ Issue #3436's recorded idle capture reproduced the cause on 2026-09-14: Grok 1.0
 The classifier now accepts only that exact three-column overhang (`FM_COMPOSER_GROK_TITLE_OVERHANG` in `bin/fm-composer-lib.sh`) carrying a typed `Grok <model> (<effort>)` title; the portable regressions feed the real capture through both the shared Herdr capability profile and `fm_backend_herdr_composer_state`, and prove idle is `empty`, typed content is `pending`, and an unrecognized oversized title remains `unknown`.
 Grok was not installed on the verification machine for this 2026-09-14 change, so the live guard still owes a refresh against the current release rather than treating the portable capture as current live evidence; the three-column width is not live-verified and may need adjustment if Grok's title rendering changes or scales with title length.
 This closes only #3436's idle-composer-misclassification symptom (Grok/Herdr composer read `unknown` instead of `empty`, blocking away-mode injection). The issue's second symptom - a leftover watcher never yielding and never being taken over or refused at AFK start - is unrelated to composer classification and is tracked separately in #2270, where #3436's reproduction serves as corroborating evidence.
+
+The Grok-specific path was refreshed on 2026-09-17 against installed Grok 1.0.34 in a scratch Git repository on an isolated tmux socket.
+This run proved the fresh bare-`❯` box with `Grok 4.5 (high) · always-approve` on its bottom border classified `empty`, then proved the real `fm-control exit` path stopped Grok while preserving the exact endpoint.
+
+```sh
+FM_GROK_CONTROL_EXIT_LIVE_E2E=1 bin/fm-test-run.sh tests/fm-grok-control-exit-live-e2e.test.sh
+```
+
+```text
+ok - grok (grok 1.0.34 (3736acbc8658)): fresh scratch-repository composer classifies empty
+ok - grok (grok 1.0.34 (3736acbc8658)): fm-control exit stopped the agent and preserved the endpoint
+```
+
+That result supplies the live current-release refresh that the 1.0.5 portable overhang record could not.
 Cursor is deliberately outside this cursor-anchored empty-composer matrix because its terminal cursor is parked outside the composer; tmux's Cursor-specific, process-identity-gated cursorless fallback is covered by the [Cursor Agent CLI](#cursor-agent-cli) section's separate live evidence and drift guard.
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.

@@ -1,7 +1,7 @@
 # Grok Build
 
 The xAI `grok` TUI is Claude-Code-compatible.
-Verified initially on 2026-06-29 with 0.2.73, slash submission on 2026-07-03 with 0.2.82, effort on 2026-07-13 with 0.2.99, and exit on 2026-07-19 with 0.2.103.
+Verified initially on 2026-06-29 with 0.2.73, slash submission on 2026-07-03 with 0.2.82, effort on 2026-07-13 with 0.2.99, exit on 2026-07-19 with 0.2.103, and the current composer plus exit on 2026-09-17 with 1.0.34.
 Launch shape: `grok --always-approve "$(cat <brief>)"`.
 
 ## Operating facts
@@ -11,6 +11,7 @@ Launch shape: `grok --always-approve "$(cat <brief>)"`.
 | Busy state | The last rendered-tail fallback, isolated to Grok pending a semantic source: ASCII mid-turn `Ctrl+c:cancel`, absent from idle bar `Shift+Tab:mode │ Ctrl+.:shortcuts`, never the locale-fragile braille spinner. |
 | Exit | `/exit` prints `Resume this session with: grok --resume <session-id>`; fallback is `Ctrl+Q` twice within 1000ms, `Ctrl+D` quits in VS Code-family terminals, and `Ctrl+C` interrupts. |
 | Interrupt | Single `Ctrl+C`; Escape only focuses scrollback. |
+| Composer | Grok 1.0.34 draws a bare `❯` prompt inside a complete rounded box, with `Grok <model> (<effort>) · always-approve` on the bottom border. |
 | Skill | `/<skill>`, for example `/no-mistakes`, with end-to-end user-skill discovery, invocation, and real `no-mistakes axi run` evidence; the popup may consume Enter and fill an argument placeholder, requiring a real second Enter. |
 | Autonomy | `--always-approve`, footer `· always-approve`, verified unattended; `--permission-mode bypassPermissions` is stronger equivalent. |
 | Marker | `GROK_AGENT=1` on child or tool processes in 0.2.73 and no `CLAUDECODE`; a 1.0.0 hook instead had `GROK_HOOK_EVENT`, `GROK_HOOK_NAME`, `GROK_SESSION_ID`, and `GROK_WORKSPACE_ROOT` without `GROK_AGENT`, so ancestry guarantees identity. |
@@ -37,7 +38,9 @@ For unavoidable non-project launch, `[hints] project_picker_disabled = true` in 
 
 ## Composer
 
-Fresh placeholder `Type a message...` uses dark 24-bit TRUECOLOR, not SGR-2.
+Grok 1.0.34 renders a fresh composer as a bare `❯` inside a complete rounded box, with `Grok <model> (<effort>) · always-approve` on the bottom border and no placeholder.
+The shared classifier requires the single prompt row, the complete box, and that Grok title together for this shape; text after the glyph remains pending, and `Ctrl+c:cancel` remains an independent busy-footer signal.
+Earlier Grok releases rendered the fresh placeholder `Type a message...` in dark 24-bit TRUECOLOR, not SGR-2.
 `fm_composer_strip_ghost` in `../../../bin/fm-composer-lib.sh` drops dim or faint and truecolor below `FM_COMPOSER_GHOST_LUMA_MAX`, default 128.
 On Grok 0.2.93, real input `38;2;224;222;244` measured about 225 luminance, while borders and placeholder ranged from `38;2;50;47;70` through `38;2;110;106;134`, about 51-110, and were dropped.
 The truecolor rule assumes the fleet's dark theme; SGR-2 is theme-independent.

@@ -144,8 +144,9 @@ test_real_text_is_pending() {
 # + SGR-2 dim hint), codex 0.154.0 (the same `›` amid a braille starfield over
 # a status footer, captured through Herdr on 2026-09-15), muse (truecolor `⟩`, 38;2;90;160;255), pi (blank row
 # between solid `─` rules), opencode 1.14.46 (left-bar `┃` rows), and grok
-# 1.0.0 (bordered box with a TITLED bottom border), plus claude captured
-# inside zellij through `dump-screen --ansi` (`ESC[m` `❯` U+00A0).
+# 1.0.0 (bordered box with a TITLED bottom border), grok 1.0.34 (bare `❯`
+# with its model, effort, and autonomy title on the bottom border), plus claude
+# captured inside zellij through `dump-screen --ansi` (`ESC[m` `❯` U+00A0).
 #
 # Capability profiles mirror the real adapters' descriptors: tmux
 # (styled+cursor+identity), herdr/zellij (styled), cmux/orca (plain). Every
@@ -546,6 +547,31 @@ test_matrix_grok_titled_bottom_border() {
   pass "matrix: grok's real oversized titled bottom is empty while typed and unproved panes stay safe"
 }
 
+test_matrix_grok_1034_bare_prompt_box() {
+  # Grok 1.0.34 removed the idle placeholder and renders a bare `❯` as the
+  # box's only content, with the model, effort, and autonomy title on the
+  # BOTTOM border. The idle and busy footers differ independently below it.
+  local idle typed busy title_without_prompt incomplete
+  idle=$'  ╭──────────────────────────────────────────────────────────────────────────╮\n  │ ❯                                                                        │\n  ╰─────────────────────────────────────── Grok 4.5 (high) · always-approve ─╯\n\n  Shift+Tab:mode  │  Ctrl+.:shortcuts'
+  typed=$'  ╭──────────────────────────────────────────────────────────────────────────╮\n  │ ❯ deploy the fix                                                         │\n  ╰─────────────────────────────────────── Grok 4.5 (high) · always-approve ─╯\n\n  Shift+Tab:mode  │  Ctrl+.:shortcuts'
+  busy=$'  ╭──────────────────────────────────────────────────────────────────────────╮\n  │ ❯                                                                        │\n  ╰─────────────────────────────────────── Grok 4.5 (high) · always-approve ─╯\n\n  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+.:shortcuts'
+  title_without_prompt=$'  ╭──────────────────────────────────────────────────────────────────────────╮\n  │                                                                          │\n  ╰─────────────────────────────────────── Grok 4.5 (high) · always-approve ─╯'
+  incomplete=$'  │ ❯                                                                        │\n  ╰─────────────────────────────────────── Grok 4.5 (high) · always-approve ─╯'
+
+  assert_screen "grok 1.0.34 bare prompt on tmux" empty "$CAPS_TMUX" "$idle" 1
+  assert_screen "grok 1.0.34 typed text on tmux" pending "$CAPS_TMUX" "$typed" 1
+  assert_screen "grok 1.0.34 busy footer keeps empty composer" empty "$CAPS_TMUX" "$busy" 1
+  assert_screen "grok 1.0.34 title without prompt proof" unknown \
+    "$CAPS_TMUX" "$title_without_prompt" 1
+  assert_screen "grok 1.0.34 prompt without a complete box" unknown \
+    "$CAPS_TMUX" "$incomplete" 0
+  printf '%s\n' "$idle" | fm_busy_lines_match grok \
+    && fail "grok 1.0.34 idle footer must not match the independent busy signal"
+  printf '%s\n' "$busy" | fm_busy_lines_match grok \
+    || fail "grok 1.0.34 busy footer must match independently of composer emptiness"
+  pass "matrix: grok 1.0.34 proves its bare prompt box while typed text and busy state stay independent"
+}
+
 test_matrix_kimi_bordered_shell_glyph_box() {
   # Kimi's bordered `│ > │` composer - the shape fm-spawn.sh's retired
   # spawn-local regex used to own. Now the shared owner proves it everywhere,
@@ -792,6 +818,7 @@ test_matrix_codex_idle_starfield_furniture
 test_matrix_pi_separated_needs_identity
 test_matrix_opencode_leftbar_signals
 test_matrix_grok_titled_bottom_border
+test_matrix_grok_1034_bare_prompt_box
 test_matrix_kimi_bordered_shell_glyph_box
 test_matrix_claude_inside_zellij_ansi_dump
 test_strict_blank_row_divergence
