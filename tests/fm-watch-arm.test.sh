@@ -706,6 +706,38 @@ SH
   pass "watch-arm: an idle Lavish source stays quiet and its real result wakes promptly"
 }
 
+test_append_wakes_live_announced_watcher() {
+  local dir home state fakebin first_out idle_out
+  dir=$(make_case append-after-empty-recovery)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  first_out="$dir/first-arm.out"
+  idle_out="$dir/idle-arm.out"
+  mkdir -p "$home/data"
+  printf 'pending:downtime:append-after-empty.fixture\n' > "$state/.watcher-down"
+
+  start_rearm_arm "$home" "$state" "$fakebin" "$first_out"
+  wait_for_exit "$ARM_PID" 80 || fail "the initial empty recovery did not surface"
+  grep -F 'check: rearm-resurface' "$first_out" >/dev/null \
+    || fail "the initial empty recovery was not announced"
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "the empty recovery unexpectedly queued durable work"
+
+  start_rearm_arm "$home" "$state" "$fakebin" "$idle_out"
+  is_live_non_zombie "$ARM_PID" \
+    || fail "the announced empty recovery did not leave a live watcher"
+  append_wake "$state" check inbox:fixture 'check: captain inbox note fixture' \
+    || fail "the generic producer could not append its wake"
+  wait_for_exit "$ARM_PID" 80 \
+    || fail "the live watcher stranded work appended after an empty recovery"
+  grep -F 'check: rearm-resurface' "$idle_out" >/dev/null \
+    || fail "the appended wake did not reopen recovery: $(cat "$idle_out")"
+  grep "$(printf '\tcheck\tinbox:fixture\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the appended wake was not durable when recovery surfaced"
+  pass "watch-arm: appending work reopens an announced empty recovery"
+}
+
 # Exercise the handling-window recovery invariant owned by
 # docs/watcher-continuity.md through real watcher processes.
 test_handling_window_close_keeps_the_acknowledgement_valid() {
@@ -927,6 +959,7 @@ test_recovery_consumption_serializes_queue_publication
 test_restart_preserves_recovery_across_reused_pid_lock
 test_markerless_legacy_queue_is_recovered_on_arm
 test_idle_lavish_source_stays_quiet_until_result
+test_append_wakes_live_announced_watcher
 test_handling_window_close_keeps_the_acknowledgement_valid
 test_moved_generation_acknowledgement_is_self_healing
 test_downtime_marker_does_not_follow_symlink

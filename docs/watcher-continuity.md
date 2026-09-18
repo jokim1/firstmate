@@ -56,7 +56,8 @@ A non-successor watcher start checks the durable queue and recovery marker under
 If an announced-but-unacknowledged episode has an empty queue, the arm leaves that generation announced, making repeated empty-queue arms idempotent while a long-poll source is merely alive.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
 Every watcher close and every durable queue append publishes downtime.
-A downtime republication of a pending episode reuses its generation, an announced downtime episode stays announced, and an announced handling episode becomes pending downtime on the same generation because its handling turn may have been interrupted.
+A downtime republication of a pending episode reuses its generation, a watcher close leaves an announced downtime episode announced, and a durable append opens a fresh pending generation so a live watcher can recover the new work.
+An announced handling episode becomes pending downtime on the same generation because its handling turn may have been interrupted.
 That handling republication gives a successor exactly one recovery presentation without orphaning the acknowledgement already printed for that generation.
 An acknowledgement carries two separable facts: queue-row consumption is bound to the monotonic `--ack-through` sequence (further scoped per actor - see "Per-actor acknowledgement" below), while only retiring the episode is bound to `--recovery-generation`.
 A generation mismatch therefore does not block consumption of rows through that sequence; it is a non-fatal result that names its own remedy - re-drain, then acknowledge the newer episode.

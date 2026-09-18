@@ -648,8 +648,9 @@ _fm_recovery_marker_write_locked() {
 # Apply the downtime republication states owned by docs/watcher-continuity.md
 # while preserving an outstanding generation-bound acknowledgement.
 _fm_recovery_marker_publish() {
-  local marker=$1 kind=${2:-downtime} lock saved_token generation='' status=pending
+  local marker=$1 kind=${2:-downtime} source=${3:-watcher} lock saved_token generation='' status=pending
   case "$kind" in handling|downtime) ;; *) return 1 ;; esac
+  case "$source" in watcher|append) ;; *) return 1 ;; esac
   lock="${marker}.lock"
   fm_lock_acquire_wait "$lock" || return 1
   if [ -d "$marker" ] && [ ! -L "$marker" ]; then
@@ -672,8 +673,10 @@ _fm_recovery_marker_publish() {
           status=pending
           ;;
         announced:downtime:*)
-          generation=${FM_RECOVERY_MARKER_TOKEN##*:}
-          status=announced
+          if [ "$source" = watcher ]; then
+            generation=${FM_RECOVERY_MARKER_TOKEN##*:}
+            status=announced
+          fi
           ;;
       esac
     fi
@@ -1839,7 +1842,7 @@ fm_wake_append_locked() {
   recovery_marker="$STATE/.watcher-down"
   status=0
 
-  _fm_recovery_marker_publish "$recovery_marker" downtime || status=$?
+  _fm_recovery_marker_publish "$recovery_marker" downtime append || status=$?
   if [ "$status" -eq 0 ]; then
     seq=$(cat "$seq_file" 2>/dev/null || echo 0)
     case "$seq" in
