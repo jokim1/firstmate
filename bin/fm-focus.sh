@@ -52,10 +52,11 @@
 # Wake emission:
 #   After publishing suspend, resume, complete, and switch transitions, attempt
 #   one durable wake asynchronously so supervision re-evaluates without delaying
-#   the owner command. Phase 0 uses kind=signal key=focus with payload
-#   "focus: <transition>". When the Phase 2 advisory refill kind is present on
-#   the base, prefer that instead; this branch deliberately does not stack on
-#   fm/fm-refill-wake-phase2. Wake failure never changes mutation success.
+#   the owner command. The pre-prompt adapter invokes switch with
+#   FM_FOCUS_PROMPT_ACTIVE=1 under the exception owned by
+#   docs/watcher-continuity.md. Other callers first try kind=refill key=focus
+#   with payload "focus: <transition>", then fall back to kind=signal when the
+#   queue does not accept refill. Wake failure never changes mutation success.
 #
 # Exit codes:
 #   0 success (including idempotent no-op)
@@ -489,8 +490,12 @@ cmd_switch() {
   fi
   lock_release "$lock"
 
-  # Wake outside the lock after the durable snapshot is visible.
-  emit_focus_wake switched
+  # Wake outside the lock after the durable snapshot is visible. A pre-prompt
+  # hook is already running inside the turn that observes this switch, so a
+  # second durable wake would only re-open the same work.
+  if [ "${FM_FOCUS_PROMPT_ACTIVE:-0}" != 1 ]; then
+    emit_focus_wake switched
+  fi
   printf '%s\n' "$next" | jq -c .
   exit 0
 }

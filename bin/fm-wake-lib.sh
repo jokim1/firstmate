@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Shared durable wake queue and portable lock helpers.
+# docs/watcher-continuity.md owns the recovery-episode state contract.
 
 FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
@@ -651,11 +652,8 @@ _fm_recovery_marker_write_locked() {
   fi
 }
 
-# Preserve a pending or announced episode's generation across downtime
-# republication so its outstanding acknowledgement remains usable, and keep an
-# already-announced generation announced so it cannot be re-presented until a
-# new down stretch mints a new generation.
-# docs/watcher-continuity.md owns the recovery contract and sequence-safety rationale.
+# Apply the downtime republication states owned by docs/watcher-continuity.md
+# while preserving an outstanding generation-bound acknowledgement.
 _fm_recovery_marker_publish() {
   local marker=$1 kind=${2:-downtime} lock saved_token generation='' status=pending
   case "$kind" in handling|downtime) ;; *) return 1 ;; esac
@@ -676,7 +674,11 @@ _fm_recovery_marker_publish() {
           generation=${FM_RECOVERY_MARKER_TOKEN##*:}
           status=pending
           ;;
-        announced:handling:*|announced:downtime:*)
+        announced:handling:*)
+          generation=${FM_RECOVERY_MARKER_TOKEN##*:}
+          status=pending
+          ;;
+        announced:downtime:*)
           generation=${FM_RECOVERY_MARKER_TOKEN##*:}
           status=announced
           ;;
@@ -836,27 +838,33 @@ _fm_recovery_marker_arm_check() {
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }
 
-# A non-successor watcher start after an announced-but-unacked episode is a new
-# down stretch: mint a fresh pending generation so a still-open decision or
-# buried note can be presented once more. Handling successors must not call
-# this, because Option B re-arm is not a new down stretch.
+# Apply the owner-documented announced-episode arm transition atomically with
+# the queue read. Handling successors must not call this transition.
 _fm_recovery_marker_reopen_announced() {
   local marker=$1 lock
   lock="${marker}.lock"
-  fm_lock_acquire_wait "$lock" || return 1
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
+  if ! fm_lock_acquire_wait "$lock"; then
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+    return 1
+  fi
   if ! fm_recovery_marker_read "$marker"; then
     fm_lock_release "$lock"
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
     return 0
   fi
   case "$FM_RECOVERY_MARKER_TOKEN" in
     announced:*)
-      if ! _fm_recovery_marker_write_locked "$marker" downtime ""; then
+      if [ -s "$FM_WAKE_QUEUE" ] \
+        && ! _fm_recovery_marker_write_locked "$marker" downtime ""; then
         fm_lock_release "$lock"
+        fm_lock_release "$FM_WAKE_QUEUE_LOCK"
         return 1
       fi
       ;;
   esac
   fm_lock_release "$lock"
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }
 
 fm_recovery_transition() {

@@ -302,6 +302,29 @@ test_hook_bounds_focus_lock_wait_and_updates_uncontended() {
   pass "prompt hook honors its internal lock deadline when contended and updates when uncontended"
 }
 
+test_background_completion_prompt_records_focus_without_refill() {
+  local root state tries=0
+  root="$TMP_ROOT/background-completion-root"
+  state="$root/state"
+  mkdir -p "$root/bin" "$state"
+  : > "$root/AGENTS.md"
+  git -C "$root" init -q || fail "failed to create background-completion primary fixture"
+
+  FM_ROOT_OVERRIDE="$root" FM_HOME="$root" FM_STATE_OVERRIDE="$state" \
+    "$HOOK" --grok --prompt "Task completed in 16.8s: watcher background task finished" \
+    >/dev/null 2>&1 || fail "background-completion prompt hook failed"
+  [ "$(jq -r '.active.summary // empty' "$state/.focus.json")" = \
+    "Task completed in 16.8s: watcher background task finished" ] \
+    || fail "background-completion prompt was not recorded as focus"
+  while [ ! -s "$state/.wake-queue" ] && [ "$tries" -lt 10 ]; do
+    sleep 0.02
+    tries=$((tries + 1))
+  done
+  [ ! -s "$state/.wake-queue" ] \
+    || fail "a prompt-driven focus switch enqueued a redundant refill: $(cat "$state/.wake-queue")"
+  pass "background-task completion prompts record focus without a redundant refill wake"
+}
+
 # --- portable harness wiring regression --------------------------------------
 
 test_tracked_claude_userprompt_wires_focus_hook() {
@@ -384,6 +407,7 @@ test_fail_open_unwritable_state_via_owner
 test_hook_fail_open_unwritable
 test_hook_skips_operational_input
 test_hook_bounds_focus_lock_wait_and_updates_uncontended
+test_background_completion_prompt_records_focus_without_refill
 test_tracked_claude_userprompt_wires_focus_hook
 test_tracked_codex_userprompt_wires_focus_hook
 test_tracked_grok_userprompt_wires_focus_hook

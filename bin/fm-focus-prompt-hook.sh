@@ -5,6 +5,7 @@
 # Pi input, OpenCode message events, etc.). Translates the harness event into
 # one call of bin/fm-focus.sh switch so a new captain prompt durably suspends
 # any nonterminal active focus before the model takes the new work.
+# docs/watcher-continuity.md owns the prompt-driven no-follow-up-wake contract.
 #
 # ALWAYS fail-open: this script exits 0 on every path. A focus-record failure,
 # missing jq, unwritable state, non-primary scope, or operational/injected input
@@ -159,6 +160,6 @@ fi
 # Cap this adapter at the owner's 40-attempt default regardless of ambient
 # overrides. bin/fm-focus.sh owns the retry cadence; this is currently 39 sleeps
 # (about 1.95s), below every tracked harness timeout.
-FM_FOCUS_LOCK_TRIES=$PROMPT_FOCUS_LOCK_TRIES \
+FM_FOCUS_PROMPT_ACTIVE=1 FM_FOCUS_LOCK_TRIES=$PROMPT_FOCUS_LOCK_TRIES \
   "$SCRIPT_DIR/fm-focus.sh" "${args[@]}" >/dev/null 2>&1 || true
 exit 0
