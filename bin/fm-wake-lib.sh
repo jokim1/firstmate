@@ -606,6 +606,9 @@ fm_lock_recheck_stale_owner() {
 
 FM_RECOVERY_MARKER_TOKEN=
 FM_RECOVERY_MARKER_ACTION='none'
+FM_RECOVERY_MARKER_WRITTEN_TOKEN=
+FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN=
+FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN=
 
 # Token grammar (one owner): <pending|announced|acked>:<handling|downtime>:<generation>
 # docs/watcher-continuity.md owns the recovery-episode contract, including the
@@ -632,25 +635,33 @@ _fm_atomic_replace() {
 }
 
 _fm_recovery_marker_write_locked() {
-  local marker=$1 kind=$2 generation=${3:-} status=${4:-pending} tmp
+  local marker=$1 kind=$2 generation=${3:-} status=${4:-pending} tmp token
+  FM_RECOVERY_MARKER_WRITTEN_TOKEN=
   case "$kind" in handling|downtime) ;; *) return 1 ;; esac
   case "$status" in pending|announced) ;; *) return 1 ;; esac
   tmp=$(mktemp "${marker}.tmp.XXXXXX") || return 1
   [ -n "$generation" ] || generation="$(fm_current_pid).$(date +%s).${tmp##*.}"
-  if ! printf '%s:%s:%s\n' "$status" "$kind" "$generation" > "$tmp" \
+  token="$status:$kind:$generation"
+  if ! printf '%s\n' "$token" > "$tmp" \
     || ! chmod 0600 "$tmp" \
     || ! _fm_atomic_replace "$tmp" "$marker"; then
     rm -f -- "$tmp"
     return 1
   fi
+  FM_RECOVERY_MARKER_WRITTEN_TOKEN=$token
 }
 
 # Apply the downtime republication states owned by docs/watcher-continuity.md
 # while preserving an outstanding generation-bound acknowledgement.
 _fm_recovery_marker_publish() {
   local marker=$1 kind=${2:-downtime} source=${3:-watcher} lock saved_token generation='' status=pending
+  local previous_append_token=''
   case "$kind" in handling|downtime) ;; *) return 1 ;; esac
   case "$source" in watcher|append) ;; *) return 1 ;; esac
+  if [ "$source" = append ]; then
+    FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN=
+    FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN=
+  fi
   lock="${marker}.lock"
   fm_lock_acquire_wait "$lock" || return 1
   if [ -d "$marker" ] && [ ! -L "$marker" ]; then
@@ -676,6 +687,8 @@ _fm_recovery_marker_publish() {
           if [ "$source" = watcher ]; then
             generation=${FM_RECOVERY_MARKER_TOKEN##*:}
             status=announced
+          elif [ ! -s "$FM_WAKE_QUEUE" ]; then
+            previous_append_token=$FM_RECOVERY_MARKER_TOKEN
           fi
           ;;
       esac
@@ -686,6 +699,29 @@ _fm_recovery_marker_publish() {
     fm_lock_release "$lock"
     return 1
   fi
+  if [ -n "$previous_append_token" ]; then
+    FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN=$previous_append_token
+    FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN=$FM_RECOVERY_MARKER_WRITTEN_TOKEN
+  fi
+  fm_lock_release "$lock"
+}
+
+_fm_wake_append_recovery_restore_locked() {
+  local marker="$STATE/.watcher-down" lock previous=$FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN
+  [ -n "$previous" ] || return 0
+  lock="${marker}.lock"
+  fm_lock_acquire_wait "$lock" || return 1
+  if ! fm_recovery_marker_read "$marker" \
+    || [ "$FM_RECOVERY_MARKER_TOKEN" != "$FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN" ]; then
+    fm_lock_release "$lock"
+    return 1
+  fi
+  if ! _fm_recovery_marker_write_locked "$marker" downtime "${previous##*:}" announced; then
+    fm_lock_release "$lock"
+    return 1
+  fi
+  FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN=
+  FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN=
   fm_lock_release "$lock"
 }
 
@@ -1854,7 +1890,46 @@ fm_wake_append_locked() {
   if [ "$status" -eq 0 ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$epoch" "$seq" "$kind" "$clean_key" "$clean_payload" >> "$FM_WAKE_QUEUE" || status=$?
   fi
+  if [ "$status" -ne 0 ] && [ ! -s "$FM_WAKE_QUEUE" ]; then
+    _fm_wake_append_recovery_restore_locked || true
+  fi
   return "$status"
+}
+
+fm_wake_append_rollback_locked() {
+  local queue_tmp=$1 marker="$STATE/.watcher-down" lock backup
+  if [ -z "$FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN" ]; then
+    mv -f -- "$queue_tmp" "$FM_WAKE_QUEUE"
+    return $?
+  fi
+  lock="${marker}.lock"
+  fm_lock_acquire_wait "$lock" || return 1
+  if ! fm_recovery_marker_read "$marker" \
+    || [ "$FM_RECOVERY_MARKER_TOKEN" != "$FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN" ]; then
+    fm_lock_release "$lock"
+    return 1
+  fi
+  backup=$(mktemp "${FM_WAKE_QUEUE}.rollback-original.XXXXXX") || {
+    fm_lock_release "$lock"
+    return 1
+  }
+  if ! cp -p -- "$FM_WAKE_QUEUE" "$backup" \
+    || ! mv -f -- "$queue_tmp" "$FM_WAKE_QUEUE"; then
+    rm -f -- "$backup"
+    fm_lock_release "$lock"
+    return 1
+  fi
+  if ! _fm_recovery_marker_write_locked "$marker" downtime \
+    "${FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN##*:}" announced; then
+    mv -f -- "$backup" "$FM_WAKE_QUEUE" 2>/dev/null || true
+    rm -f -- "$backup"
+    fm_lock_release "$lock"
+    return 1
+  fi
+  rm -f -- "$backup"
+  FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN=
+  FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN=
+  fm_lock_release "$lock"
 }
 
 # fm_wake_queued_keys <kind>

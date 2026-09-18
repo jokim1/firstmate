@@ -520,6 +520,7 @@ SH
   mkdir -p "$roll_home/state"
   printf 'uidvalidity=90009\n' > "$roll_home/state/.mail-seen"
   : > "$roll_home/state/.mail-woken"
+  printf 'announced:downtime:mail-rollback.fixture\n' > "$roll_home/state/.watcher-down"
   chmod 0400 "$roll_home/state/.mail-seen" "$roll_home/state/.mail-woken"
   [ -w "$roll_home/state/.mail-seen" ] && { echo "fixture unexpected: cursor still writable"; return 1; }
 
@@ -532,6 +533,9 @@ SH
   local wakeq
   wakeq=$(grep -c "check: mail 66" "$roll_home/state/.wake-queue" 2>/dev/null || true)
   expect_code 0 "$wakeq" "rolled-back wake must not stay queued without a durable record"
+  assert_equals 'announced:downtime:mail-rollback.fixture' \
+    "$(cat "$roll_home/state/.watcher-down")" \
+    "rolled-back wake restores the empty recovery episode"
 
   # Restore write access: the next poll must surface the mail fresh, exactly
   # once, as if the interrupted attempt never happened.
@@ -544,6 +548,10 @@ SH
   assert_contains "$out" "woke for 66" "retry poll surfaces the mail exactly once"
   wakeq=$(grep -c "check: mail 66" "$roll_home/state/.wake-queue" 2>/dev/null || true)
   expect_code 1 "$wakeq" "retry poll appends exactly one wake for uid 66"
+  case "$(cat "$roll_home/state/.watcher-down")" in
+    pending:downtime:*) ;;
+    *) fail "successful retry did not reopen recovery for its durable wake" ;;
+  esac
   pass "fm-mail: a wake with no durable record is rolled back, not left ackable"
 }
 

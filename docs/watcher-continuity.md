@@ -57,6 +57,7 @@ If an announced-but-unacknowledged episode has an empty queue, the arm leaves th
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
 Every watcher close and every durable queue append publishes downtime.
 A downtime republication of a pending episode reuses its generation, a watcher close leaves an announced downtime episode announced, and a durable append opens a fresh pending generation so a live watcher can recover the new work.
+If the append participates in a larger locked transaction that rolls its row back, that rollback restores the prior announced generation before releasing the queue lock.
 An announced handling episode becomes pending downtime on the same generation because its handling turn may have been interrupted.
 That handling republication gives a successor exactly one recovery presentation without orphaning the acknowledgement already printed for that generation.
 An acknowledgement carries two separable facts: queue-row consumption is bound to the monotonic `--ack-through` sequence (further scoped per actor - see "Per-actor acknowledgement" below), while only retiring the episode is bound to `--recovery-generation`.
