@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install or remove Firstmate's guarded Kimi crew turn-end hook.
+# Install or remove Firstmate's guarded Kimi turn-end hook.
 #
 # This command is the sole owner of the text-level edit to
 # $HOME/.kimi-code/config.toml. It validates the existing TOML but never
@@ -9,10 +9,11 @@
 # the markers instead of refusing. Missing, malformed, symlinked, partially
 # marked, or otherwise surprising config is refused without a config write.
 #
-# The installed Stop hook always exits 0 and stays silent. It reads cwd from the
-# hook payload, checks for a .fm-kimi-turnend pointer before registry work, and
-# touches a task turn-end marker only when the pointer names a Firstmate-created
-# token in $HOME/.kimi-code/fm-turn-end.d/.
+# The installed Stop hook reads cwd from the hook payload and checks for a
+# .fm-kimi-turnend pointer before registry work.
+# A crew token stays silent, exits 0, and touches its task turn-end marker.
+# A secondmate-primary token delegates to that home's tracked turn-end guard,
+# preserving its exit status and stderr reason for the Kimi host to interpret.
 #
 # Usage:
 #   fm-kimi-turnend-hook.sh install
@@ -72,12 +73,13 @@ END = b"# END FIRSTMATE KIMI TURN-END HOOK"
 IDENTIFIER = b"FIRSTMATE KIMI TURN-END HOOK"
 HOOK_NAME = b"fm-turn-end.sh"
 TOKEN_NAME = re.compile(r"fm\.[A-Za-z0-9]{12}\Z")
+COMMAND = b'command = "bash \\"$HOME/.kimi-code/fm-turn-end.sh\\""'
+LEGACY_COMMAND = b'command = "bash \\"$HOME/.kimi-code/fm-turn-end.sh\\" >/dev/null 2>&1 || true"'
 
 HOOK_BYTES = b'''#!/usr/bin/env bash
 # Firstmate Kimi turn-end hook. Managed by fm-kimi-turnend-hook.sh.
-# This hook is deliberately passive: every path is silent and exits zero.
+# Crew paths are passive; a registered secondmate primary preserves its guard result.
 set +e
-exec >/dev/null 2>&1
 payload=
 IFS= read -r payload || [ -n "$payload" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -92,9 +94,25 @@ case "$token" in *[!A-Za-z0-9._-]*) exit 0 ;; esac
 auth_dir=${HOME:-}/.kimi-code/fm-turn-end.d
 [ -n "${HOME:-}" ] || exit 0
 target=$(cat "$auth_dir/$token" 2>/dev/null) || exit 0
-case "$target" in /*.turn-ended) : ;; *) exit 0 ;; esac
-touch -- "$target" 2>/dev/null || true
-exit 0
+case "$target" in
+  /*.turn-ended)
+    touch -- "$target" 2>/dev/null || true
+    exit 0
+    ;;
+  primary=/*)
+    home=${target#primary=}
+    newline='
+'
+    case "$home" in *"$newline"*) exit 0 ;; esac
+    [ -f "$home/.fm-secondmate-home" ] || exit 0
+    [ -f "$home/bin/fm-turnend-guard.sh" ] || exit 0
+    printf '%s\n' "$payload" | FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+      FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= \
+      bash "$home/bin/fm-turnend-guard.sh"
+    exit $?
+    ;;
+  *) exit 0 ;;
+esac
 '''
 
 
@@ -157,14 +175,14 @@ def locate_region(data: bytes):
     return start, after, marker
 
 
-def block(marker: bytes) -> bytes:
+def block(marker: bytes, command: bytes = COMMAND) -> bytes:
     return b"\n".join(
         (
             marker,
             b"[[hooks]]",
             b'event = "Stop"',
             b'matcher = "^$"',
-            b'command = "bash \\"$HOME/.kimi-code/fm-turn-end.sh\\" >/dev/null 2>&1 || true"',
+            command,
             b"timeout = 1",
             END,
             b"",
@@ -172,11 +190,11 @@ def block(marker: bytes) -> bytes:
     )
 
 
-def canonical_body() -> bytes:
+def canonical_body(command: bytes = COMMAND) -> bytes:
     # The exact hook table install writes between its markers. A Kimi login
     # rewrite that strips only the markers leaves these bytes behind; install
     # adopts them instead of refusing.
-    return b"\n".join(block(BEGIN).split(b"\n")[1:6]) + b"\n"
+    return b"\n".join(block(BEGIN, command).split(b"\n")[1:6]) + b"\n"
 
 
 ADOPTED_NOTICE = (
@@ -237,13 +255,13 @@ def block_tail_is_clean(data: bytes, end: int) -> bool:
 
 def adopt_unmarked_block(data: bytes) -> bytes:
     """Re-wrap one unmarked byte-identical Stop hook block in Firstmate markers."""
-    body = canonical_body()
     spans = []
-    at = data.find(body)
-    while at >= 0:
-        if at == 0 or data[at - 1 : at] == b"\n":
-            spans.append((at, at + len(body)))
-        at = data.find(body, at + 1)
+    for body in (canonical_body(), canonical_body(LEGACY_COMMAND)):
+        at = data.find(body)
+        while at >= 0:
+            if at == 0 or data[at - 1 : at] == b"\n":
+                spans.append((at, at + len(body)))
+            at = data.find(body, at + 1)
     if len(spans) > 1:
         refuse(f"config.toml holds {len(spans)} unmarked byte-identical Firstmate Stop hook blocks.")
     if spans and block_tail_is_clean(data, spans[0][1]):

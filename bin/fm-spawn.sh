@@ -290,7 +290,9 @@
 #     __AGYBIN__    resolved, agy-verified executable for an agy launch
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
-# a firstmate-owned global hook and registry, and a gitignored per-task pointer.
+# a firstmate-owned global hook and registry, and a gitignored pointer.
+# Crew pointers publish a turn-end marker; Kimi secondmate pointers delegate
+# their own primary Stop boundary to the tracked turn-end guard in that home.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
 # muse installs no hook at all - its plugin engine is off in the default build - so
@@ -2340,12 +2342,10 @@ case "$LAUNCH" in
 *__KIMIBIN__*)
   KIMI_BIN=$(resolve_kimi_binary) || exit 1
   LAUNCH=${LAUNCH//__KIMIBIN__/$(shell_quote "$KIMI_BIN")}
-  if [ "$KIND" != secondmate ]; then
-    "$FM_ROOT/bin/fm-kimi-turnend-hook.sh" install || {
-      echo "error: refusing Kimi spawn because the global turn-end hook could not be installed safely" >&2
-      exit 1
-    }
-  fi
+  "$FM_ROOT/bin/fm-kimi-turnend-hook.sh" install || {
+    echo "error: refusing Kimi spawn because the global turn-end hook could not be installed safely" >&2
+    exit 1
+  }
   ;;
 esac
 
@@ -4095,7 +4095,7 @@ EOF
     # Kimi's Stop hook is global, but it is inert unless cwd contains this
     # task's token pointer and the token resolves through Firstmate's private
     # registry. The installer above owns the format-preserving config edit and
-    # the always-zero, silent hook script.
+    # the crew record's always-zero, silent marker path.
     KIMI_AUTH_DIR="$HOME/.kimi-code/fm-turn-end.d"
     old_umask=$(umask)
     umask 077
@@ -4107,6 +4107,19 @@ EOF
     exclude_path '.fm-kimi-turnend'
     ;;
   esac
+elif [ "$HARNESS" = kimi ]; then
+  # A Kimi secondmate is a primary firstmate session, not a crew worker.
+  # Its private registry record routes this home's Stop payload to the tracked
+  # primary guard, whose exit 2 and stderr reason are returned for Kimi to
+  # interpret when supervision is needed but no healthy watcher holds the home.
+  KIMI_AUTH_DIR="$HOME/.kimi-code/fm-turn-end.d"
+  old_umask=$(umask)
+  umask 077
+  auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
+  umask "$old_umask"
+  printf 'primary=%s\n' "$PROJ_ABS" >"$auth_file"
+  printf '%s\n' "${auth_file##*/}" >"$STATE/$ID.kimi-turnend-token"
+  printf 'token=%s\n' "${auth_file##*/}" >"$WT/.fm-kimi-turnend"
 fi
 
 # Delivery posture recorded in meta so fm-teardown's safety check and the

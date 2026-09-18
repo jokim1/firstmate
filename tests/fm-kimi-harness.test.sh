@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for the verified Kimi Code CLI crewmate adapter.
+# Behavior tests for the verified Kimi Code CLI crewmate and secondmate adapter.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -182,6 +182,25 @@ run_spawn() {
     FM_KIMI_READY_POLLS=2 FM_KIMI_DELIVERY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
     PATH="$fakebin:$BASE_PATH" \
     "$SPAWN" "$id" "$proj" --harness kimi --mode no-mistakes --yolo off "$@" 2>&1
+}
+
+run_secondmate_spawn() {
+  local case_dir=$1 home=$2 mate=$3 fakebin=$4 id=$5
+  HOME="$home" FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_SKIP_SECONDMATE_SYNC=1 FM_SKIP_SECONDMATE_INHERIT=1 \
+    FM_BACKEND=tmux FM_FAKE_PANE_PATH="$mate" TMUX="fake,1,0" \
+    FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" \
+    FM_FAKE_POINTER_LOG="$case_dir/pointer.log" \
+    FM_FAKE_KIMI_STATE="$case_dir/kimi.state" \
+    FM_FAKE_KIMI_SWALLOWED="$case_dir/kimi.swallowed" \
+    FM_FAKE_KIMI_SWALLOW_FIRST=no \
+    FM_FAKE_TMUX_CALL_LOG="$case_dir/tmux-calls.log" \
+    FM_FAKE_BRIEF_REAL="$mate/data/charter.md" \
+    FM_KIMI_READY_POLLS=2 FM_KIMI_DELIVERY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
+    PATH="$fakebin:$BASE_PATH" \
+    "$SPAWN" "$id" "$mate" kimi --secondmate 2>&1
 }
 
 read_spawn_record() {
@@ -403,6 +422,36 @@ PY
   pass "Kimi hook install adopts an unmarked byte-identical Stop hook block"
 }
 
+test_kimi_hook_install_upgrades_unmarked_legacy_block() {
+  local home config out rc count
+  home="$TMP_ROOT/config-adopt-legacy"
+  config="$home/.kimi-code/config.toml"
+  mkdir -p "$home/.kimi-code"
+  cat > "$config" <<'EOF'
+# Captain config
+default_model = "test"
+
+[[hooks]]
+event = "Stop"
+matcher = "^$"
+command = "bash \"$HOME/.kimi-code/fm-turn-end.sh\" >/dev/null 2>&1 || true"
+timeout = 1
+EOF
+
+  out=$(HOME="$home" "$KIMI_HOOK" install 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "install did not adopt the previous unmarked Firstmate Stop block"
+  assert_contains "$out" "adopted" "legacy adopting install did not report its adoption"
+  assert_contains "$(cat "$config")" \
+    "command = \"bash \\\"\$HOME/.kimi-code/fm-turn-end.sh\\\"\"" \
+    "legacy adoption did not upgrade the command to preserve primary guard status"
+  assert_no_grep '>/dev/null 2>&1 || true' "$config" \
+    "legacy adoption retained the always-zero command"
+  count=$(grep -c '^# BEGIN FIRSTMATE KIMI TURN-END HOOK' "$config")
+  [ "$count" -eq 1 ] || fail "legacy adopting install left $count Firstmate regions"
+  pass "Kimi hook install upgrades an unmarked legacy Stop block"
+}
+
 test_kimi_hook_install_refuses_differing_unmarked_stop_block() {
   local home config before out rc
   home="$TMP_ROOT/config-differ"
@@ -416,7 +465,7 @@ default_model = "test"
 [[hooks]]
 event = "Stop"
 matcher = "^$"
-command = "bash \"$HOME/.kimi-code/fm-turn-end.sh\" >/dev/null 2>&1 || true"
+command = "bash \"$HOME/.kimi-code/fm-turn-end.sh\""
 timeout = 5
 EOF
   cp "$config" "$before"
@@ -434,7 +483,7 @@ default_model = "test"
 [[hooks]]
 event = "Stop"
 matcher = "^$"
-command = "bash \"$HOME/.kimi-code/fm-turn-end.sh\" >/dev/null 2>&1 || true"
+command = "bash \"$HOME/.kimi-code/fm-turn-end.sh\""
 timeout = 1
 silent = true
 EOF
@@ -515,6 +564,62 @@ test_kimi_hook_is_silent_and_requires_registered_workspace_token() {
   assert_absent "$target" "Kimi hook without jq touched the turn-end marker"
   pass "Kimi hook stays silent and inert without a Firstmate registry token"
 }
+
+test_kimi_secondmate_stop_hook_returns_block_without_watcher() (
+  local case_dir home mate fakebin id out rc hook token child_pid payload
+  case_dir="$TMP_ROOT/secondmate-primary"
+  home="$case_dir/home"
+  mate="$case_dir/mate"
+  id=kimi-primary-z9
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config" "$home/.kimi-code"
+  printf '# Kimi test config\ndefault_model = "test"\n' > "$home/.kimi-code/config.toml"
+  mkdir -p "$mate/data" "$mate/state" "$mate/config" "$mate/projects"
+  cp -R "$ROOT/bin" "$mate/bin"
+  mkdir -p "$mate/docs"
+  cp -R "$ROOT/docs/supervision-protocols" "$mate/docs/supervision-protocols"
+  printf '# Firstmate\n' > "$mate/AGENTS.md"
+  printf '%s\n' "$id" > "$mate/.fm-secondmate-home"
+  printf '# Charter\nSupervise child work.\n' > "$mate/data/charter.md"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake")
+  : > "$case_dir/launch.log"
+  : > "$case_dir/pointer.log"
+  : > "$case_dir/kimi.state"
+  : > "$case_dir/tmux-calls.log"
+
+  out=$(run_secondmate_spawn "$case_dir" "$home" "$mate" "$fakebin" "$id")
+  rc=$?
+  expect_code 0 "$rc" "Kimi secondmate spawn should register its primary Stop hook: $out"
+  hook="$home/.kimi-code/fm-turn-end.sh"
+  token=$(sed -n 's/^token=//p' "$mate/.fm-kimi-turnend")
+  assert_present "$hook" "Kimi secondmate spawn did not install the global Stop hook"
+  assert_present "$home/state/$id.kimi-turnend-token" "Kimi secondmate spawn did not record its registry token"
+  [ "$(cat "$home/.kimi-code/fm-turn-end.d/$token")" = "primary=$mate" ] \
+    || fail "Kimi secondmate registry token did not bind the marked primary home"
+
+  child_pid=
+  trap '[ -z "${child_pid:-}" ] || { kill "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; }' EXIT
+  FM_TASK_ID=live-child sleep 60 &
+  child_pid=$!
+  kill -0 "$child_pid" 2>/dev/null || fail "real child process did not remain live"
+  printf 'kind=ship\npid=%s\n' "$child_pid" > "$mate/state/live-child.meta"
+  assert_absent "$mate/state/.watch.lock" "Kimi secondmate fixture unexpectedly has a watcher owner"
+  payload=$(jq -cn --arg cwd "$mate" \
+    '{hook_event_name:"Stop",session_id:"kimi-primary",cwd:$cwd,stop_hook_active:false}')
+  rc=0
+  out=$(printf '%s\n' "$payload" | HOME="$home" bash "$hook" 2>&1) || rc=$?
+  expect_code 2 "$rc" "Kimi secondmate Stop hook did not preserve the guard block without a watcher"
+  assert_contains "$out" "TURN WOULD END BLIND" \
+    "Kimi secondmate block omitted the shared guard reason"
+  kill -0 "$child_pid" 2>/dev/null || fail "child process exited before the primary block was asserted"
+
+  payload=$(jq -cn --arg cwd "$mate" \
+    '{hook_event_name:"Stop",session_id:"kimi-primary",cwd:$cwd,stop_hook_active:true}')
+  rc=0
+  out=$(printf '%s\n' "$payload" | HOME="$home" bash "$hook" 2>&1) || rc=$?
+  expect_code 0 "$rc" "Kimi secondmate Stop hook did not allow a payload already marked active"
+  [ -z "$out" ] || fail "bounded Kimi secondmate Stop hook printed output: $out"
+  pass "fm-spawn: a Kimi secondmate with a live child and no watcher returns the shared guard's exit 2 and reason"
+)
 
 test_kimi_spawn_refuses_unsafe_global_config_before_pane_creation() {
   local id rec out rc
@@ -821,10 +926,12 @@ test_kimi_hook_remove_preserves_owned_newline_boundary
 test_kimi_hook_fails_closed_on_missing_malformed_or_partial_config
 test_kimi_hook_install_refuses_without_jq
 test_kimi_hook_install_adopts_unmarked_identical_block
+test_kimi_hook_install_upgrades_unmarked_legacy_block
 test_kimi_hook_install_refuses_differing_unmarked_stop_block
 test_kimi_hook_clean_install_and_idempotent_reinstall
 test_kimi_launch_then_send_is_verified
 test_kimi_hook_is_silent_and_requires_registered_workspace_token
+test_kimi_secondmate_stop_hook_returns_block_without_watcher
 test_kimi_spawn_refuses_unsafe_global_config_before_pane_creation
 test_kimi_teardown_removes_pointer_and_registry_token
 test_kimi_falls_back_to_expanded_home_binary

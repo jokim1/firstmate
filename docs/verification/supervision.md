@@ -241,16 +241,34 @@ tests/fm-crew-state.test.sh
 ## Turn-end guard
 
 The blocking and bounded-follow-up mechanisms were validated across seven harnesses on 2026-07-08 through 2026-09-05, with Claude's replacement Stop-owned path revalidated on 2026-07-24, Cursor's stop-hook park validated on 2026-08-13, and omp's blocking `session_stop` hook validated on 2026-09-05.
+The Kimi row records an eighth integration whose executable delegation is covered portably but whose host behavior has not yet produced a live pass.
 
 | Harness | Version verified | Mechanism | Observed result |
 | --- | --- | --- | --- |
 | Claude | 2.1.219 | Cooperative blocking `Stop` guard plus `asyncRewake` auto-arm | A fresh unsupervised session ran session start first, reclaimed a stale dead-owner lock, completed two tokenless rewake cycles with no model arm command or guard continuation, and left a competing live owner unchanged. |
 | Codex | 0.142.1 | Blocking `Stop` hook | Hook process root stayed anchored to the trusted checkout and one continuation ran. |
+| Kimi | 2.0.0 installed; live result not verified | Global `Stop` hook delegating a marked secondmate home to the shared guard | The portable real-process regression proves the registered hook returns the guard's exit 2 and stderr reason for a blind Stop, but the opt-in live guard attempted on 2026-09-18 with the real user `HOME` stopped before its first model turn because the installed Kimi reported `provider managed:kimi-code has no credential configured`, so no running-Kimi pass exists and neither exit-2 handling nor a retry payload is claimed. |
 | OpenCode | 1.17.6 | Passive `session.idle` callback | Throwing could not block, while `promptAsync` scheduled one TUI follow-up; headless remained fail-open. |
 | Pi | 0.80.5 | Passive `agent_settled` callback | Exactly one guard follow-up ran for an unhealthy cycle, with no recursion across tool turns. |
 | omp | 18.1.11 | Blocking `session_stop` hook returning `{ continue: true, additionalContext }` | In the isolated rpc lab (2026-09-05), the successor watcher was frozen with `SIGSTOP` until its beacon passed the lab `FM_GUARD_GRACE` of 20s while its arm child stayed attached (a killed watcher closes its arm child and the extension re-arms before the guard can fire); the next turn end raised the guard, the guard spy recorded `rc=2` followed by a stop carrying `stop_hook_active: true`, omp compelled a continuation carrying the `turn-end-guard` operational text, the `fm_watch_arm_omp` invocation count then rose to at least two, and a live watcher held the home lock after the thaw; the flagged stop was allowed, so exactly one continuation ran. `session_stop` never fired for an interrupted turn. |
 | Grok | 0.2.112 native and 0.2.73 pre-native | Running-payload adaptive `Stop` | Native false-to-true continuation stayed in one process with two model turns and zero resume launches; the field-absent pre-native process launched exactly one guarded resume. |
 | Cursor | 2026.08.11-e8db854 | Awaited `stop` hook park returning one `followup_message` | Exit 2 ended the turn normally, proving it cannot block; a returned follow-up ran a genuine second turn; a sleeping hook held the boundary open and the wake landed after it; `loop_limit` stopped the hook being invoked at its ceiling. |
+
+The live attempt used the real user `HOME` while keeping the test's Kimi configuration and hook fixture isolated.
+It ran this exact command:
+
+```sh
+FM_KIMI_LIVE_E2E=1 tests/fm-kimi-primary-live-e2e.test.sh
+```
+
+Observed output on 2026-09-18:
+
+```text
+harness: Kimi Code 2.0.0
+not ok - Kimi Code 2.0.0: the real prompt exited 1 before proving Stop continuation; output: kimi version 2.0.0 error: failed to run prompt: provider managed:kimi-code has no credential configured
+```
+
+The guard capability-skips when Kimi is absent, and an explicit run fails while naming the Kimi version unless the real host both retries an exit-2 Stop and marks that retry `stop_hook_active=true`.
 
 ### Cursor primary park, 2026-08-13
 

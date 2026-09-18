@@ -45,14 +45,16 @@ Kimi's footer tip can show `ctrl+c: cancel` while idle, and its idle bar can con
 Neither is a busy-state source.
 The delivery-only spinner match covers the full moon-phase glyph set but remains locale- and emoji-font-sensitive because Kimi exposes no stable ASCII busy token.
 
-## Crew turn-end hook and primary limit
+## Crew and secondmate-primary turn-end hook
 
-Kimi is outside the primary turn-end guard scope.
-`../../../docs/turnend-guard.md` owns its separate global hook surface and captain-approved crew wake integration.
+Kimi secondmates are inside the primary turn-end guard scope through a private entry in the global hook registry, while Kimi crew records retain the passive wake path.
+The hook and shared guard are proven to return exit 2 plus a reason for a blind secondmate Stop, but a running Kimi honoring that result as a blocked Stop and sending `stop_hook_active=true` on its retry have not yet passed the live verification guard.
+`../../../docs/turnend-guard.md` owns that global hook surface, the exact evidence boundary, and the refresh command.
 
-`../../../bin/fm-spawn.sh` installs one marker-delimited Firstmate entry in `$HOME/.kimi-code/config.toml`, one silent always-zero hook script, and one private token registry under `$HOME/.kimi-code/fm-turn-end.d/`.
+`../../../bin/fm-spawn.sh` installs one marker-delimited Firstmate entry in `$HOME/.kimi-code/config.toml`, one guarded hook script, and one private token registry under `$HOME/.kimi-code/fm-turn-end.d/`.
 Each Kimi worker worktree receives a gitignored `.fm-kimi-turnend` pointer.
-The global hook touches `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree.
+For crew records, the global hook touches `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree, then stays silent and exits 0.
+For secondmate-primary records, it runs that marked home's tracked `bin/fm-turnend-guard.sh` and preserves the guard result for Kimi to interpret.
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding it did not fire.
 The guarded turn-end signal remains a wake notification.
 Standalone Kimi has no busy-state source until one is live-verified.

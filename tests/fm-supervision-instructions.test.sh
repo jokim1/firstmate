@@ -74,6 +74,9 @@ test_repair_lines() {
   out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 "$RENDER" --harness codex --repair-line)
   assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "codex repair line did not use checkpoint helper and env override"
 
+  out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 "$RENDER" --harness kimi --repair-line)
+  assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "Kimi repair line did not use checkpoint helper and env override"
+
   out=$(FM_HOME="$home" "$RENDER" --harness claude --queue-pending 1 --repair-line)
   assert_contains "$out" "After draining queued wakes" "queue-pending prefix missing"
   assert_contains "$out" "watcher supervision needs Stop-owned automatic recovery" "claude pre-verification repair line is not neutral"
@@ -156,6 +159,18 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
   out=$("$RENDER" --harness codex --repair-line)
   assert_contains "$out" "foreground checkpoint" "codex recovery line lost its checkpoint repair"
   assert_contains "$out" "bin/fm-watch-checkpoint.sh" "codex recovery line lost the checkpoint command"
+
+  out=$("$RENDER" --harness kimi)
+  assert_contains "$out" "primary harness: kimi" "Kimi heading missing"
+  assert_contains "$out" "Mode: Kimi foreground checkpoint with a registered Stop backstop." "Kimi named supervision snippet missing"
+  ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')
+  assert_contains "$ordinary" "next foreground" "Kimi ordinary-wake line lost its foreground checkpoint"
+  assert_contains "$ordinary" "bin/fm-watch-checkpoint.sh" "Kimi ordinary-wake line lost the checkpoint command"
+  assert_not_contains "$ordinary" "bin/fm-watch-arm.sh" "Kimi ordinary-wake line incorrectly uses a background arm"
+  assert_not_contains "$out" "Unknown harness fallback" "Kimi still renders the unknown supervision protocol"
+  out=$("$RENDER" --harness kimi --repair-line)
+  assert_contains "$out" "foreground checkpoint" "Kimi recovery line lost its checkpoint repair"
+  assert_contains "$out" "bin/fm-watch-checkpoint.sh" "Kimi recovery line lost the checkpoint command"
 
   pass "renderer preserves every harness ordinary-continuation and missing-cycle repair path"
 }

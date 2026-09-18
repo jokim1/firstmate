@@ -74,6 +74,7 @@ Every other direct `FM_GUARD_GRACE` reader (`bin/fm-guard.sh`, the strict-watche
 
 - Claude registers two `Stop` hooks in `.claude/settings.json`, both anchored through `CLAUDE_PROJECT_DIR`: `bin/fm-turnend-guard.sh --claude`, and `bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
 - Codex registers a `Stop` hook in `.codex/hooks.json`, anchors the executable to the hook process working directory, verifies a Firstmate-shaped hook-bearing root, and passes the original payload to the shared guard.
+- A Kimi secondmate receives a private entry in the existing global `fm-kimi-turnend-hook.sh` registry at launch; the entry matches only that marked home, passes the original Stop payload to its tracked `bin/fm-turnend-guard.sh`, and preserves exit 2 plus stderr for Kimi to interpret.
 - OpenCode listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`, lets the watcher coordinator act first, and calls `client.session.promptAsync` once when the guard returns 2.
 - Pi listens for `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts`, runs once per logical agent run, and calls `pi.sendUserMessage(..., { deliverAs: "followUp" })` once when the guard returns 2.
 - omp answers its blocking `session_stop` hook in `.omp/extensions/fm-primary-turnend-guard.ts`, passing the payload's own `stop_hook_active` to the shared guard and returning `{ continue: true, additionalContext }` when the guard returns 2, so the continuation is compelled rather than requested; the continuation's stop carries `stop_hook_active: true`, which bounds it to one per turn, and omp's own cap of eight consecutive continuations is the second backstop. `session_stop` never fires for an interrupted turn or a task session, so those boundaries are deliberately unguarded.
@@ -91,8 +92,10 @@ Every other direct `FM_GUARD_GRACE` reader (`bin/fm-guard.sh`, the strict-watche
   `tests/fm-turnend-guard.test.sh` pins that inventory so neither the guarded set nor the exception can change silently.
 
 Claude and Codex can block a Stop directly with exit status 2 and stderr.
-Both payloads carry `stop_hook_active`.
-In the default Codex mode, a true value lets the second stop finish after one forced continuation.
+The Kimi registry path is proven to return the same exit 2 and stderr reason, but a running Kimi honoring that result as a blocked Stop is still an explicit, live-unverified assumption.
+Kimi 0.29.1 was observed sending the snake-case `stop_hook_active` field, but the false-to-true retry transition after an exit-2 result has not yet been observed live.
+`FM_KIMI_LIVE_E2E=1 tests/fm-kimi-primary-live-e2e.test.sh` owns both assumptions and fails while naming the installed Kimi version if either one changes.
+In the default Codex mode, and in Kimi when that assumed retry contract holds, a true value lets the second stop finish after one forced continuation.
 
 Claude runs the guard with `--claude`, which ignores `stop_hook_active` and cooperates with the Stop-owned auto-arm.
 Claude Code sets `stop_hook_active=true` on every stop after any stop-hook continuation, including `asyncRewake` rewakes, which re-opened the 2026-07-21 blind window under the default one-shot behavior.
@@ -176,11 +179,11 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - Cursor's `stop` step does not fire in headless `cursor-agent -p`, the same class of limit as OpenCode headless; firstmate primaries run interactive.
 - A Cursor primary must be launched with `--trust`, or its project hooks never load and the whole integration is inert.
 - Cursor's `preCompact` step is deliberately unregistered: its response can return only `user_message` and it is absent from Cursor's `additional_context` step set, so a post-compaction re-emit needs its own design and is deferred to a follow-up ([`sessionstart-nudge.md`](sessionstart-nudge.md) owns that uncovered surface).
-- Kimi Code CLI 0.29.1 exposes only global `[[hooks]]` configuration in `~/.kimi-code/config.toml`, including a `Stop` event with snake_case payload fields `hook_event_name`, `session_id`, `cwd`, and `stop_hook_active`.
-- Kimi has no project-level hook configuration and remains outside the primary guard integrations above.
-- Captain-approved Kimi crew wake support uses `bin/fm-kimi-turnend-hook.sh` to install a silent always-zero hook in one marker-delimited Firstmate region in that global config.
+- Kimi exposes only global `[[hooks]]` configuration in `~/.kimi-code/config.toml`, and Kimi 0.29.1 was observed invoking its `Stop` event with snake-case payload fields `hook_event_name`, `session_id`, `cwd`, and `stop_hook_active`.
+- `bin/fm-kimi-turnend-hook.sh` installs one marker-delimited Firstmate region in that global config and remains inert unless the payload `cwd` contains a private registered pointer.
+- Crew records stay silent and always exit 0 after touching one `state/<id>.turn-ended` marker; Kimi secondmate records instead delegate to that marked home's tracked primary guard and preserve its result.
 - If `kimi login` removes only the marker comments, install adopts and re-wraps the remaining byte-identical unmarked Stop block; a genuinely different block is refused with its first difference named.
-- The hook remains inert unless the payload `cwd` contains a per-task token pointer that resolves through Firstmate's private registry to one `state/<id>.turn-ended` marker.
+- A secondmate primary entry is installed only by its launch path and resolves to that home's absolute path, never to a command supplied by the registry record.
 - Installation refuses before writing unless `python3` with `tomllib` and `jq` are available.
 - If `jq` is removed after installation, the hook remains silent and exits 0, turn-end wakes stop, and Kimi crews fall back to idle detection.
 - Unreadable hook input remains fail-open.
@@ -193,7 +196,8 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 It also covers true-reason banner wording and reason-keyed episode dedup surviving a beacon mtime change.
 `tests/fm-cursor-primary.test.sh` covers the Cursor park end to end over real processes with no harness installed: each tracked Claude-shaped entrypoint standing down on a Cursor payload, both follow-up sources, the bounded repair nag and its reset, the nested loop bounds, supersession, away-mode and lock-ownership inertness, Pi-host stand-down without Cursor identity and continued parking when `PI_CODING_AGENT` leaks alongside `CURSOR_AGENT` or `CURSOR_INVOKED_AS`, child-worktree exclusion, and that the adapter never exits 2.
 `FM_CURSOR_PRIMARY_LIVE_E2E=1 tests/fm-cursor-primary-live-e2e.test.sh` is the opt-in guard that proves the same behavior against the installed cursor-agent and fails naming the harness and version.
-`tests/fm-kimi-harness.test.sh` covers the separate Kimi crew hook's format preservation, idempotence, byte-identical unmarked-block adoption, differing-block diagnostics, token guard, spawn registration, and teardown cleanup.
+`tests/fm-kimi-harness.test.sh` covers the shared Kimi hook's format preservation, idempotence, byte-identical unmarked-block adoption, differing-block diagnostics, crew token guard, secondmate-primary registration and real-process exit-2 delegation, spawn registration, and teardown cleanup.
+`FM_KIMI_LIVE_E2E=1 tests/fm-kimi-primary-live-e2e.test.sh` is the opt-in credentialed guard that requires a running Kimi to honor the exit-2 result with one continuation and send `stop_hook_active=true` on its retry, and every failure names the harness version.
 `tests/fm-supervision-instructions.test.sh` covers recovery-line ownership and pi-signed's identity-preserving reuse of Pi's protocol.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` is the opt-in isolated Pi path.
 `tests/fm-omp-harness.test.sh` covers the omp extension pair over a fake omp API (forced continuation on exit 2, the `stop_hook_active` bound, the seatbelt block, the ownership proof), and `FM_OMP_LIVE_E2E=1 tests/fm-omp-primary-live-e2e.test.sh` is the opt-in isolated omp path.

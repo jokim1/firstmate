@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Tests for bounded foreground watcher checkpoints used by Codex supervision.
+# Stale closes run the real watcher against a real isolated tmux process and must leave their exact terminal reason durable in the home.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -136,9 +137,59 @@ test_existing_singleton_watcher_is_not_success() {
   pass "checkpoint rejects an existing watcher singleton as unowned"
 }
 
+test_stale_checkpoint_exit_records_reason_in_home() {
+  local home fakebin real_tmux socket_name idle_pane out err checkpoint_rc target watcher_pid
+  home=$(make_home stale-exit-record)
+  fakebin="$home/fakebin"
+  out="$home/stale.out"
+  err="$home/stale.err"
+  target=secondmate:worker
+  mkdir -p "$fakebin"
+  real_tmux=$(command -v tmux) || fail "real tmux is required for the stale checkpoint regression"
+  socket_name="fm-watch-checkpoint-$$-$RANDOM"
+  idle_pane="$home/idle-pane.sh"
+
+  printf '#!/usr/bin/env bash\nexec %q -L %q "$@"\n' "$real_tmux" "$socket_name" > "$fakebin/tmux"
+  printf '#!/usr/bin/env bash\nprintf "idle worker\\n"\nread -r -t 60 _ || true\n' > "$idle_pane"
+  chmod +x "$fakebin/tmux" "$idle_pane"
+
+  (
+    cleanup_stale_tmux() {
+      "$real_tmux" -L "$socket_name" kill-server 2>/dev/null || true
+    }
+    trap cleanup_stale_tmux EXIT
+
+    "$real_tmux" -L "$socket_name" new-session -d -s secondmate -n worker "$idle_pane" \
+      || fail "could not start the isolated real tmux process"
+    printf 'window=%s\nkind=ship\nharness=codex\nbackend=tmux\n' "$target" > "$home/state/child.meta"
+
+    checkpoint_rc=0
+    PATH="$fakebin:$PATH" FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+      "$CHECKPOINT" --seconds 12 > "$out" 2> "$err" || checkpoint_rc=$?
+
+    expect_code 0 "$checkpoint_rc" "stale checkpoint exit"
+    assert_contains "$(cat "$out")" "stale: $target" "stale checkpoint did not expose its reason"
+    grep -F "stale: $target" "$home/state/.watch-deliveries.log" >/dev/null \
+      || fail "stale checkpoint did not leave its terminal reason in the delivery log"
+    grep "$(printf '\tstale\t')" "$home/state/.wake-queue" | grep -F "$target" >/dev/null \
+      || fail "stale checkpoint did not leave its actionable reason in the durable queue"
+    grep -Eq '^pending:downtime:[A-Za-z0-9._-]+$' "$home/state/.watcher-down" \
+      || fail "stale checkpoint did not publish its downtime generation"
+    assert_absent "$home/state/.watch.lock/pid" "stale checkpoint left a watcher lock behind"
+    watcher_pid=$(awk -F '\t' -v reason="stale: $target" '$3 == reason { pid=$1 } END { print pid }' \
+      "$home/state/.watch-deliveries.log")
+    case "$watcher_pid" in
+      ''|*[!0-9]*) fail "stale delivery record did not carry the real watcher pid" ;;
+    esac
+    pass "stale checkpoint exits visibly and records its reason durably"
+  ) || exit $?
+}
+
 test_quiet_checkpoint_exits_124_cleanly
 test_signal_passes_through_and_exits_zero
 test_refill_passes_through_and_exits_zero
 test_term_resistant_watcher_is_force_killed_at_deadline
 test_registered_check_uses_preserved_watcher_environment
 test_existing_singleton_watcher_is_not_success
+test_stale_checkpoint_exit_records_reason_in_home
