@@ -27,7 +27,7 @@
 # A missing, malformed, identity-mismatched, or past-end classified position reads
 # from byte 0, preferring a bounded duplicate over a lost event.
 #
-# There are three documented exceptions. The absorb classification
+# There are four documented exceptions. The absorb classification
 # (crew_absorb_class and its working/paused wrappers) is NOT a pure status-file
 # read: it reuses bin/fm-crew-state.sh, which may make a bounded no-mistakes call,
 # to decide whether a crew that just stopped its turn or went stale is working,
@@ -39,7 +39,10 @@
 # stays bounded by new appends instead of re-reading each task's whole lifetime
 # log every time. crew_worktree_written_since reads the task's meta file and walks
 # a bounded slice of its worktree instead of a status file, so callers run it only
-# at the moment they would otherwise escalate.
+# at the moment they would otherwise escalate. crew_has_live_execution uses
+# bin/fm-busy-event.sh's read-only evidence command for the watcher idle
+# predicate; it can make that same bounded no-mistakes read and a backend
+# process read, so callers keep it off unrelated status-only paths.
 
 # Directory of this library, used to locate the sibling fm-crew-state.sh reader.
 # Resolved at source time from BASH_SOURCE so it works whether sourced by a
@@ -50,6 +53,7 @@ _FM_CLASSIFY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)"
 # Overridable so tests can stub the run-step/pane verdict without a real worktree
 # or no-mistakes install; absent, it points at the real sibling script.
 FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
+FM_BUSY_EVENT_BIN="${FM_BUSY_EVENT_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-busy-event.sh}"
 
 # fm_run_timed, the shared hard bound the worktree write probe below puts around
 # its one filesystem walk. bin/fm-timeout-lib.sh owns bounded execution for this
@@ -2002,6 +2006,22 @@ crew_absorb_class() {  # <id>
     case "$src" in run-step|pane) printf 'working'; return ;; esac
   fi
   printf 'none'
+}
+
+# 0 when the task has fresh execution evidence that the semantic adapter state
+# does not cover: an authoritative working run-step with source-owned freshness,
+# or a verified non-harness foreground command in its pane. The executable owner
+# prints the source token, but this predicate intentionally exposes only truth;
+# the watcher applies its shared busy-turn ceiling before suppressing a wake.
+crew_has_live_execution() {  # <id>
+  local id=$1 state_dir evidence
+  [ -n "$id" ] || return 1
+  state_dir=${FM_STATE_OVERRIDE:-${STATE:-}}
+  [ -n "$state_dir" ] || return 1
+  evidence=$(FM_CREW_STATE_BIN="$FM_CREW_STATE_BIN" \
+    "$FM_BUSY_EVENT_BIN" evidence "$state_dir" "$id" 2>/dev/null) || return 1
+  case "$evidence" in run-step|foreground) return 0 ;; esac
+  return 1
 }
 
 # 0 if crew <id> shows POSITIVE evidence it is still working (crew_absorb_class

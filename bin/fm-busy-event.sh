@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# fm-busy-event.sh - the ONLY writer of the semantic busy-state contract
-# owned by bin/fm-busy-lib.sh (record format, gen binding, and classification
-# live there; this script owns mutation mechanics only).
+# fm-busy-event.sh - the ONLY writer of the semantic busy-state contract,
+# plus the read-only derived-execution probe used by the watcher predicate.
+# bin/fm-busy-lib.sh owns the record format, gen binding, and semantic
+# classification; this script owns mutation mechanics and the executable probe.
 #
 # Subcommands:
 #
@@ -35,9 +36,19 @@
 #       an old task from retiring a newly armed incarnation. A missing sidecar
 #       is already retired, so any orphan record is removed idempotently.
 #
-# Exit codes: 0 applied; 1 refused (stale gen, unarmed task, lock timeout,
-# invalid input); 2 usage. Adapter hook command lines append `|| true` so a
-# refusal never breaks the harness's own lifecycle.
+#   evidence <state-dir> <id>
+#       Print `run-step` for a working authoritative run whose active-step
+#       record remains inside no-mistakes' own quiet-warning window, or
+#       `foreground` when the recorded pane's verified process view contains a
+#       foreground command that is neither a shell nor the harness. This read
+#       never mutates semantic state. The watcher applies its existing
+#       FM_BUSY_TURN_MAX_SECS ceiling to either verdict, so a foreground command
+#       cannot suppress wedge detection forever.
+#
+# Exit codes: writer commands use 0 applied and 1 refused (stale gen, unarmed
+# task, lock timeout, invalid input); evidence uses 0 found and 1 absent or
+# unreadable; every command uses 2 for usage. Adapter hook command lines append
+# `|| true` so a refusal never breaks the harness's own lifecycle.
 set -u
 
 usage() {
@@ -47,6 +58,7 @@ usage:
   fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E
   fm-busy-event.sh progress <state-dir> <id> --gen G
   fm-busy-event.sh retire <state-dir> <id> (--gen G | --current-gen)
+  fm-busy-event.sh evidence <state-dir> <id>
 See the header comment for the full contract.
 EOF
   exit 2
@@ -58,7 +70,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CMD=${1:-}
 case "$CMD" in
-  arm|apply|progress|retire) shift ;;
+  arm|apply|progress|retire|evidence) shift ;;
   *) usage ;;
 esac
 
@@ -68,6 +80,56 @@ ID=${2:-}
 shift 2
 case "$ID" in *[!A-Za-z0-9._-]*) echo "error: invalid task id" >&2; exit 1 ;; esac
 [ -d "$STATE" ] || { echo "error: state dir not found: $STATE" >&2; exit 1; }
+
+if [ "$CMD" = evidence ]; then
+  [ "$#" -eq 0 ] || usage
+  FM_CREW_STATE_BIN=${FM_CREW_STATE_BIN:-"$SCRIPT_DIR/fm-crew-state.sh"}
+  RUN_EVIDENCE=$(FM_STATE_OVERRIDE="$STATE" "$FM_CREW_STATE_BIN" --busy-evidence "$ID" 2>/dev/null || true)
+  if [ "$RUN_EVIDENCE" = run-step ]; then
+    printf 'run-step\n'
+    exit 0
+  fi
+
+  # The backend adapters own exact endpoint/process attribution. Reuse those
+  # reads instead of treating a pane title or an unverified backend as proof.
+  # shellcheck source=bin/fm-backend.sh
+  . "$SCRIPT_DIR/fm-backend.sh"
+  META="$STATE/$ID.meta"
+  [ -f "$META" ] || exit 1
+  [ -z "$(fm_meta_get "$META" remote_host)" ] || exit 1
+  BACKEND=$(fm_backend_of_meta "$META")
+  TARGET=$(fm_backend_target_of_meta "$META")
+  [ -n "$TARGET" ] || exit 1
+  fm_backend_source "$BACKEND" || exit 1
+  case "$BACKEND" in
+    tmux)
+      case "$(fm_backend_tmux_agent_state "$TARGET")" in
+        alive|ambiguous) ;;
+        *) exit 1 ;;
+      esac
+      FOREGROUND=$(fm_backend_tmux_foreground_comms "$TARGET")
+      if [ -n "$FOREGROUND" ]; then
+        while IFS= read -r NAME; do
+          [ -n "$NAME" ] || continue
+          if [ "$(fm_agent_process_classify_name "$NAME")" = other ]; then
+            printf 'foreground\n'
+            exit 0
+          fi
+        done <<EOF
+$FOREGROUND
+EOF
+      fi
+      ;;
+    herdr)
+      fm_backend_herdr_parse_target "$TARGET" || exit 1
+      if [ "$(fm_backend_herdr_pane_process_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")" = other ]; then
+        printf 'foreground\n'
+        exit 0
+      fi
+      ;;
+  esac
+  exit 1
+fi
 
 NEW_STATE=
 GEN=

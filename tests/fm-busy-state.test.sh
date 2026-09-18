@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Behavior tests for the semantic busy-state contract (bin/fm-busy-lib.sh and
-# its only writer bin/fm-busy-event.sh).
+# Behavior tests for the semantic busy-state contract (bin/fm-busy-lib.sh), its
+# only writer, and fm-busy-event.sh's read-only derived-evidence command.
 #
 # Covers the captain-approved redesign invariants: busy/idle/unknown/dead with
 # explicit source attribution; missing, malformed, stale (gen-mismatch), and
@@ -458,7 +458,30 @@ test_progress_is_generation_bound_and_not_semantic_state() {
   pass "native progress is generation-bound, separately recorded, and cleared on arm and retire"
 }
 
+test_evidence_command_delegates_to_fresh_run_reader() {
+  local state fake out
+  state=$(new_state_dir evidence-run)
+  fake="$state/fm-crew-state"
+  cat > "$fake" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "${1:-}" = --busy-evidence ] || exit 2
+[ "${2:-}" = t1 ] || exit 2
+[ "${FM_FAKE_RUN_FRESH:-0}" = 1 ] || exit 1
+printf 'run-step\n'
+SH
+  chmod +x "$fake"
+  out=$(FM_CREW_STATE_BIN="$fake" FM_FAKE_RUN_FRESH=1 "$EV" evidence "$state" t1) \
+    || fail "evidence command rejected the fresh run reader"
+  [ "$out" = run-step ] || fail "fresh run evidence printed '$out', expected run-step"
+  if FM_CREW_STATE_BIN="$fake" FM_FAKE_RUN_FRESH=0 "$EV" evidence "$state" t1 >/dev/null 2>&1; then
+    fail "evidence command promoted a stale run reader verdict"
+  fi
+  pass "derived evidence command reuses the crew-state freshness reader"
+}
+
 test_progress_is_generation_bound_and_not_semantic_state
+test_evidence_command_delegates_to_fresh_run_reader
 
 test_arm_seeds_busy_spawn
 test_apply_advances_seq_and_source

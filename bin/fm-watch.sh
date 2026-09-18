@@ -274,10 +274,11 @@ TURNEND_CHURN_ABSORB_SECS=${FM_TURNEND_CHURN_ABSORB_SECS:-900}  # longest a task
 # daemon owns triage, so this watcher reverts to one-shot (enqueue + exit on every
 # wake) and never double-triages - and never runs the costly provably-working read.
 STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provably-working stale escalates as a possible wedge
-# A busy pane is unconditional proof of liveness with no built-in duration bound,
-# so a hung foreground call can remain hidden even while its rendered busy
-# footer changes every poll. BUSY_TURN_MAX_SECS bounds how long any busy pane
-# may go without a completed turn or explicit native-harness progress (the
+# A semantic busy pane, fresh authoritative run-step, or verified non-harness
+# foreground command is positive execution evidence, but none is unbounded.
+# Run-step evidence first has to remain inside no-mistakes' own quiet-warning
+# window; BUSY_TURN_MAX_SECS then bounds how long any of the three may go
+# without a completed turn or explicit native-harness progress (the
 # marker-selection contract is in busy_turn_over_age below). Once this bound
 # is crossed, busy_turn_over_age routes the pane through
 # busy_turn_bound_check, which hands a crossed bound to the same
@@ -350,14 +351,12 @@ hash_pane() {
   if command -v md5 >/dev/null 2>&1; then md5 -q; else md5sum | cut -d' ' -f1; fi
 }
 
-# window_is_busy: 0 (busy) iff the task's harness is PROVABLY working, through
-# the semantic busy-state contract (bin/fm-busy-lib.sh). Only an exact busy
-# verdict returns 0: idle, unknown, and dead all return 1, so a converted
-# adapter whose semantic state is missing, malformed, stale, or unverified is
-# treated as not-provably-working and surfaces rather than being absorbed.
+# window_has_semantic_busy: the exact adapter-owned busy verdict. Kept separate
+# for consumers such as secondmate queue-stall detection whose contract is
+# deliberately semantic-only.
 # <tail40> is the same bounded capture already read for hashing and is
 # consumed only by the Grok-scoped fallback inside the contract.
-window_is_busy() {  # <window> <tail40>
+window_has_semantic_busy() {  # <window> <tail40>
   local w=$1 tail40=$2 task meta verdict
   task=$(window_to_task "$w" "$STATE")
   meta="$STATE/$task.meta"
@@ -368,6 +367,19 @@ window_is_busy() {  # <window> <tail40>
       "${task:-unknown}" "$STATE" "$tail40")
   fi
   [ "${verdict%% *}" = busy ]
+}
+
+# window_is_busy: 0 (busy) iff the task is PROVABLY executing, through either
+# window_has_semantic_busy or the shared derived evidence predicate
+# (bin/fm-classify-lib.sh). Derived evidence is a fresh authoritative run-step
+# or a verified non-harness foreground command. Idle, unknown, dead, a quiet run
+# record, and an unverified process view all return 1, so inconclusive state
+# surfaces rather than being absorbed.
+window_is_busy() {  # <window> <tail40>
+  local w=$1 tail40=$2 task
+  window_has_semantic_busy "$w" "$tail40" && return 0
+  task=$(window_to_task "$w" "$STATE")
+  [ -n "$task" ] && crew_has_live_execution "$task"
 }
 
 window_kind() {
@@ -413,8 +425,9 @@ window_label() {
 # The ONE derivation of a window's per-window marker key: `:`, `/` and `.` become
 # `_` so a window name is usable as a filename suffix. Every per-window file the
 # watcher keeps is named by it (.hash-, .count-, .stale-, .stale-since-,
-# .wedge-escalations-, .paused-*, .writing-*, .waiting-*), and live homes hold those markers on
-# disk under the current format, so the format lives here alone: a second copy is
+# .derived-busy-*, .wedge-escalations-, .paused-*, .writing-*, .waiting-*), and
+# live homes hold those markers on disk under the current format, so the format
+# lives here alone: a second copy is
 # how a future change to it silently orphans a window's markers instead of clearing
 # them. The helpers below take the derived key rather than re-deriving it, so one
 # poll of one window derives it once.
@@ -442,7 +455,7 @@ inbox_steer_escalate_unavailable() {  # <window> <task> <record>
 # Steering-inbox loss detection, one cheap check per recorded window per poll.
 # Quiet when healthy: an absent, empty, or handled inbox costs one directory
 # glob and produces nothing. When the ladder (fm_task_inbox_due_action, the
-# policy owner) reports a due action, a busy pane just waits - the record is
+# policy owner) reports a due action, fresh execution just waits - the record is
 # durable and the worker will reach a turn boundary - an idle pane gets one
 # delivery attempt, and a spent attempt budget surfaces as an ordinary stale
 # wake for stuck-crewmate-recovery, and a pane whose agent is positively dead
@@ -477,7 +490,7 @@ inbox_steer_check() {  # <window> <task>
       ;;
   esac
   tail40=$(fm_backend_capture "$backend" "$w" 40 "$(window_label "$w")" 2>/dev/null) || tail40=
-  if window_is_busy "$w" "$tail40"; then
+  if window_is_busy "$w" "$tail40" && ! busy_turn_over_age "$task"; then
     return 0
   fi
   case "$verb" in
@@ -707,7 +720,7 @@ signal_turnend_panes_churned() {  # <file> ...
     return 1
   done
   for key in "${churned_keys[@]}"; do
-    if ! rm -f "$STATE/.stale-$key" "$STATE/.wedge-escalations-$key"; then
+    if ! rm -f "$STATE/.stale-$key" "$STATE/.derived-busy-$key" "$STATE/.wedge-escalations-$key"; then
       for created in "${created_keys[@]}"; do
         rm -f "$STATE/.churn-since-$created"
       done
@@ -775,7 +788,7 @@ secondmate_in_active_turn() {  # <window> <idle>
   [ -n "$w" ] || return 1
   [ "$idle" -lt "$BUSY_TURN_MAX_SECS" ] || return 1
   tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || return 1
-  window_is_busy "$w" "$tail40"
+  window_has_semantic_busy "$w" "$tail40"
 }
 
 # Surface one durable parent check when the foreign queue's drain position has
@@ -1093,6 +1106,37 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
   esac
 }
 
+# A positive derived-execution verdict is revalidated only when its existing
+# stale timer reaches STALE_ESCALATE_SECS, rather than on every watcher poll.
+# The source-owned run freshness check still decides each revalidation, while
+# foreground evidence is read again from the live process view. If evidence has
+# expired, the already-due wedge timer proceeds immediately. The cheaper
+# busy-turn age read remains per-poll so crossing BUSY_TURN_MAX_SECS transfers
+# the pane to the common bound without waiting for this revalidation cadence.
+derived_execution_timer_check() {  # <window> <task> <hash> <marker> <since-file> <escalation-file>
+  local win=$1 task=$2 h=$3 marker=$4 since_file=$5 escalation_file=$6 since age
+  [ "$(cat "$marker" 2>/dev/null || true)" = "$h" ] || return 1
+  if busy_turn_over_age "$task"; then
+    rm -f "$marker" "$since_file"
+    busy_turn_bound_check "$win" "$task" "$h" "$since_file" "$escalation_file" || true
+    return 0
+  fi
+  since=$(cat "$since_file" 2>/dev/null || true)
+  case "$since" in
+    ''|*[!0-9]*) date +%s > "$since_file"; return 0 ;;
+  esac
+  age=$(( $(date +%s) - since ))
+  [ "$age" -ge "$STALE_ESCALATE_SECS" ] || return 0
+  if crew_has_live_execution "$task"; then
+    date +%s > "$since_file"
+    triage_log "absorbed stale (derived execution still live after ${age}s): $win"
+    return 0
+  fi
+  rm -f "$marker"
+  wedge_timer_check "$win" "$since_file" "stale (derived execution expired)" "$escalation_file" "$task"
+  return 0
+}
+
 # busy_turn_over_age: 0 iff the last completed turn or explicit native-harness
 # progress is at least BUSY_TURN_MAX_SECS old. Progress is actual observed model
 # or tool activity, never a timer or a busy footer. It does not emit a wake or
@@ -1243,7 +1287,7 @@ clear_pause_state() {  # <window-key>
 clear_stale_hash_tracking() {  # <window-key>
   local key=$1
   clear_write_tracking "$key"
-  rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key" \
+  rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.derived-busy-$key" "$STATE/.wedge-escalations-$key" \
     "$STATE/.waiting-resurfaced-$key"
 }
 
@@ -1470,7 +1514,7 @@ surface_nonterminal_stale() {  # <window> <hash>
     stale_wait_record "$key"
   fi
   printf '%s' "$h" > "$STATE/.stale-$key"
-  rm -f "$STATE/.stale-since-$key"
+  rm -f "$STATE/.stale-since-$key" "$STATE/.derived-busy-$key"
   clear_write_tracking "$key"
   if [ "$declared" -eq 0 ]; then
     : > "$STATE/.paused-$key"
@@ -2680,18 +2724,37 @@ EOF
     cf="$STATE/.count-$key"
     sf="$STATE/.stale-$key"
     ssf="$STATE/.stale-since-$key"
+    dbf="$STATE/.derived-busy-$key"
     ewf="$STATE/.wedge-escalations-$key"
     pf="$STATE/.paused-$key"   # flag: this key's stale is using the bounded pause cadence
     prev=$(cat "$hf" 2>/dev/null || true)
-    # Busy match: a backend's native semantic state when available (herdr), else
-    # the last 6 non-blank lines only (the TUI footer area, where every verified
-    # harness renders its busy indicator) so busy-looking strings in displayed
-    # content cannot suppress stale detection. Read once per window per poll and
-    # reused below so a busy verdict is consistent within one cycle.
-    if window_is_busy "$w" "$tail40"; then busy_now=0; else busy_now=1; fi
+    # The exact adapter semantic state stays on the cheap per-poll path. The
+    # more expensive run/process evidence read is deferred until this stable
+    # pane is about to be classified, or until the cheap busy-turn age crosses
+    # its bound below.
+    if window_has_semantic_busy "$w" "$tail40"; then busy_now=0; else busy_now=1; fi
     if [ "$h" = "$prev" ]; then
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$cf"
+      if [ "$n" -ge 2 ] && [ "$busy_now" -ne 0 ]; then
+        if derived_execution_timer_check "$w" "$task" "$h" "$dbf" "$ssf" "$ewf"; then
+          continue
+        fi
+        if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ] && crew_has_live_execution "$task"; then
+          if busy_turn_over_age "$task"; then
+            busy_turn_bound_check "$w" "$task" "$h" "$ssf" "$ewf" || true
+          else
+            clear_pause_tracking "$key"
+            printf '%s' "$h" > "$sf"
+            printf '%s' "$h" > "$dbf"
+            date +%s > "$ssf"
+            rm -f "$ewf"
+            clear_write_tracking "$key"
+            triage_log "absorbed stale (derived execution is live): $w"
+          fi
+          continue
+        fi
+      fi
       if [ "$n" -ge 2 ] && [ "$busy_now" -ne 0 ]; then
         # The pane is idle/stale at hash $h. Triage decides whether this wakes
         # firstmate. Detection itself is unchanged from above.
@@ -2823,10 +2886,15 @@ EOF
         # then route it through busy_turn_bound_check, which hands the crossed
         # bound to the same wedge timer unless the crew declared the wait itself.
         paused_bound=1
-        if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
+        over_age=1
+        busy_turn_over_age "$task" && over_age=0
+        if [ "$busy_now" -ne 0 ] && [ "$over_age" -eq 0 ] && crew_has_live_execution "$task"; then
+          busy_now=0
+        fi
+        if [ "$busy_now" -eq 0 ] && [ "$over_age" -eq 0 ]; then
           busy_turn_bound_check "$w" "$task" "$h" "$ssf" "$ewf" && paused_bound=0
         else
-          rm -f "$ssf" "$ewf"
+          rm -f "$ssf" "$dbf" "$ewf"
           clear_write_tracking "$key"
         fi
         # A busy pane normally means real work resumed, so stale pause bookkeeping
@@ -2840,8 +2908,14 @@ EOF
     else
       printf '%s' "$h" > "$hf"
       echo 0 > "$cf"
+      rm -f "$dbf"
       paused_bound=1
-      if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
+      over_age=1
+      busy_turn_over_age "$task" && over_age=0
+      if [ "$busy_now" -ne 0 ] && [ "$over_age" -eq 0 ] && crew_has_live_execution "$task"; then
+        busy_now=0
+      fi
+      if [ "$busy_now" -eq 0 ] && [ "$over_age" -eq 0 ]; then
         busy_turn_bound_check "$w" "$task" "$h" "$ssf" "$ewf" && paused_bound=0
       else
         rm -f "$ssf" "$ewf"

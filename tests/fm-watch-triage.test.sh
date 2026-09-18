@@ -7,7 +7,9 @@
 # a real fm-watch.sh subprocess to assert the behavioral contract:
 # provably-working no-verb wakes absorbed (no exit, no queue entry, suppressor
 # advanced, beacon fresh), stopped-crew no-verb wakes surfaced (queue + exit),
-# provably-working stale panes absorbed-then-escalated past the threshold,
+# fresh run-step and foreground-command panes admitted by the idle predicate,
+# stale run records routed into the wedge path, provably-working stale panes
+# absorbed-then-escalated past the threshold,
 # terminal-looking stale status lines overridden by an active run, the heartbeat
 # backstop fail-safe, and afk coherence (no double-triage while the away-mode
 # daemon owns supervision).
@@ -48,7 +50,8 @@ watch_bg() {  # <state> <fakebin> <out> [extra env assignments...]
   local state=$1 fakebin=$2 out=$3
   shift 3
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$@" "$WATCH" > "$out" &
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    env "$@" "$WATCH" > "$out" &
 }
 
 # Wait up to <limit> 0.1s ticks while <pid> stays alive; 0 if still alive, 1 if it died.
@@ -128,6 +131,36 @@ wait_numeric_file() {
       *) return 0 ;;
     esac
     sleep 0.1
+  done
+  return 1
+}
+
+wait_file_at_least() {  # <file> <minimum> <pid> [limit-ticks]
+  local file=$1 minimum=$2 pid=$3 limit=${4:-300} value i=0
+  while [ "$i" -lt "$limit" ]; do
+    kill -0 "$pid" 2>/dev/null || return 1
+    value=$(cat "$file" 2>/dev/null || true)
+    case "$value" in
+      ''|*[!0-9]*) ;;
+      *) [ "$value" -ge "$minimum" ] && return 0 ;;
+    esac
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+wait_file_greater() {  # <file> <previous> <pid> [limit-ticks]
+  local file=$1 previous=$2 pid=$3 limit=${4:-300} value i=0
+  while [ "$i" -lt "$limit" ]; do
+    kill -0 "$pid" 2>/dev/null || return 1
+    value=$(cat "$file" 2>/dev/null || true)
+    case "$value" in
+      ''|*[!0-9]*) ;;
+      *) [ "$value" -gt "$previous" ] && return 0 ;;
+    esac
+    sleep 0.1
+    i=$((i + 1))
   done
   return 1
 }
@@ -2344,6 +2377,159 @@ test_terminal_stale_surfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the terminal stale failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "terminal stale was not queued"
   pass "a stale pane sitting on a terminal status is surfaced (queue + exit)"
+}
+
+derived_busy_fixture() {  # <name>
+  local dir state window key pane_hash sig
+  dir=$(make_case "$1")
+  state="$dir/state"
+  window="test:fm-derived-$1"
+  printf 'quiet worker pane\n' > "$dir/pane.txt"
+  printf 'window=%s\nkind=ship\nharness=codex\n' "$window" > "$state/derived-$1.meta"
+  printf 'working: executing the requested task\n' > "$state/derived-$1.status"
+  sig=$(seen_sig "$state/derived-$1.status")
+  printf '%s' "$sig" > "$state/.seen-derived-$1_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "quiet worker pane")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  cat > "$dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  list-windows) printf '%s\n' "${FM_FAKE_TMUX_WINDOW#*:}" ;;
+  capture-pane) cat "$FM_FAKE_TMUX_CAPTURE" ;;
+  display-message)
+    case "$*" in
+      *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}" ;;
+      *pane_tty*)
+        [ -n "${FM_FAKE_TMUX_FOREGROUND:-}" ] && printf '/dev/ttys999\n'
+        ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$dir/fakebin/tmux"
+  cat > "$dir/fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *pid=,pgid=,tpgid=,comm=*)
+    [ -n "${FM_FAKE_TMUX_FOREGROUND:-}" ] || exit 0
+    printf '100 100 100 %s\n' "$FM_FAKE_TMUX_FOREGROUND"
+    ;;
+esac
+SH
+  chmod +x "$dir/fakebin/ps"
+  cat > "$dir/fakebin/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+busy_evidence=0
+if [ "${1:-}" = --busy-evidence ]; then
+  busy_evidence=1
+  shift
+fi
+val=${FM_FAKE_CREW_STATE:-state: unknown · source: none · fake default}
+if [ "$busy_evidence" -eq 1 ]; then
+  [ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || printf 'busy-evidence\n' >> "$FM_FAKE_CREW_STATE_LOG"
+  case "$val" in
+    'state: working · source: run-step'* )
+      fresh=${FM_FAKE_CREW_STATE_FRESH:-0}
+      [ -z "${FM_FAKE_CREW_STATE_FRESH_FILE:-}" ] \
+        || fresh=$(cat "$FM_FAKE_CREW_STATE_FRESH_FILE" 2>/dev/null || true)
+      [ "$fresh" = 1 ] || exit 1
+      printf 'run-step\n'
+      exit 0
+      ;;
+  esac
+  exit 1
+fi
+printf '%s\n' "$val"
+SH
+  chmod +x "$dir/fakebin/fm-crew-state.sh"
+  printf '%s\n' "$dir"
+}
+
+test_fresh_run_step_is_busy_before_stale_classification() {
+  local dir state fakebin out window key pid timer first reads
+  dir=$(derived_busy_fixture fresh-run); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; window="test:fm-derived-fresh-run"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  timer="$state/.stale-since-$key"
+  : > "$dir/crew-state.log"
+  watch_bg "$state" "$fakebin" "$out" \
+    FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    FM_FAKE_CREW_STATE_FRESH=1 FM_FAKE_CREW_STATE_LOG="$dir/crew-state.log" \
+    FM_BUSY_TURN_MAX_SECS=999 FM_STALE_ESCALATE_SECS=1
+  pid=$!
+  if ! wait_file_at_least "$timer" 1 "$pid"; then
+    reap "$pid"; fail "a fresh run-step wedge-woke before its derived-evidence timer started: $(cat "$state/.wake-queue" 2>/dev/null)"
+  fi
+  first=$(cat "$timer")
+  if ! wait_file_greater "$timer" "$first" "$pid"; then
+    reap "$pid"; fail "a fresh run-step did not survive a derived-evidence recheck past the wedge interval: $(cat "$state/.wake-queue" 2>/dev/null)"
+  fi
+  reads=$(wc -l < "$dir/crew-state.log" | tr -d ' ')
+  [ "$reads" -eq 2 ] || { reap "$pid"; fail "fresh run-step evidence was read $reads times before one bounded recheck, expected 2"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "a fresh run-step queued a stale wake"; }
+  reap "$pid"
+  pass "watcher idle predicate treats a fresh authoritative run-step as busy"
+}
+
+test_foreground_command_is_busy_before_stale_classification() {
+  local dir state fakebin out window key pid timer first
+  dir=$(derived_busy_fixture foreground); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; window="test:fm-derived-foreground"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  timer="$state/.stale-since-$key"
+  watch_bg "$state" "$fakebin" "$out" \
+    FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_FOREGROUND=sleep \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · no attributed run' \
+    FM_BUSY_TURN_MAX_SECS=999 FM_STALE_ESCALATE_SECS=1
+  pid=$!
+  if ! wait_file_at_least "$timer" 1 "$pid"; then
+    reap "$pid"; fail "a verified foreground command wedge-woke before its derived-evidence timer started: $(cat "$state/.wake-queue" 2>/dev/null)"
+  fi
+  first=$(cat "$timer")
+  if ! wait_file_greater "$timer" "$first" "$pid"; then
+    reap "$pid"; fail "a verified foreground command did not survive a derived-evidence recheck past the wedge interval: $(cat "$state/.wake-queue" 2>/dev/null)"
+  fi
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "a verified foreground command queued a stale wake"; }
+  reap "$pid"
+  pass "watcher idle predicate treats a verified non-harness foreground command as busy"
+}
+
+test_stale_run_record_reaches_wedge_classification() {
+  local dir state fakebin out window key pid timer first
+  dir=$(derived_busy_fixture stale-run); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; window="test:fm-derived-stale-run"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  timer="$state/.stale-since-$key"
+  printf '1\n' > "$dir/run-fresh"
+  watch_bg "$state" "$fakebin" "$out" \
+    FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    FM_FAKE_CREW_STATE_FRESH_FILE="$dir/run-fresh" FM_STALE_ESCALATE_SECS=1 \
+    FM_BUSY_TURN_MAX_SECS=999
+  pid=$!
+  if ! wait_numeric_file "$timer" 30; then
+    reap "$pid"; fail "a fresh run record never started derived-evidence tracking: $(cat "$state/.wake-queue" 2>/dev/null)"
+  fi
+  first=$(cat "$timer")
+  if ! wait_file_greater "$timer" "$first" "$pid"; then
+    reap "$pid"; fail "a fresh run record did not survive to a derived-evidence recheck: $(cat "$state/.wake-queue" 2>/dev/null)"
+  fi
+  printf '0\n' > "$dir/run-fresh"
+  if ! wait_for_exit "$pid"; then
+    reap "$pid"; fail "a run record that aged past its source-owned freshness bound did not wedge-wake"
+  fi
+  grep -q $'\tstale\ttest:fm-derived-stale-run\t' "$state/.wake-queue" \
+    || { reap "$pid"; fail "a stale persisted run record did not queue a stale wake: $(cat "$state/.wake-queue" 2>/dev/null)"; }
+  wait "$pid" 2>/dev/null || true
+  pass "watcher idle predicate lets a stale run record enter wedge classification"
 }
 
 # --- stale pane, STALE terminal status overridden by an active run: absorbed ---
@@ -5657,6 +5843,9 @@ test_refill_mixed_batch_records_unclassified_status
 test_n_capacity_transitions_collapse_to_one_refill
 test_refill_stale_tail_does_not_reenqueue
 test_terminal_stale_surfaced
+test_fresh_run_step_is_busy_before_stale_classification
+test_foreground_command_is_busy_before_stale_classification
+test_stale_run_record_reaches_wedge_classification
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold

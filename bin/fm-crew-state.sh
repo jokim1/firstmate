@@ -101,8 +101,15 @@
 #      step 4. Backends with no classifier keep reading a failed capture as gone.
 #      The fallback's own comment owns the per-verdict rules.
 #
-# Read-only and side-effect free. Always exits 0 on a successful read regardless
-# of state; exit 2 only on a usage error (no id).
+# `--busy-evidence` is the watcher-facing read of the same attributed run. It
+# succeeds only for a working run-step whose active-step record is still inside
+# no-mistakes' own configured quiet-warning window. That source-owned freshness
+# bound prevents a persisted `running` record from proving liveness forever;
+# Firstmate does not invent a second run-activity threshold.
+#
+# Read-only and side-effect free. The ordinary form always exits 0 on a
+# successful read regardless of state. `--busy-evidence` exits 0 only for fresh
+# run-step evidence and 1 otherwise; either form exits 2 on a usage error.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -125,8 +132,14 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
+BUSY_EVIDENCE_ONLY=0
+if [ "${1:-}" = --busy-evidence ]; then
+  BUSY_EVIDENCE_ONLY=1
+  shift
+fi
 ID=${1:-}
-[ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
+[ -n "$ID" ] && [ "$#" -eq 1 ] \
+  || { echo "usage: fm-crew-state.sh [--busy-evidence] <id>" >&2; exit 2; }
 
 # Fleet snapshot composition supplies its captured metadata path here so every
 # state read resolves the same task generation selected by that snapshot.
@@ -143,10 +156,18 @@ case "$NM_TIMEOUT" in ''|*[!0-9]*) NM_TIMEOUT=10 ;; esac
 FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
 SEP=' · '
+RUN_ACTIVITY_RECENT=0
 
 # Emit the one canonical line and exit 0. Detail is optional.
 emit() {  # <state> <source> [detail]
   local line="state: $1${SEP}source: $2"
+  if [ "$BUSY_EVIDENCE_ONLY" -eq 1 ]; then
+    if [ "$1" = working ] && [ "$2" = run-step ] && [ "$RUN_ACTIVITY_RECENT" -eq 1 ]; then
+      printf 'run-step\n'
+      exit 0
+    fi
+    exit 1
+  fi
   [ -n "${3:-}" ] && line="$line${SEP}$3"
   printf '%s\n' "$line"
   exit 0
@@ -805,6 +826,7 @@ if [ "$HAVE_RUN" = 1 ]; then
   CI_LOG_STATE=""
   RUN_STATUS=""
   if [ "$RUN_SOURCE" = coarse ]; then
+    [ "$BUSY_EVIDENCE_ONLY" -eq 0 ] || emit unknown run-step
     # No step/gate detail is available from the plain runs list - only ever
     # true/working, done, or failed. A crew genuinely parked at a gate still
     # gets full detail once `axi status` reports its own branch again (e.g.
@@ -834,6 +856,7 @@ if [ "$HAVE_RUN" = 1 ]; then
     status=$(strip_quotes "$(nm_field status)")
     RUN_STATUS=$status
     outcome=$(strip_quotes "$(nm_field outcome)")
+    [ "$BUSY_EVIDENCE_ONLY" -eq 0 ] || [ -z "$outcome" ] || emit unknown run-step
     awaiting=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*awaiting_agent:' | head -1 || true)
     gate_status=$(nm_gate_status)
     has_gate=0
@@ -953,6 +976,9 @@ if [ "$HAVE_RUN" = 1 ]; then
       ;;
   esac
 
+  if [ "$RUN_SOURCE" != coarse ] && nm_run_activity_is_recent; then
+    RUN_ACTIVITY_RECENT=1
+  fi
   emit "$RUN_STATE" run-step "$RUN_DETAIL"
 fi
 

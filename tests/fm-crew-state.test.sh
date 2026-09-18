@@ -257,6 +257,15 @@ run_crew_state() {  # <case-dir> <id>
     FM_FAKE_TMUX_WINDOW="${target#*:}" "$CREW_STATE" "$2"
 }
 
+run_crew_busy_evidence() {  # <case-dir> <id>
+  local target=''
+  if [ -f "$1/state/$2.meta" ]; then
+    target=$(sed -n 's/^window=//p' "$1/state/$2.meta" | head -1)
+  fi
+  PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" \
+    FM_FAKE_TMUX_WINDOW="${target#*:}" "$CREW_STATE" --busy-evidence "$2"
+}
+
 new_case() {  # <name> -> echoes case dir with an empty state/
   local d="$TMP_ROOT/$1"
   mkdir -p "$d/state"
@@ -640,6 +649,27 @@ test_active_run_is_authoritative() {
   assert_contains "$out" "source: run-step" "active run -> run-step source"
   assert_contains "$out" "validating (running)" "active run reports the step"
   pass "active run-step is authoritative"
+}
+
+test_busy_evidence_requires_fresh_active_step() {
+  reset_fakes
+  local d out
+  d=$(new_case busy-evidence-freshness)
+  make_repo_on_branch "$d/wt" fm/feat-busy-evidence
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/busy-evidence.meta" "window=fm:fm-busy-evidence" "worktree=$d/wt" "kind=ship"
+
+  FM_FAKE_AXI_STATUS="$(run_fixing_active_recent fm/feat-busy-evidence)"
+  out=$(run_crew_busy_evidence "$d" busy-evidence) \
+    || fail "a recently active attributed run was not accepted as busy evidence"
+  [ "$out" = run-step ] || fail "fresh run evidence printed '$out', expected run-step"
+
+  FM_FAKE_AXI_STATUS="$(run_fixing_active_quiet fm/feat-busy-evidence)"
+  if out=$(run_crew_busy_evidence "$d" busy-evidence 2>&1); then
+    fail "a quiet persisted run record was accepted as busy evidence: $out"
+  fi
+  [ -z "$out" ] || fail "rejected quiet run evidence printed unexpected output: $out"
+  pass "busy-evidence mode accepts only a run inside no-mistakes' own freshness window"
 }
 
 # (b) needs-decision log + a resumed (running/fixing) run = SUPERSEDED
@@ -2979,6 +3009,7 @@ EOF
 }
 
 test_active_run_is_authoritative
+test_busy_evidence_requires_fresh_active_step
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
 test_daemon_claim_over_live_run_reads_run_alive

@@ -19,10 +19,11 @@
 #      spacing holds, a spent budget escalates exactly once, and an
 #      acknowledgement resets the ladder for the next message.
 #   5. A real fm-watch.sh subprocess re-rings the doorbell for an unhandled
-#      aged message on an idle pane WITHOUT waking firstmate, waits on a busy
-#      pane, stays silent on a healthy/empty inbox, surfaces unwritable ladder
-#      bookkeeping only while its record remains unhandled, and emits exactly
-#      one stale wake once the ring budget is spent.
+#      aged message when its run record is stale, waits on semantic busy, fresh
+#      run-step, or verified foreground-command evidence until the common busy
+#      ceiling, stays silent on a healthy/empty inbox, surfaces unwritable
+#      ladder bookkeeping only while its record remains unhandled, and emits
+#      exactly one stale wake once the ring budget is spent.
 #   6. Dead panes: the doorbell line is a shell no-op when executed by a bare
 #      shell, the ring skips an agent the backend classifies dead, and the
 #      watcher surfaces such a record exactly once instead of re-ringing.
@@ -86,7 +87,14 @@ case "${1:-}" in
       case "$a" in
         *cursor_y*) printf '1\n'; exit 0 ;;
         *pane_current_command*) [ -z "${FM_FAKE_TMUX_AGENT:-}" ] || { printf '%s\n' "$FM_FAKE_TMUX_AGENT"; exit 0; } ;;
-        *pane_tty*) [ -z "${FM_FAKE_TMUX_AGENT:-}" ] || { printf '\n'; exit 0; } ;;
+        *pane_tty*)
+          if [ -n "${FM_FAKE_TMUX_FOREGROUND:-}" ]; then
+            printf '/dev/ttys999\n'
+          elif [ -n "${FM_FAKE_TMUX_AGENT:-}" ]; then
+            printf '\n'
+          fi
+          exit 0
+          ;;
       esac
     done
     printf 'fakepane\n'; exit 0 ;;
@@ -102,7 +110,41 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  make_fake_crew_state "$fb" >/dev/null
+  cat > "$fb/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+busy_evidence=0
+if [ "${1:-}" = --busy-evidence ]; then
+  busy_evidence=1
+  shift
+fi
+val=${FM_FAKE_CREW_STATE:-state: unknown · source: none · fake default}
+if [ "$busy_evidence" -eq 1 ]; then
+  case "$val" in
+    'state: working · source: run-step'* )
+      [ "${FM_FAKE_CREW_STATE_FRESH:-0}" = 1 ] || exit 1
+      printf 'run-step\n'
+      exit 0
+      ;;
+  esac
+  exit 1
+fi
+printf '%s\n' "$val"
+SH
+  chmod +x "$fb/fm-crew-state.sh"
+  cat > "$fb/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *pid=,pgid=,tpgid=,comm=*)
+    [ -n "${FM_FAKE_TMUX_FOREGROUND:-}" ] || exit 0
+    printf '100 100 100 %s\n' "$FM_FAKE_TMUX_FOREGROUND"
+    exit 0
+    ;;
+esac
+exit 1
+SH
+  chmod +x "$fb/ps"
   printf '%s\n' "$fb"
 }
 
@@ -112,6 +154,7 @@ watch_bg() {  # <state> <fakebin> <out> [extra env assignments...]
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    FM_FAKE_TMUX_AGENT=grok \
     FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     FM_TASK_INBOX_GRACE_SECS=1 \
     env "$@" "$WATCH" > "$out" 2>/dev/null &
@@ -493,7 +536,7 @@ idle_capture() {  # <dir>
   printf '%s\n' "$1/idle.capture"
 }
 
-test_watcher_rerings_idle_pane_quietly() {
+test_watcher_rerings_when_run_record_is_stale() {
   local dir state out log pid rec
   dir=$(setup_watch_case rering)
   state="$dir/state"; out="$dir/watch.out"; log="$dir/send.log"; : > "$log"
@@ -501,6 +544,7 @@ test_watcher_rerings_idle_pane_quietly() {
   age_path "$rec"
   watch_bg "$state" "$dir/fakebin" "$out" \
     FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
+    FM_FAKE_CREW_STATE_FRESH=0 \
     FM_TASK_INBOX_RING_MAX=99
   pid=$!
   local i=0
@@ -523,7 +567,66 @@ test_watcher_rerings_idle_pane_quietly() {
   sleep 2.5
   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
   [ ! -s "$log" ] || fail "the watcher kept ringing after the ack:"$'\n'"$(cat "$log")"
-  pass "watcher: an unhandled aged message on an idle pane re-rings without waking firstmate, and the ack silences it"
+  pass "watcher: a stale working run record no longer suppresses the inbox re-ring ladder"
+}
+
+test_watcher_waits_on_fresh_run_step() {
+  local dir state out log pid rec
+  dir=$(setup_watch_case fresh-run-wait)
+  state="$dir/state"; out="$dir/watch.out"; log="$dir/send.log"; : > "$log"
+  rec=$(inbox_lib "$state" fm_task_inbox_write "$state" t1 "please continue")
+  age_path "$rec"
+  watch_bg "$state" "$dir/fakebin" "$out" \
+    FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
+    FM_FAKE_CREW_STATE_FRESH=1 FM_TASK_INBOX_RING_MAX=99
+  pid=$!
+  sleep 4
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  [ ! -s "$log" ] || fail "a fresh authoritative run-step rang the inbox doorbell:"$'\n'"$(cat "$log")"
+  [ ! -s "$state/.wake-queue" ] || fail "a fresh authoritative run-step queued a wake:"$'\n'"$(cat "$state/.wake-queue")"
+  pass "watcher: a fresh authoritative run-step suppresses the inbox re-ring ladder"
+}
+
+test_watcher_waits_on_foreground_command() {
+  local dir state out log pid rec
+  dir=$(setup_watch_case foreground-wait)
+  state="$dir/state"; out="$dir/watch.out"; log="$dir/send.log"; : > "$log"
+  rec=$(inbox_lib "$state" fm_task_inbox_write "$state" t1 "please continue")
+  age_path "$rec"
+  watch_bg "$state" "$dir/fakebin" "$out" \
+    FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · no run' \
+    FM_FAKE_TMUX_FOREGROUND=sleep FM_TASK_INBOX_RING_MAX=99
+  pid=$!
+  sleep 4
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  [ ! -s "$log" ] || fail "a verified foreground command rang the inbox doorbell:"$'\n'"$(cat "$log")"
+  [ ! -s "$state/.wake-queue" ] || fail "a verified foreground command queued a wake:"$'\n'"$(cat "$state/.wake-queue")"
+  pass "watcher: a verified non-harness foreground command suppresses the inbox re-ring ladder"
+}
+
+test_watcher_rerings_foreground_command_past_bound() {
+  local dir state out log pid rec i=0
+  dir=$(setup_watch_case foreground-over-age)
+  state="$dir/state"; out="$dir/watch.out"; log="$dir/send.log"; : > "$log"
+  rec=$(inbox_lib "$state" fm_task_inbox_write "$state" t1 "please continue")
+  age_path "$rec"
+  age_path "$state/t1.meta"
+  watch_bg "$state" "$dir/fakebin" "$out" \
+    FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$(idle_capture "$dir")" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · no run' \
+    FM_FAKE_TMUX_FOREGROUND=sleep FM_BUSY_TURN_MAX_SECS=1 FM_TASK_INBOX_RING_MAX=99
+  pid=$!
+  while [ "$i" -lt 100 ]; do
+    grep -qF 'Firstmate instruction waiting' "$log" 2>/dev/null && break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  grep -qF 'Firstmate instruction waiting' "$log" \
+    || fail "a foreground command past the common busy ceiling suppressed the inbox ladder"
+  pass "watcher: a foreground command past the busy ceiling is eligible for re-ring"
 }
 
 test_watcher_waits_on_busy_pane() {
@@ -704,7 +807,10 @@ test_writer_retries_after_a_vanished_lock_collision
 test_ladder_writes_ignore_vanished_inbox
 test_fire_and_forget_records_never_enter_the_ladder
 test_ring_ladder_policy
-test_watcher_rerings_idle_pane_quietly
+test_watcher_rerings_when_run_record_is_stale
+test_watcher_waits_on_fresh_run_step
+test_watcher_waits_on_foreground_command
+test_watcher_rerings_foreground_command_past_bound
 test_watcher_waits_on_busy_pane
 test_watcher_quiet_on_healthy_inbox
 test_watcher_ack_silences_unwritable_ladder
