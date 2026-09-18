@@ -1928,7 +1928,7 @@ On every cycle, the watcher's `reconcile`:
 
 - Republishes every captured result without a durable handled acknowledgement, regardless of earlier publication.
 - Restarts a source whose owner is gone.
-- Stops this home's runner if its registration disappeared unexpectedly.
+- Stops this home's committed runner if its registration disappeared unexpectedly.
 
 A runner still enforcing its launch floor re-reads the registration first and retires itself when that registration generation is gone, so a later reconciliation has nothing left to stop.
 In supported steady state, a home with no registered source runs nothing, generates no state, and keeps its ordinary cadence.
