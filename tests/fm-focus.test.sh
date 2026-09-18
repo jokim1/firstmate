@@ -302,22 +302,6 @@ test_hook_bounds_focus_lock_wait_and_updates_uncontended() {
   pass "prompt hook honors its internal lock deadline when contended and updates when uncontended"
 }
 
-test_playbot_owner_kind_recorded() {
-  local state
-  state=$(new_state playbot)
-  "$FOCUS" switch --state-dir "$state" \
-    --owner-kind playbot \
-    --summary "porch set-lock" \
-    --resume-kind playbot-thread \
-    --resume-pointer "chat-5-1" \
-    --task-id mc-porch-v3 >/dev/null || fail "playbot focus switch failed"
-  [ "$(jq -r '.active.owner_kind' "$state/.focus.json")" = "playbot" ] \
-    || fail "playbot owner_kind not recorded"
-  [ "$(jq -r '.active.resume_pointer' "$state/.focus.json")" = "chat-5-1" ] \
-    || fail "playbot resume pointer not recorded"
-  pass "Playbot-carried focus is recorded as a focus entry without extra adapters"
-}
-
 # --- portable harness wiring regression --------------------------------------
 
 test_tracked_claude_userprompt_wires_focus_hook() {
@@ -400,7 +384,6 @@ test_fail_open_unwritable_state_via_owner
 test_hook_fail_open_unwritable
 test_hook_skips_operational_input
 test_hook_bounds_focus_lock_wait_and_updates_uncontended
-test_playbot_owner_kind_recorded
 test_tracked_claude_userprompt_wires_focus_hook
 test_tracked_codex_userprompt_wires_focus_hook
 test_tracked_grok_userprompt_wires_focus_hook

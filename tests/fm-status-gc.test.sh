@@ -100,31 +100,6 @@ test_id_suffixed_records_refuse() {
   pass "an id-suffixed per-task record such as a supervision lease refuses retirement"
 }
 
-# A Playbot dispatch records its workspace and thread in a NESTED transaction
-# before either the per-task temp root or the meta exists, and spawn deliberately
-# retains it when abort cleanup cannot prove the endpoint is gone. A scan that
-# only visits top-level state entries retires the status log around a live
-# workspace and thread; the panel demonstrated exactly that.
-test_nested_playbot_transaction_refuses() {
-  local dir state rc
-  dir=$(make_case nested-playbot-txn)
-  state="$dir/state"
-  printf 'done: terminal orphan\n' > "$state/orphan.status"
-  mkdir -p "$state/.playbot-dispatch"
-  printf 'task_id=orphan\nstate=thread-created\nworkspace_id=live-workspace\nthread_id=live-thread\n' \
-    > "$state/.playbot-dispatch/orphan.txn"
-
-  rc=0
-  run_gc "$state" orphan > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
-  [ "$rc" -eq 1 ] || fail "a retained Playbot dispatch transaction was not refused (rc=$rc)"
-  grep -F '.playbot-dispatch/orphan.txn' "$dir/gc.err" >/dev/null \
-    || fail "the retained transaction was not named: $(cat "$dir/gc.err")"
-  [ -f "$state/orphan.status" ] || fail "the refusal still removed the status log"
-  [ -f "$state/.playbot-dispatch/orphan.txn" ] \
-    || fail "the refusal removed the transaction it refused on"
-  pass "a retained nested Playbot dispatch transaction refuses retirement"
-}
-
 # The nested scan must stay per-task: another task's transaction in the same
 # directory is not this task's record.
 test_another_tasks_nested_record_does_not_block() {
@@ -132,13 +107,13 @@ test_another_tasks_nested_record_does_not_block() {
   dir=$(make_case nested-other-task)
   state="$dir/state"
   printf 'done: landed\n' > "$state/orphan.status"
-  mkdir -p "$state/.playbot-dispatch"
-  printf 'task_id=other-task\nstate=thread-created\n' > "$state/.playbot-dispatch/other-task.txn"
+  mkdir -p "$state/.secondmate-wake-stall-receipts"
+  printf 'task_id=other-task\nstate=thread-created\n' > "$state/.secondmate-wake-stall-receipts/other-task"
 
   run_gc "$state" orphan > "$dir/gc.out" 2> "$dir/gc.err" \
     || fail "another task's nested transaction blocked retirement: $(cat "$dir/gc.err")"
   [ ! -e "$state/orphan.status" ] || fail "the orphan's status log survived retirement"
-  [ -f "$state/.playbot-dispatch/other-task.txn" ] \
+  [ -f "$state/.secondmate-wake-stall-receipts/other-task" ] \
     || fail "retirement removed another task's nested transaction"
   pass "another task's nested record neither blocks retirement nor is removed by it"
 }
@@ -223,13 +198,13 @@ test_unrecognized_nested_name_refuses() {
   dir=$(make_case unrecognized-nested)
   state="$dir/state"
   printf 'done: terminal orphan\n' > "$state/orphan.status"
-  mkdir -p "$state/.playbot-dispatch"
-  printf 'workspace_id=live-workspace\n' > "$state/.playbot-dispatch/orphan.workspace"
+  mkdir -p "$state/unknown-nested"
+  printf 'workspace_id=live-workspace\n' > "$state/unknown-nested/orphan.workspace"
 
   rc=0
   run_gc "$state" orphan > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
   [ "$rc" -eq 1 ] || fail "an unrecognized nested name carrying the task id was not refused (rc=$rc)"
-  grep -F '.playbot-dispatch/orphan.workspace' "$dir/gc.err" >/dev/null \
+  grep -F 'unknown-nested/orphan.workspace' "$dir/gc.err" >/dev/null \
     || fail "the unrecognized nested record was not named: $(cat "$dir/gc.err")"
   [ -f "$state/orphan.status" ] || fail "the refusal still removed the status log"
   pass "an unrecognized nested name is refused rather than retired around"
@@ -246,7 +221,7 @@ test_symlinked_subdirectory_refuses() {
   printf 'done: terminal orphan\n' > "$state/orphan.status"
   mkdir -p "$outside"
   printf 'state=thread-created\nworkspace_id=live-workspace\n' > "$outside/orphan.txn"
-  ln -s "$outside" "$state/.playbot-dispatch"
+  ln -s "$outside" "$state/.secondmate-wake-stall-receipts"
 
   rc=0
   run_gc "$state" orphan > "$dir/gc.out" 2> "$dir/gc.err" || rc=$?
@@ -498,7 +473,6 @@ test_task_keyed_nested_records_refuse
 test_unrecognized_nested_name_refuses
 test_symlinked_subdirectory_refuses
 test_home_wide_status_shape_refuses
-test_nested_playbot_transaction_refuses
 test_another_tasks_nested_record_does_not_block
 test_home_wide_locks_do_not_block_word_ids
 test_unrecognized_record_naming_the_task_refuses
