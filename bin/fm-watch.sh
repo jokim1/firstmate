@@ -202,20 +202,9 @@ WATCHER_DOWNTIME_MARKER="$STATE/.watcher-down"
 # or starting the loop. Running it as a script executes the runtime exactly as
 # before, byte-for-byte.
 
-# Portable stat. macOS (BSD) stat uses `-f <fmt>`; Linux (GNU) stat uses `-c <fmt>`.
-# Do NOT use the `stat -f <fmt> ... || stat -c <fmt> ...` fallback form: on Linux
-# `stat -f` is *filesystem* stat and writes a partial filesystem dump ("File: ...",
-# "Blocks: ...") to stdout before failing, so the fallback's correct output gets
-# appended to that garbage. Arithmetic under `set -u` then aborts on the stray
-# token (e.g. the word "File" read as an unset variable), which silently kills the
-# watcher mid-cycle. Detect the platform once and pick the right form.
-# On Darwin, call /usr/bin/stat rather than PATH-resolved stat so GNU coreutils
-# cannot shadow the BSD `-f` syntax.
-if [ "$(uname)" = Darwin ]; then
-  stat_mtime() { /usr/bin/stat -f %m "$1" 2>/dev/null; }        # epoch seconds of mtime
-else
-  stat_mtime() { stat -c %Y "$1" 2>/dev/null; }
-fi
+# Portable file mtime (stat_mtime) lives in bin/fm-classify-lib.sh, already
+# sourced above through the push-transition graph, so the watcher and daemon
+# share one platform-selected reader.
 # bin/fm-classify-lib.sh owns status reported-state signatures and presentation
 # markers, while bin/fm-wake-lib.sh owns their wake-facing routing, the legacy
 # turn-ended signature, annotation staleness checks, and guarded bookkeeping writes.
@@ -278,18 +267,18 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # foreground command is positive execution evidence, but none is unbounded.
 # Run-step evidence first has to remain inside no-mistakes' own quiet-warning
 # window; BUSY_TURN_MAX_SECS then bounds how long any of the three may go
-# without a completed turn or explicit native-harness progress (the
-# marker-selection contract is in busy_turn_over_age below). Once this bound
-# is crossed, busy_turn_over_age routes the pane through
-# busy_turn_bound_check, which hands a crossed bound to the same
-# STALE_ESCALATE_SECS-paced wedge_timer_check used for a provably-working
-# non-busy stale - so it escalates via the existing stale reason, escalation
-# counter, and demand-deep-inspection marker for human inspection only, never an
-# automatic interrupt, signal, or restart - unless the crew declared the wait
-# itself, which takes the long pause cadence instead. Set generously above
-# any legitimate interval without observable progress, including silent long
-# tool calls, builds, or test runs.
-BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-3600}
+# without a completed turn or explicit native-harness progress
+# (busy_turn_over_age in bin/fm-classify-lib.sh owns marker selection and the
+# shared age predicate). Once this bound is crossed, busy_turn_over_age
+# routes the pane through busy_turn_bound_check, which hands a crossed bound
+# to the same STALE_ESCALATE_SECS-paced wedge_timer_check used for a
+# provably-working non-busy stale - so it escalates via the existing stale
+# reason, escalation count, and demand-deep-inspection marker for human
+# inspection only, never an automatic interrupt, signal, or restart - unless
+# the crew declared the wait itself, which takes the long pause cadence
+# instead. Set generously above any legitimate interval without observable
+# progress, including silent long tool calls, builds, or test runs.
+BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-$FM_BUSY_TURN_MAX_SECS_DEFAULT}
 # A local secondmate's foreign queue is checked on every poll, but only after this
 # bounded interval with no drain progress can it produce a parent notification.
 # A healthy mate drains its queue between turns, not inside one, so this default
@@ -1137,19 +1126,10 @@ derived_execution_timer_check() {  # <window> <task> <hash> <marker> <since-file
   return 0
 }
 
-# busy_turn_over_age: 0 iff the last completed turn or explicit native-harness
-# progress is at least BUSY_TURN_MAX_SECS old. Progress is actual observed model
-# or tool activity, never a timer or a busy footer. It does not emit a wake or
-# change semantic busy state. Before either marker exists, age the spawn record.
-# The caller checks busy state and routes a crossed bound through inspection.
-busy_turn_over_age() {  # <task>
-  local task=$1 f progress
-  f="$STATE/$task.turn-ended"
-  [ -e "$f" ] || f="$STATE/$task.meta"
-  progress="$STATE/$task.progress"
-  if [ -f "$progress" ] && [ "$progress" -nt "$f" ]; then f="$progress"; fi
-  [ "$(age_of "$f")" -ge "$BUSY_TURN_MAX_SECS" ]
-}
+# busy_turn_over_age and its marker selection live in bin/fm-classify-lib.sh
+# (sourced above) so the away-mode daemon applies the same ceiling.
+# BUSY_TURN_MAX_SECS above remains this process's resolved bound for local
+# call sites and for that shared helper.
 
 # Absorb a stale pane under a declared external-wait pause (paused:) or a
 # dead-agent captain-held transfer, and re-surface it once every

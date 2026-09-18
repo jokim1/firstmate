@@ -95,6 +95,11 @@
 #                                   kinds.
 #          FM_STALE_ESCALATE_SECS   idle seconds before a stale pane escalates
 #                                   as a possible wedge (default 240)
+#          FM_BUSY_TURN_MAX_SECS    shared ceiling on semantic busy, run-step,
+#                                   or foreground evidence without a completed
+#                                   turn or native-harness progress (default
+#                                   from bin/fm-classify-lib.sh); past it a
+#                                   stale recheck escalates even with evidence
 #          FM_PAUSE_RESURFACE_SECS  seconds a declared wait stays declared,
 #                                   idle or busy, before it re-surfaces as a
 #                                   recheck (default 14400, four hours); an
@@ -717,11 +722,14 @@ task_window_harness() {  # <window> <state>
   grep '^harness=' "$meta" 2>/dev/null | cut -d= -f2- || true
 }
 
-# stale_window_is_busy: 0 when the task is PROVABLY working through the
-# semantic busy-state contract (bin/fm-busy-lib.sh), 1 when it is not, and 2
-# when the endpoint could not be read at all. Only an exact busy verdict is
-# working: unknown semantic state never becomes busy and never becomes a
-# silent idle, so a stale pane whose state cannot be proven surfaces.
+# stale_window_is_busy: 0 when the task is PROVABLY executing through either
+# the semantic busy-state contract (bin/fm-busy-lib.sh) or the shared derived
+# evidence predicate (crew_has_live_execution in bin/fm-classify-lib.sh), 1
+# when it is not, and 2 when the endpoint could not be read at all. Called only
+# from housekeeping's already-stale paths, so the derived consult stays off the
+# cheap per-wake path. Positive evidence is gated by busy_turn_over_age so the
+# same FM_BUSY_TURN_MAX_SECS ceiling the watcher uses still escalates a pane
+# past the cap. Unknown semantic state never becomes busy on its own.
 stale_window_is_busy() {  # <window> <state>
   local win=$1 state=$2 backend harness label task tail40 verdict
   backend=$(task_window_backend "$win" "$state")
@@ -730,7 +738,17 @@ stale_window_is_busy() {  # <window> <state>
   label="fm-$task"
   tail40=$(fm_backend_capture "$backend" "$win" 40 "$label" 2>/dev/null) || return 2
   verdict=$(fm_busy_classify "$backend" "$win" "$harness" "$task" "$state" "$tail40")
-  [ "${verdict%% *}" = busy ]
+  if [ "${verdict%% *}" = busy ]; then
+    :
+  elif [ -n "$task" ] && crew_has_live_execution "$task"; then
+    :
+  else
+    return 1
+  fi
+  if [ -n "$task" ] && busy_turn_over_age "$task"; then
+    return 1
+  fi
+  return 0
 }
 
 escalate_add() {  # <state> <distilled-item>

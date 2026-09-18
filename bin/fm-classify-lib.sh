@@ -27,7 +27,7 @@
 # A missing, malformed, identity-mismatched, or past-end classified position reads
 # from byte 0, preferring a bounded duplicate over a lost event.
 #
-# There are four documented exceptions. The absorb classification
+# There are five documented exceptions. The absorb classification
 # (crew_absorb_class and its working/paused wrappers) is NOT a pure status-file
 # read: it reuses bin/fm-crew-state.sh, which may make a bounded no-mistakes call,
 # to decide whether a crew that just stopped its turn or went stale is working,
@@ -40,9 +40,12 @@
 # log every time. crew_worktree_written_since reads the task's meta file and walks
 # a bounded slice of its worktree instead of a status file, so callers run it only
 # at the moment they would otherwise escalate. crew_has_live_execution uses
-# bin/fm-busy-event.sh's read-only evidence command for the watcher idle
-# predicate; it can make that same bounded no-mistakes read and a backend
-# process read, so callers keep it off unrelated status-only paths.
+# bin/fm-busy-event.sh's read-only evidence command for the shared idle
+# predicate (watcher and away-mode daemon); it can make that same bounded
+# no-mistakes read and a backend process read, so callers keep it off
+# unrelated status-only paths. busy_turn_over_age ages turn-ended, meta, or
+# progress markers through the portable stat_mtime helper below rather than a
+# status-file read, so callers keep it on the same busy/derived paths.
 
 # Directory of this library, used to locate the sibling fm-crew-state.sh reader.
 # Resolved at source time from BASH_SOURCE so it works whether sourced by a
@@ -54,6 +57,18 @@ _FM_CLASSIFY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)"
 # or no-mistakes install; absent, it points at the real sibling script.
 FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 FM_BUSY_EVENT_BIN="${FM_BUSY_EVENT_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-busy-event.sh}"
+
+# Portable file mtime in epoch seconds. macOS (BSD) uses `-f <fmt>`; Linux (GNU)
+# uses `-c <fmt>`. Do NOT use `stat -f ... || stat -c ...`: on GNU, `-f` is
+# filesystem status, can succeed with a "File: ..." dump, and then the fallback
+# never supplies an epoch (tests/fm-busy-state.test.sh pins the defect). Detect
+# the platform once. On Darwin, call /usr/bin/stat so GNU coreutils cannot
+# shadow the BSD form. Shared by the watcher and the away-mode daemon.
+if [ "$(uname)" = Darwin ]; then
+  stat_mtime() { /usr/bin/stat -f %m "$1" 2>/dev/null; }
+else
+  stat_mtime() { stat -c %Y "$1" 2>/dev/null; }
+fi
 
 # fm_run_timed, the shared hard bound the worktree write probe below puts around
 # its one filesystem walk. bin/fm-timeout-lib.sh owns bounded execution for this
@@ -108,6 +123,13 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # while the away-posture record exists (bin/fm-watch.sh owns that rule).
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=14400
+
+# Shared ceiling for how long semantic busy, run-step, or foreground evidence
+# may prove liveness without a completed turn or explicit native-harness
+# progress. busy_turn_over_age owns which marker file ages; both the watcher
+# and the away-mode daemon read this default through that helper.
+# shellcheck disable=SC2034 # Read by busy_turn_over_age and by callers that resolve FM_BUSY_TURN_MAX_SECS.
+FM_BUSY_TURN_MAX_SECS_DEFAULT=3600
 
 # fm_utc_iso_to_epoch <YYYY-MM-DDTHH:MM[:SS]Z>: the one portable UTC ISO 8601
 # reader shared by the declared-wait vocabulary and the away-posture record
@@ -907,12 +929,7 @@ _fm_status_file_size() {  # <status-file>
 }
 
 _fm_status_file_mtime() {  # <status-file>
-  local f=$1
-  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
-    LC_ALL=C /usr/bin/stat -f '%m' "$f" 2>/dev/null
-  else
-    LC_ALL=C stat -c '%Y' "$f" 2>/dev/null
-  fi
+  stat_mtime "$1"
 }
 
 # Private scratch path for a one-shot span read, alongside the status file the
@@ -2012,7 +2029,8 @@ crew_absorb_class() {  # <id>
 # does not cover: an authoritative working run-step with source-owned freshness,
 # or a verified non-harness foreground command in its pane. The executable owner
 # prints the source token, but this predicate intentionally exposes only truth;
-# the watcher applies its shared busy-turn ceiling before suppressing a wake.
+# callers apply busy_turn_over_age before suppressing a wake or clearing a
+# stale marker.
 crew_has_live_execution() {  # <id>
   local id=$1 state_dir evidence
   [ -n "$id" ] || return 1
@@ -2022,6 +2040,30 @@ crew_has_live_execution() {  # <id>
     "$FM_BUSY_EVENT_BIN" evidence "$state_dir" "$id" 2>/dev/null) || return 1
   case "$evidence" in run-step|foreground) return 0 ;; esac
   return 1
+}
+
+# 0 iff the last completed turn or explicit native-harness progress is at least
+# FM_BUSY_TURN_MAX_SECS old. Progress is actual observed model or tool activity,
+# never a timer or a busy footer. This helper owns marker selection: prefer
+# turn-ended, else the spawn meta, else a newer progress touch. A missing
+# ageable file is treated as already over the bound so inconclusive
+# bookkeeping cannot suppress wedge detection. Callers check busy or derived
+# state and route a crossed bound through inspection.
+busy_turn_over_age() {  # <id>
+  local id=$1 state_dir max_secs f progress m now
+  [ -n "$id" ] || return 1
+  state_dir=${FM_STATE_OVERRIDE:-${STATE:-}}
+  [ -n "$state_dir" ] || return 1
+  max_secs=${FM_BUSY_TURN_MAX_SECS:-${BUSY_TURN_MAX_SECS:-$FM_BUSY_TURN_MAX_SECS_DEFAULT}}
+  case "$max_secs" in ''|*[!0-9]*) max_secs=$FM_BUSY_TURN_MAX_SECS_DEFAULT ;; esac
+  f="$state_dir/$id.turn-ended"
+  [ -e "$f" ] || f="$state_dir/$id.meta"
+  progress="$state_dir/$id.progress"
+  if [ -f "$progress" ] && [ "$progress" -nt "$f" ]; then f="$progress"; fi
+  m=$(stat_mtime "$f") || return 0
+  now=$(date +%s)
+  [ "$m" -le "$now" ] || return 0
+  [ $(( now - m )) -ge "$max_secs" ]
 }
 
 # 0 if crew <id> shows POSITIVE evidence it is still working (crew_absorb_class

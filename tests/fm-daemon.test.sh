@@ -1290,6 +1290,203 @@ test_housekeeping_resumed_stale_cleared() {
   pass "resumed (busy) stale clears its marker without escalating"
 }
 
+# Away-mode parity with the watcher's derived-execution idle predicate: a pane
+# that reads idle through the semantic contract but still has live run-step or
+# foreground evidence must clear its stale marker without a wedge escalation,
+# while the same idle pane past FM_BUSY_TURN_MAX_SECS must still escalate.
+_install_daemon_derived_evidence_fakes() {  # <fakebin>
+  local fakebin=$1
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  list-windows) printf '%s\n' "${FM_FAKE_TMUX_WINDOW#*:}" ;;
+  capture-pane) cat "$FM_FAKE_TMUX_CAPTURE" ;;
+  display-message)
+    case "$*" in
+      *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}" ;;
+      *pane_tty*)
+        [ -n "${FM_FAKE_TMUX_FOREGROUND:-}" ] && printf '/dev/ttys999\n'
+        ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *pid=,pgid=,tpgid=,comm=*)
+    [ -n "${FM_FAKE_TMUX_FOREGROUND:-}" ] || exit 0
+    printf '100 100 100 %s\n' "$FM_FAKE_TMUX_FOREGROUND"
+    ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  cat > "$fakebin/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+busy_evidence=0
+if [ "${1:-}" = --busy-evidence ]; then
+  busy_evidence=1
+  shift
+fi
+val=${FM_FAKE_CREW_STATE:-state: unknown · source: none · fake default}
+if [ "$busy_evidence" -eq 1 ]; then
+  case "$val" in
+    'state: working · source: run-step'* )
+      [ "${FM_FAKE_CREW_STATE_FRESH:-0}" = 1 ] || exit 1
+      printf 'run-step\n'
+      exit 0
+      ;;
+  esac
+  exit 1
+fi
+printf '%s\n' "$val"
+SH
+  chmod +x "$fakebin/fm-crew-state.sh"
+}
+
+# Regression for the GNU-stat fallback form that busy_turn_over_age briefly
+# shipped: on Linux, `stat -f` is filesystem status and can succeed with a
+# "File: ..." dump, so `stat -f ... || stat -c ...` never yields an epoch and
+# every fresh task looked past FM_BUSY_TURN_MAX_SECS. Stub GNU behaviour the
+# same way tests/fm-busy-state.test.sh does and prove a fresh spawn record is
+# not over-age under the shared helper.
+test_busy_turn_over_age_fresh_under_gnu_stat() {
+  local dir state fakebin real_uname out
+  dir=$(make_supercase gnu-stat-busy-age)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  real_uname=$(command -v uname)
+  : > "$state/task.meta"
+
+  cat > "$fakebin/stat" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -c ] && [ "${2:-}" = %Y ]; then
+  printf '%s\n' "$(date +%s)"
+  exit 0
+fi
+if [ "${1:-}" = -f ]; then
+  echo "stat: cannot read file system information for '$2': No such file or directory" >&2
+  shift 2
+  printf '  File: "%s"\n' "${1:-}"
+  printf '    ID: deadbeef Namelen: 255 Type: apfs\n'
+  exit 0
+fi
+exit 1
+SH
+  chmod +x "$fakebin/stat"
+  cat > "$fakebin/uname" <<SH
+#!/usr/bin/env bash
+if [ \$# -eq 0 ]; then printf 'Linux\n'; exit 0; fi
+exec "$real_uname" "\$@"
+SH
+  chmod +x "$fakebin/uname"
+
+  out=$(PATH="$fakebin:$PATH" bash -c '
+    set -u
+    . "'"$ROOT"'/bin/fm-classify-lib.sh"
+    export FM_STATE_OVERRIDE="'"$state"'" FM_BUSY_TURN_MAX_SECS=60
+    if busy_turn_over_age task; then printf "%s\n" over; else printf "%s\n" fresh; fi
+  ')
+  [ "$out" = fresh ] \
+    || fail "busy_turn_over_age treated a fresh task as over-age under GNU stat: $out"
+  pass "busy_turn_over_age stays under the busy-turn cap for a fresh task under GNU stat"
+}
+
+test_housekeeping_fresh_run_step_clears_stale_without_wedge() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase stale-derived-run)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  _install_daemon_derived_evidence_fakes "$fakebin"
+  win="sess:fm-derived-run"; pane="$dir/pane.txt"
+  printf 'quiet worker pane\n' > "$pane"
+  printf 'working: validating\n' > "$state/derived-run.status"
+  fm_write_meta "$state/derived-run.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=codex"
+  key=$(printf '%s' "derived-run" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    FM_FAKE_CREW_STATE_FRESH=1 FM_BUSY_TURN_MAX_SECS=999 FM_STALE_ESCALATE_SECS=240 \
+    housekeeping "$state"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "a fresh run-step left its daemon stale marker in place"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a fresh run-step raised a daemon wedge escalation: $(cat "$state/.subsuper-escalations")"
+  pass "daemon stale recheck treats a fresh authoritative run-step as busy"
+}
+
+test_housekeeping_foreground_command_clears_stale_without_wedge() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase stale-derived-fg)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  _install_daemon_derived_evidence_fakes "$fakebin"
+  win="sess:fm-derived-fg"; pane="$dir/pane.txt"
+  printf 'quiet worker pane\n' > "$pane"
+  printf 'working: running a long build\n' > "$state/derived-fg.status"
+  fm_write_meta "$state/derived-fg.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=codex"
+  key=$(printf '%s' "derived-fg" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_FAKE_TMUX_FOREGROUND=sleep \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · no attributed run' \
+    FM_BUSY_TURN_MAX_SECS=999 FM_STALE_ESCALATE_SECS=240 \
+    housekeeping "$state"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "a verified foreground command left its daemon stale marker in place"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a verified foreground command raised a daemon wedge escalation: $(cat "$state/.subsuper-escalations")"
+  pass "daemon stale recheck treats a verified non-harness foreground command as busy"
+}
+
+# Discriminates from the parent daemon: the same derived-evidence fixture must
+# clear without escalating while under the busy-turn cap, then escalate once
+# the spawn record ages past that cap.
+test_housekeeping_derived_evidence_past_busy_turn_cap_still_escalates() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase stale-derived-over-age)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  _install_daemon_derived_evidence_fakes "$fakebin"
+  win="sess:fm-derived-old"; pane="$dir/pane.txt"
+  printf 'quiet worker pane\n' > "$pane"
+  printf 'working: validating\n' > "$state/derived-old.status"
+  fm_write_meta "$state/derived-old.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=codex"
+  key=$(printf '%s' "derived-old" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    FM_FAKE_CREW_STATE_FRESH=1 FM_BUSY_TURN_MAX_SECS=999 FM_STALE_ESCALATE_SECS=240 \
+    housekeeping "$state"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "derived evidence under the busy-turn cap left its daemon stale marker"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "derived evidence under the busy-turn cap escalated: $(cat "$state/.subsuper-escalations")"
+
+  # Age the spawn record past the busy-turn ceiling so evidence cannot suppress
+  # the wedge path forever, matching the watcher's shared over-age cap.
+  touch -t 202001010101.00 "$state/derived-old.meta"
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  : > "$state/.subsuper-escalations"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    FM_FAKE_CREW_STATE_FRESH=1 FM_BUSY_TURN_MAX_SECS=60 FM_STALE_ESCALATE_SECS=240 \
+    housekeeping "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "derived evidence past the busy-turn cap did not escalate a daemon wedge"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "derived evidence past the busy-turn cap left its stale marker"
+  grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null \
+    || fail "derived evidence past the busy-turn cap did not escalate as a possible wedge"
+  pass "daemon stale recheck clears under the busy-turn cap and escalates past it"
+}
+
 test_housekeeping_herdr_persistent_stale_resolves_meta() {
   local dir state key
   dir=$(make_supercase stale-herdr-persistent)
@@ -2977,6 +3174,10 @@ test_housekeeping_migrates_watcher_unpaused_marker_to_clear
 test_housekeeping_seeds_pause_marker_from_status
 test_housekeeping_persistent_stale_escalates
 test_housekeeping_resumed_stale_cleared
+test_busy_turn_over_age_fresh_under_gnu_stat
+test_housekeeping_fresh_run_step_clears_stale_without_wedge
+test_housekeeping_foreground_command_clears_stale_without_wedge
+test_housekeeping_derived_evidence_past_busy_turn_cap_still_escalates
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_captain_held_resurfaces_and_resets
 test_housekeeping_paused_resumed_cleared
