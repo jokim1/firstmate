@@ -638,7 +638,7 @@ _fm_recovery_marker_write_locked() {
   local marker=$1 kind=$2 generation=${3:-} status=${4:-pending} tmp token
   FM_RECOVERY_MARKER_WRITTEN_TOKEN=
   case "$kind" in handling|downtime) ;; *) return 1 ;; esac
-  case "$status" in pending|announced) ;; *) return 1 ;; esac
+  case "$status" in pending|announced|acked) ;; *) return 1 ;; esac
   tmp=$(mktemp "${marker}.tmp.XXXXXX") || return 1
   [ -n "$generation" ] || generation="$(fm_current_pid).$(date +%s).${tmp##*.}"
   token="$status:$kind:$generation"
@@ -674,6 +674,9 @@ _fm_recovery_marker_publish() {
     # The token is restored because publishing owns no snapshot of its own.
     saved_token=$FM_RECOVERY_MARKER_TOKEN
     if fm_recovery_marker_read "$marker"; then
+      if [ "$source" = append ]; then
+        previous_append_token=$FM_RECOVERY_MARKER_TOKEN
+      fi
       case "$FM_RECOVERY_MARKER_TOKEN" in
         pending:handling:*|pending:downtime:*)
           generation=${FM_RECOVERY_MARKER_TOKEN##*:}
@@ -687,8 +690,6 @@ _fm_recovery_marker_publish() {
           if [ "$source" = watcher ]; then
             generation=${FM_RECOVERY_MARKER_TOKEN##*:}
             status=announced
-          elif [ ! -s "$FM_WAKE_QUEUE" ]; then
-            previous_append_token=$FM_RECOVERY_MARKER_TOKEN
           fi
           ;;
       esac
@@ -699,11 +700,21 @@ _fm_recovery_marker_publish() {
     fm_lock_release "$lock"
     return 1
   fi
-  if [ -n "$previous_append_token" ]; then
+  if [ -n "$previous_append_token" ] \
+    && [ "$previous_append_token" != "$FM_RECOVERY_MARKER_WRITTEN_TOKEN" ]; then
     FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN=$previous_append_token
     FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN=$FM_RECOVERY_MARKER_WRITTEN_TOKEN
   fi
   fm_lock_release "$lock"
+}
+
+_fm_recovery_marker_restore_token_locked() {
+  local marker=$1 token=$2 status kind_and_generation kind generation
+  status=${token%%:*}
+  kind_and_generation=${token#*:}
+  kind=${kind_and_generation%%:*}
+  generation=${token##*:}
+  _fm_recovery_marker_write_locked "$marker" "$kind" "$generation" "$status"
 }
 
 _fm_wake_append_recovery_restore_locked() {
@@ -716,7 +727,7 @@ _fm_wake_append_recovery_restore_locked() {
     fm_lock_release "$lock"
     return 1
   fi
-  if ! _fm_recovery_marker_write_locked "$marker" downtime "${previous##*:}" announced; then
+  if ! _fm_recovery_marker_restore_token_locked "$marker" "$previous"; then
     fm_lock_release "$lock"
     return 1
   fi
@@ -1890,7 +1901,7 @@ fm_wake_append_locked() {
   if [ "$status" -eq 0 ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$epoch" "$seq" "$kind" "$clean_key" "$clean_payload" >> "$FM_WAKE_QUEUE" || status=$?
   fi
-  if [ "$status" -ne 0 ] && [ ! -s "$FM_WAKE_QUEUE" ]; then
+  if [ "$status" -ne 0 ]; then
     _fm_wake_append_recovery_restore_locked || true
   fi
   return "$status"
@@ -1919,8 +1930,8 @@ fm_wake_append_rollback_locked() {
     fm_lock_release "$lock"
     return 1
   fi
-  if ! _fm_recovery_marker_write_locked "$marker" downtime \
-    "${FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN##*:}" announced; then
+  if ! _fm_recovery_marker_restore_token_locked "$marker" \
+    "$FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN"; then
     mv -f -- "$backup" "$FM_WAKE_QUEUE" 2>/dev/null || true
     rm -f -- "$backup"
     fm_lock_release "$lock"
