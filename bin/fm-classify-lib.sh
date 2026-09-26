@@ -1817,8 +1817,9 @@ EOF
 # presented byte offset, and one atomic replacement commits only the contiguous
 # status spans that were successfully presented. Any annotation path that
 # prints a task's unread bytes, whether direct or historical, commits through
-# the captured endpoint so those bytes cannot replay on a later drain. A quiet
-# fleet scan leaves routine working/done bytes unacknowledged so a subsequently
+# the captured endpoint so those bytes cannot replay on a later drain.
+# tests/fm-wake-drain-unread-status.test.sh pins that commit.
+# A quiet fleet scan leaves routine working/done bytes unacknowledged so a subsequently
 # published signal can still annotate them. A missing manifest row or changed
 # file identity is offset 0 for the current file, while malformed or unreadable
 # cursor state aborts presentation without advancing any offset. A trusted
