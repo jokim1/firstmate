@@ -265,7 +265,7 @@ Neither token, title, nor journal authorizes send, capture, task ownership, Tree
 The owning parent is the launcher's own exact workspace, resolved from the same identity the flat path uses.
 It falls back to a unique home-label lookup only for a Firstmate outside Herdr.
 Projected children are never collapsed back into that parent.
-The parent is the placement and ordering reference the projection is bound under.
+The parent is the placement and ordering reference for best-effort grouping.
 
 The normal `fm-<id>` task tab is created in the exact new workspace returned by Herdr.
 Only the exact seeded default tab returned by the same workspace-create response can be pruned.

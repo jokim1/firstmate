@@ -719,7 +719,7 @@ fm_backend_herdr_projection_journal_write_v2() {  # <journal> <task-id> <token> 
 }
 
 # fm_backend_herdr_projection_journal_bind: upgrade one exact version 1
-# attempt to a version 2 binding after the live projection and parent relation
+# attempt to a version 2 binding after the live projection and parent identity
 # have both been verified under the session lock.
 fm_backend_herdr_projection_journal_bind() {  # <journal> <task-id> <home> <session> <workspace> <tab> <pane> <parent-workspace> <parent-label> <workspace-label> <task-label>
   local journal=$1 id=$2 home=$3 session=$4 workspace=$5 tab=$6 pane=$7
