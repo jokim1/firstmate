@@ -1,0 +1,22 @@
+=== NEW drain: historical turn-ended cursor advance ===
+after prime: cursor=28 size=28
+NEW drain 1: cursor=308 size=308
+NEW drain 2: cursor=347 size=347
+NEW drain 3: cursor=386 size=386
+PASS new-historical-cursor-advance
+=== OLD drain: expected replay of historical annotations ===
+OLD drain 1: cursor=28 size=308
+OLD drain 2: cursor=28 size=347
+OLD drain 2 replayed hold A (expected pre-fix behavior)
+OLD drain 3: cursor=28 size=386
+OLD drain 3 replayed hold A (expected pre-fix behavior)
+PASS old-drain-replays-historical-rows (pre-fix baseline)
+=== NEW drain: quiet turn-end skip preserves routine bytes ===
+quiet after turn-end: cursor=22 size=77 prime=22
+quiet after later signal: cursor=77 size=77
+PASS quiet-turn-end-skip-preserves-routine-bytes
+=== NEW drain: mixed printed vs skipped tasks ===
+mixed printed: cursor=118 size=118
+mixed skipped: cursor=24 size=65 prime=24
+PASS mixed-printed-vs-skipped-cursor
+ALL LIVE SCENARIOS PASSED

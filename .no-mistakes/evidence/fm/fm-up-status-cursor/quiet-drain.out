@@ -1,0 +1,3 @@
+1790456309	1	signal	task-quiet.turn-ended	signal: task-quiet.turn-ended
+STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):
+task-quiet done [corr=q2]: shipped clean

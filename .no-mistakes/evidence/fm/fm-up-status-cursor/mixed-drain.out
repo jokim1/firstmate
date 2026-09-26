@@ -1,0 +1,7 @@
+1790456314	1	signal	task-printed.turn-ended	signal: task-printed.turn-ended
+1790456314	2	signal	task-skipped.turn-ended	signal: task-skipped.turn-ended
+wake annotation: unread wake-EVENT since last drain, not current state; historical / not necessarily the triggering event: task-printed.status: needs-decision [key=captain-hold-mix-1]: hold mixed
+wake annotation: latest wake-EVENT observed at drain, not current state; historical / not necessarily the triggering event: task-printed.status: working [corr=mixnew1]: newer mixed event
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+task-printed [key=captain-hold-mix-1] needs-decision: hold mixed
+OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'

@@ -1,0 +1,12 @@
+1790456298	1	signal	task-hist.turn-ended	signal: task-hist.turn-ended
+wake annotation: unread wake-EVENT since last drain, not current state; historical / not necessarily the triggering event: task-hist.status: needs-decision [key=captain-hold-hist-a-1]: hold A
+wake annotation: unread wake-EVENT since last drain, not current state; historical / not necessarily the triggering event: task-hist.status: needs-decision [key=captain-hold-hist-b-1]: hold B
+wake annotation: unread wake-EVENT since last drain, not current state; historical / not necessarily the triggering event: task-hist.status: needs-decision [key=captain-hold-hist-c-1]: hold C
+wake annotation: unread wake-EVENT since last drain, not current state; historical / not necessarily the triggering event: task-hist.status: done [key=child-outcome-hist-a]: scout done
+wake annotation: unread wake-EVENT since last drain, not current state; historical / not necessarily the triggering event: task-hist.status: done [corr=histdone1]: scout DONE narrative
+wake annotation: latest wake-EVENT observed at drain, not current state; historical / not necessarily the triggering event: task-hist.status: working [corr=histnew1]: newer event 1
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+task-hist [key=captain-hold-hist-a-1] needs-decision: hold A
+task-hist [key=captain-hold-hist-b-1] needs-decision: hold B
+task-hist [key=captain-hold-hist-c-1] needs-decision: hold C
+OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'

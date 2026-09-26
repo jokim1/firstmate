@@ -1,0 +1,3 @@
+1790456310	2	signal	task-quiet.status	signal: task-quiet.status
+wake annotation: unread wake-EVENT since last drain, not current state: task-quiet.status: working [corr=q1]: on it
+wake annotation: latest wake-EVENT observed at drain, not current state: task-quiet.status: done [corr=q2]: shipped clean
