@@ -1,0 +1,1 @@
+git diff a -- b, then run it with --verbose

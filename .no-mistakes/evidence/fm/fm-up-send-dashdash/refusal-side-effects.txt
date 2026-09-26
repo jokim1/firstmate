@@ -1,0 +1,12 @@
+=== refused tasks: inbox dirs (should be absent) ===
+ABSENT  s1.inbox
+ABSENT  s2.inbox
+ABSENT  s3.inbox
+ABSENT  s4a.inbox
+ABSENT  s4b.inbox
+ABSENT  s9.inbox
+=== pending-replies (should be empty/absent) ===
+(no pending-replies dir)
+=== s10 pane line counts ===
+before prompts: 2
+after prompts:  3

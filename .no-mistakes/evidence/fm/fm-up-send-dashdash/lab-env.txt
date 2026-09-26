@@ -1,0 +1,15 @@
+LAB=/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-lab.JPVB79
+SOCK=/private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-lab.JPVB79/tmux/tmux-501/fm-lab
+SPID=9559
+session=primary wx=120 wy=40
+window=fm-t1 id=@0
+total 8
+drwx------@    8 josephkim  staff    256 Sep 26 13:55 .
+drwx------@ 1935 josephkim  staff  61920 Sep 26 13:55 ..
+-rw-r--r--@    1 josephkim  staff     15 Sep 26 13:55 .fm-lab-home
+drwxr-xr-x@    2 josephkim  staff     64 Sep 26 13:55 config
+drwxr-xr-x@    2 josephkim  staff     64 Sep 26 13:55 data
+drwxr-xr-x@    3 josephkim  staff     96 Sep 26 13:55 projects
+drwxr-xr-x@    4 josephkim  staff    128 Sep 26 13:55 state
+drwxr-xr-x@    3 josephkim  staff     96 Sep 26 13:55 tmux
+MARKER=fm-lab-home v1

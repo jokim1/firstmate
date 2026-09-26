@@ -1,0 +1,11 @@
+PASS: s1 heredoc-after-separator refused, no inbox
+PASS: s2 separators-among-whitespace refused, no inbox
+PASS: s3 quoted standalone -- refused, no inbox
+PASS: s4 empty refused
+PASS: s4 whitespace-only refused
+PASS: s5 -- inside real text recorded byte-exact
+PASS: s6 ---- recorded as literal content
+PASS: s7 quoted argument recorded (the correct replacement for heredoc-after --)
+PASS: s8 -- followed by real text sent (rc=0, recorded)
+PASS: s9 secondmate separator-only refused, no inbox, no pending-reply
+PASS: s10 --key Enter exit 0
