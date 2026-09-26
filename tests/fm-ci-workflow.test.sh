@@ -219,6 +219,33 @@ puts steps[index].fetch("timeout-minutes", "none")
   pass "Herdr keeps a $step minute step tripwire under a $heavy minute job backstop"
 }
 
+# The portable parallel lanes carry the measured-drift wall guard: the workflow
+# env value must be the exact evidence-derived bound documented in
+# docs/fm-test-portable-shards.md, and each lane's run step must pass the guard
+# exactly once, wired to that exact env value. Changing the value, deleting
+# either argument, renaming the env, or duplicating the guard fails this test.
+test_portable_parallel_lanes_carry_the_wall_guard() {
+  ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "portable parallel wall guard contract"
+doc = YAML.load_file(ARGV[0])
+max_wall = doc.fetch("env").fetch("FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS")
+expected_max_wall = 1080000
+raise "FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS must be the evidence-derived bound " \
+      "#{expected_max_wall} documented in docs/fm-test-portable-shards.md, got #{max_wall.inspect}" \
+  unless max_wall == expected_max_wall
+%w[tests-portable-parallel-1 tests-portable-parallel-2].each do |job_name|
+  step = doc.fetch("jobs").fetch(job_name).fetch("steps")
+              .find { |s| s["name"].to_s.start_with?("Run portable parallel shard") }
+  raise "#{job_name} has no portable parallel run step" unless step
+  run = step.fetch("run")
+  count = run.scan("--max-wall-ms").length
+  raise "#{job_name} must pass --max-wall-ms exactly once, found #{count}" unless count == 1
+  expected = %q{--max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS"}
+  raise "#{job_name} must wire --max-wall-ms to the env value" unless run.include?(expected)
+end
+RUBY
+  pass "both portable parallel lanes pass one --max-wall-ms wired to the workflow env value"
+}
+
 test_ci_matrices_match_executable_partitions() {
   ruby -ryaml -ropen3 - "$CI_WORKFLOW" "$ROOT" <<'RUBY' || fail "CI partition contract"
 jobs = YAML.load_file(ARGV[0]).fetch("jobs")
@@ -258,3 +285,4 @@ test_every_job_belongs_to_exactly_one_timeout_tier
 test_fast_tier_shares_one_short_tripwire
 test_normal_tier_shares_one_budget
 test_heavy_tier_keeps_a_step_tripwire_under_a_job_backstop
+test_portable_parallel_lanes_carry_the_wall_guard

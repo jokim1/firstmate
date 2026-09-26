@@ -1785,12 +1785,12 @@ puts JSON.generate(
 }
 
 test_aggregate_json() {
-  local tmp a b
+  local tmp a b c
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-aggjson.XXXXXX")
   cat >"$tmp/a.json" <<'JSON'
 {
   "run_id": "a",
-  "selection": "lane=portable-parallel-1",
+  "selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
   "started_at": "2026-07-22T00:00:00Z",
   "finished_at": "2026-07-22T00:01:00Z",
   "summary": {"total": 1, "failed": 0, "skipped_gate": 0, "duration_ms": 1000},
@@ -1800,7 +1800,7 @@ JSON
   cat >"$tmp/b.json" <<'JSON'
 {
   "run_id": "b",
-  "selection": "lane=portable-serial",
+  "selection": "lane=portable-parallel-2",
   "started_at": "2026-07-22T00:00:00Z",
   "finished_at": "2026-07-22T00:02:00Z",
   "summary": {"total": 2, "failed": 1, "skipped_gate": 0, "duration_ms": 2000},
@@ -1810,17 +1810,29 @@ JSON
   ]
 }
 JSON
-  out=$("$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/a.json" "$tmp/b.json")
-  assert_contains "$out" "FM_TEST_AGGREGATE lanes=2 total=3 failed=1" "aggregate summary line"
+  cat >"$tmp/c.json" <<'JSON'
+{
+  "run_id": "c",
+  "selection": "lane=portable-serial-1of9",
+  "started_at": "2026-07-22T00:00:00Z",
+  "finished_at": "2026-07-22T00:02:30Z",
+  "summary": {"total": 1, "failed": 0, "skipped_gate": 0, "duration_ms": 9000},
+  "scripts": [{"path": "tests/d.test.sh", "family": "pure-contract-unit", "duration_ms": 9000, "exit": 0, "gate_skip": false}]
+}
+JSON
+  out=$("$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/a.json" "$tmp/b.json" "$tmp/c.json")
+  assert_contains "$out" "FM_TEST_AGGREGATE lanes=3 total=4 failed=1" "aggregate summary line"
+  assert_contains "$out" "portable_parallel_1_ms=1000 portable_parallel_2_ms=2000 imbalance_ms=1000" "aggregate parallel imbalance"
+  assert_not_contains "$out" "portable_serial" "aggregate imbalance must exclude non-parallel lanes"
   python3 -c '
 import json,sys
 doc=json.load(open(sys.argv[1]))
 assert doc["kind"]=="aggregate"
-assert doc["summary"]["lanes"]==2
-assert doc["summary"]["total"]==3
+assert doc["summary"]["lanes"]==3
+assert doc["summary"]["total"]==4
 assert doc["summary"]["failed"]==1
-assert doc["summary"]["critical_path_duration_ms"]==2000
-assert len(doc["scripts"])==3
+assert doc["summary"]["critical_path_duration_ms"]==9000
+assert len(doc["scripts"])==4
 ' "$tmp/out.json" || { rm -rf "$tmp"; fail "aggregate JSON shape wrong"; }
   rm -rf "$tmp"
   pass "aggregate-json merges lane timing artifacts"
