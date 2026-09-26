@@ -1,0 +1,40 @@
+lab home: /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-lab.Zt5L4V
+lab session: fm-lab-fm-bind-43383-29263
+provisioned
+herdr version: 0.8.0
+herdr protocol: 19
+anchor spawn ok
+parent workspace: w1 label=firstmate
+intervening: 2ndmate-sm-other=w2 notes=w3
+layout before child: firstmate | 2ndmate-sm-other | notes
+projected spawn ok
+layout after child: firstmate | 2ndmate-sm-other | notes | └ bind-layout · p:jeLNr3nL--K41xtiJ4ZzXA
+child workspace=w4 tab=w4:t2 pane=w4:p2
+child label=└ bind-layout · p:jeLNr3nL--K41xtiJ4ZzXA
+journal version=2 token=jeLNr3nL--K41xtiJ4ZzXA
+contiguous_parent_then_child=false
+publish_warn=0 move_warn=1
+SCENARIO1_noncontiguous_publish=pass
+old_contiguous_predicate_rc=4
+new_live_binding_matches_rc=0
+SCENARIO2_new_matches_old_refuses=pass
+missing_parent_rc=1
+SCENARIO3_missing_parent_refuses=pass
+session restarted
+restored husk pane still present structurally
+reclaim spawn ok
+reclaim workspace=w4 pane=w4:p3 journal_pane=w4:p3 version=2
+layout after reclaim: firstmate | 2ndmate-sm-other | notes | └ bind-layout · p:jeLNr3nL--K41xtiJ4ZzXA
+SCENARIO4_reclaim_without_contiguous_nesting=pass
+WARN: child teardown failed: fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-lab.Zt5L4V
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no live watcher process holds this home lock (last beat: 51s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /Users/josephkim/.no-mistakes/worktrees/c57b678aed8b/01M3FQQA2S6J1PJ8Z4MXZ62776/.pi/extensions/fm-primary-turnend-guard.ts -e /Users/josephkim/.no-mistakes/worktrees/c57b678aed8b/01M3FQQA2S6J1PJ8Z4MXZ62776/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REFUSED: task bind-layout's recorded worktree /Users/josephkim/.treehouse/bind-live-3869af/1/bind-live is also task anchor's recorded worktree.
+Returning that pool slot would kill anchor's processes and reset its copy, so nothing was changed - not even with --force.
+Reconcile whichever record is wrong (bin/fm-crew-state.sh bind-layout; bin/fm-crew-state.sh anchor), then re-run teardown.
+ALL_LIVE_SCENARIOS=pass
