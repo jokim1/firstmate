@@ -1,0 +1,2 @@
+ok - all 8 tracked Claude hook commands exit 0 with CLAUDE_PROJECT_DIR unset
+unit_test_exit=0

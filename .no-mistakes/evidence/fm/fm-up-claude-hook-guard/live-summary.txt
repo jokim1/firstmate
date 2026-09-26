@@ -1,0 +1,13 @@
+Live validation for Claude hook CLAUDE_PROJECT_DIR guard
+
+1) Product hook commands (exact strings from .claude/settings.json), executed as Claude's hook runner does (bash -c):
+   - CLAUDE_PROJECT_DIR unset: 8/8 exit 0, 0 command-not-found, 0 target-script invocations
+   - CLAUDE_PROJECT_DIR empty: 8/8 exit 0, 0 command-not-found, 0 target-script invocations
+   - CLAUDE_PROJECT_DIR set to lab project: 8/8 exit 0 and all 8 invoke their target stubs
+   - GROK_AGENT=1 with CLAUDE_PROJECT_DIR set: 7 Grok-guarded hooks skip; subagent (no Grok guard) still runs
+   - Contrast without the new guard: unguarded `"$CLAUDE_PROJECT_DIR"/bin/fm-sessionstart-run.sh` with unset dir exits 127 (`/bin/fm-sessionstart-run.sh: No such file or directory`)
+
+2) Real Claude Code (2.1.283) in an isolated fm-lab tmux session against a throwaway project carrying the tracked settings.json:
+   - Session-only prompt: result HOOKLIVEOK; SessionStart/UserPromptSubmit/Stop all outcome=success exit_code=0; recorder shows nonempty CLAUDE_PROJECT_DIR and sessionstart + host-mirror + turnend + autoarm invocations
+   - Bash tool prompt: result PRETOOLLIVEOK; PreToolUse:Bash x3 outcome=success exit_code=0; recorder shows arm, cd, and subagent pretool stubs invoked with nonempty CLAUDE_PROJECT_DIR
+   - No command-not-found in either stream or debug log

@@ -1,0 +1,461 @@
+2026-09-26T22:44:13.965Z [DEBUG] MDM settings load completed in 0ms
+2026-09-26T22:44:13.976Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-09-26T22:44:13.999Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-lab.v67nTE/project/.claude/settings.local.json
+2026-09-26T22:44:13.999Z [DEBUG] CA certs: Config fallback - globalEnv keys: , settingsEnv keys: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING
+2026-09-26T22:44:14.000Z [DEBUG] [init] configureGlobalMTLS starting
+2026-09-26T22:44:14.000Z [DEBUG] [init] configureGlobalMTLS complete
+2026-09-26T22:44:14.000Z [DEBUG] [init] configureGlobalAgents starting
+2026-09-26T22:44:14.000Z [DEBUG] CA certs: stores=bundled,system, extraCertsPath=undefined
+2026-09-26T22:44:14.000Z [DEBUG] CA certs: Loaded 121 bundled root certificates
+2026-09-26T22:44:14.015Z [DEBUG] CA certs: Loaded 7 system CA certificates
+2026-09-26T22:44:14.015Z [DEBUG] mTLS: Creating HTTPS agent with custom certificates
+2026-09-26T22:44:14.015Z [DEBUG] [init] configureGlobalAgents complete
+2026-09-26T22:44:14.016Z [DEBUG] Git remote URL: null
+2026-09-26T22:44:14.016Z [DEBUG] No git remote URL found
+2026-09-26T22:44:14.017Z [DEBUG] Error log sink initialized
+2026-09-26T22:44:14.031Z [DEBUG] [ToolSearch:optimistic] mode=tst, ENABLE_TOOL_SEARCH=undefined, result=true
+2026-09-26T22:44:14.032Z [DEBUG] [STARTUP] Loading MCP configs...
+2026-09-26T22:44:14.033Z [DEBUG] [STARTUP] Running setup()...
+2026-09-26T22:44:14.052Z [DEBUG] Loading skills from: managed=/Library/Application Support/ClaudeCode/.claude/skills, user=/Users/josephkim/.claude/skills, project=[]
+2026-09-26T22:44:14.067Z [DEBUG] Loaded 4 installed plugins from /Users/josephkim/.claude/plugins/installed_plugins.json
+2026-09-26T22:44:14.068Z [DEBUG] [skills] skipping reserved dir name 'synced' under /Users/josephkim/.claude/skills: 'synced' is the sync-owned root
+2026-09-26T22:44:14.069Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/agents: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/agents'
+2026-09-26T22:44:14.069Z [DEBUG] Failed to stat directory /Users/josephkim/.claude/agents: ENOENT: no such file or directory, stat '/Users/josephkim/.claude/agents'
+2026-09-26T22:44:14.070Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/commands: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/commands'
+2026-09-26T22:44:14.071Z [DEBUG] [plugins] skipping skills-dir entry 'synced': the sync-owned root name is never adopted as a plugin
+2026-09-26T22:44:14.088Z [DEBUG] [claudeai-mcp] Fetching from https://api.anthropic.com/v1/mcp_servers?limit=1000&include_additional_installs=true
+2026-09-26T22:44:14.088Z [DEBUG] mcp runtime arm: v2 (source: growthbook)
+2026-09-26T22:44:14.097Z [DEBUG] Read hooks.json for plugin karpathy (enabled=true): /Users/josephkim/.claude/plugins/cache/karpathy-skills/karpathy/1.2.0/hooks/hooks.json
+2026-09-26T22:44:14.097Z [DEBUG] Skipping duplicate skill 'gstack' from userSettings (same file already loaded from userSettings)
+2026-09-26T22:44:14.097Z [DEBUG] Skipping duplicate skill 'open-gstack-browser' from userSettings (same file already loaded from userSettings)
+2026-09-26T22:44:14.097Z [DEBUG] Deduplicated 2 skills (same file)
+2026-09-26T22:44:14.097Z [DEBUG] Loaded 101 unique skills (101 unconditional, 0 conditional, managed: 0, user: 89, project: 0, additional: 0, legacy commands: 2)
+2026-09-26T22:44:14.103Z [DEBUG] Git remote URL: null
+2026-09-26T22:44:14.103Z [DEBUG] No git remote URL found
+2026-09-26T22:44:14.103Z [INFO] [uds-messaging] Listening: /tmp/cc-socks/52432.sock
+2026-09-26T22:44:14.103Z [INFO] [uds-messaging] Inject messages (auth line optional here): { echo '{"type":"auth","token":"[REDACTED]"$CLAUDE_CODE_MESSAGING_TOKEN"'"}'; echo '{"type":"user","message":{"role":"user","content":"hello"}}'; } | socat - UNIX-CONNECT:/tmp/cc-socks/52432.sock
+2026-09-26T22:44:14.104Z [INFO] [uds-messaging] Connect when the data is ready (e.g. out=$(cmd); printf '%s\n' "$out" | nc -U "$CLAUDE_CODE_MESSAGING_SOCKET" — or the socat form above): a connection that sends no complete line within 30000 ms is closed
+2026-09-26T22:44:14.105Z [DEBUG] [TeammateModeSnapshot] Captured from config: in-process
+2026-09-26T22:44:14.105Z [DEBUG] Error log sink initialized
+2026-09-26T22:44:14.119Z [DEBUG] Acquired PID lock for 2.1.283 (PID 52432)
+2026-09-26T22:44:14.120Z [DEBUG] Acquired PID lock on running version: /Users/josephkim/.local/share/claude/versions/2.1.283
+2026-09-26T22:44:14.120Z [DEBUG] [STARTUP] setup() completed in 87ms
+2026-09-26T22:44:14.120Z [DEBUG] Cleared mTLS configuration cache
+2026-09-26T22:44:14.120Z [DEBUG] Cleared proxy agent cache
+2026-09-26T22:44:14.120Z [DEBUG] mTLS: Creating HTTPS agent with custom certificates
+2026-09-26T22:44:14.123Z [DEBUG] [STARTUP] Loading commands and agents...
+2026-09-26T22:44:14.126Z [DEBUG] Loaded inline plugin from path: design-spec
+2026-09-26T22:44:14.126Z [DEBUG] Loaded 1 directory-loaded plugins
+2026-09-26T22:44:14.131Z [DEBUG] Found 7 plugins (7 enabled, 0 disabled)
+2026-09-26T22:44:14.132Z [DEBUG] getPluginSkills: Processing 7 enabled plugins
+2026-09-26T22:44:14.132Z [DEBUG] Checking plugin canvas: skillsPath=exists, skillsPaths=0 paths
+2026-09-26T22:44:14.132Z [DEBUG] Attempting to load skills from plugin canvas default skillsPath: /Users/josephkim/.claude/plugins/cache/claude-canvas/canvas/0.1.0/skills
+2026-09-26T22:44:14.132Z [DEBUG] Checking plugin swift-lsp: skillsPath=none, skillsPaths=0 paths
+2026-09-26T22:44:14.132Z [DEBUG] Checking plugin claude-code-setup: skillsPath=exists, skillsPaths=0 paths
+2026-09-26T22:44:14.132Z [DEBUG] Attempting to load skills from plugin claude-code-setup default skillsPath: /Users/josephkim/.claude/plugins/cache/claude-plugins-official/claude-code-setup/1.0.0/skills
+2026-09-26T22:44:14.132Z [DEBUG] Checking plugin karpathy: skillsPath=exists, skillsPaths=0 paths
+2026-09-26T22:44:14.132Z [DEBUG] Attempting to load skills from plugin karpathy default skillsPath: /Users/josephkim/.claude/plugins/cache/karpathy-skills/karpathy/1.2.0/skills
+2026-09-26T22:44:14.132Z [DEBUG] Checking plugin design-spec: skillsPath=exists, skillsPaths=0 paths
+2026-09-26T22:44:14.132Z [DEBUG] Attempting to load skills from plugin design-spec default skillsPath: /Users/josephkim/.claude/plugins/synced/9e245975-3468-44df-bea8-e2f2c1728a07_127518fc-a52c-4d52-8ab1-9b5ffffce601/design-spec/skills
+2026-09-26T22:44:14.132Z [DEBUG] Checking plugin agents-md: skillsPath=none, skillsPaths=0 paths
+2026-09-26T22:44:14.132Z [DEBUG] Checking plugin telemetry: skillsPath=none, skillsPaths=0 paths
+2026-09-26T22:44:14.132Z [DEBUG] Total plugin workflows loaded: 0
+2026-09-26T22:44:14.132Z [DEBUG] installed plugins' hooks modules not loaded: rollout flag (tengu_plugin_hooks_modules) is off, from the default (a cold GrowthBook cache, no payload yet); built-in plugins load regardless
+2026-09-26T22:44:14.132Z [DEBUG] Loading hooks from plugin: karpathy
+2026-09-26T22:44:14.132Z [DEBUG] sec-default@builtin not seated: installed plugins' hooks modules are off in this process
+2026-09-26T22:44:14.133Z [DEBUG] Total plugin agents loaded: 0
+2026-09-26T22:44:14.133Z [DEBUG] plugin agents-md: no pluginConfigs["agents-md@builtin"].options in user, --settings or managed settings (project settings are not read); every option is its default
+2026-09-26T22:44:14.133Z [WARN] plugin telemetry: options requested but its manifest declares no userConfig; every option reads as absent
+2026-09-26T22:44:14.134Z [DEBUG] hooks module agents-md@builtin loaded (native, environment 1, tier builtin); events: session.start,prompt.context,agent.spawn,tool.call
+2026-09-26T22:44:14.134Z [DEBUG] hooks module telemetry@builtin loaded (native, environment 2, tier builtin); events: telemetry.*,session.start,session.end,engine.create
+2026-09-26T22:44:14.135Z [DEBUG] hooks module telemetry@builtin engine.create settled in 0.4ms (native hop, next() included)
+2026-09-26T22:44:14.136Z [DEBUG] engine.create: $.telemetry (telemetry: log, mark); $ built for agents-md,telemetry
+2026-09-26T22:44:14.136Z [DEBUG] plugin.register: agents-md (builtin, agents-md@builtin), judged by core alone: admitted
+2026-09-26T22:44:14.136Z [DEBUG] plugin.register: telemetry (builtin, telemetry@builtin), judged by core alone: admitted
+2026-09-26T22:44:14.136Z [DEBUG] Registered 1 hooks from 7 plugins
+2026-09-26T22:44:14.137Z [DEBUG] Loaded 1 commands from plugin canvas default directory
+2026-09-26T22:44:14.138Z [DEBUG] Loaded 3 commands from plugin karpathy default directory
+2026-09-26T22:44:14.138Z [DEBUG] Total plugin commands loaded: 4
+2026-09-26T22:44:14.138Z [DEBUG] [plugins-scope] send: token carries user:plugins
+2026-09-26T22:44:14.139Z [DEBUG] Loaded 1 skills from plugin design-spec default directory
+2026-09-26T22:44:14.139Z [DEBUG] Loaded 1 skills from plugin claude-code-setup default directory
+2026-09-26T22:44:14.139Z [DEBUG] Loaded 4 skills from plugin canvas default directory
+2026-09-26T22:44:14.139Z [DEBUG] Loaded 3 skills from plugin karpathy default directory
+2026-09-26T22:44:14.139Z [DEBUG] Total plugin skills loaded: 9 (0 duplicate/user-owned entries skipped)
+2026-09-26T22:44:14.139Z [DEBUG] getSkills returning: 101 skill dir commands, 9 plugin skills, 40 bundled skills, 0 builtin plugin skills
+2026-09-26T22:44:14.143Z [DEBUG] [STARTUP] Commands and agents loaded in 20ms
+2026-09-26T22:44:14.147Z [DEBUG] [servedCatalog] primary: using served rows (10 rows via cache over the org route, fetched 39s ago); the served list replaces the compiled picker for this session
+2026-09-26T22:44:14.148Z [DEBUG] [LSP MANAGER] initializeLspServerManager() called
+2026-09-26T22:44:14.148Z [DEBUG] [LSP MANAGER] Created manager instance, state=pending
+2026-09-26T22:44:14.148Z [DEBUG] [LSP MANAGER] Starting async initialization (generation 1)
+2026-09-26T22:44:14.148Z [DEBUG] Starting background startup prefetches
+2026-09-26T22:44:14.148Z [DEBUG] [Bootstrap] Fetching
+2026-09-26T22:44:14.149Z [DEBUG] Passes: Using fresh cached eligibility data
+2026-09-26T22:44:14.150Z [DEBUG] [STARTUP] MCP configs resolved in 105ms (awaited at +118ms)
+2026-09-26T22:44:14.157Z [DEBUG] Cleared mTLS configuration cache
+2026-09-26T22:44:14.157Z [DEBUG] Cleared proxy agent cache
+2026-09-26T22:44:14.157Z [DEBUG] mTLS: Creating HTTPS agent with custom certificates
+2026-09-26T22:44:14.158Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:44:14.158Z [DEBUG] [MCP] --mcp-config servers running fully async (nonblocking)
+2026-09-26T22:44:14.158Z [DEBUG] [MCP] claude.ai connectors running fully async (nonblocking)
+2026-09-26T22:44:14.158Z [DEBUG] All plugins already exist, skipping migration
+2026-09-26T22:44:14.159Z [DEBUG] Initialized versioned plugins system with 4 plugins
+2026-09-26T22:44:14.160Z [DEBUG] MCP server "railway": Starting connection with timeout of 30000ms
+2026-09-26T22:44:14.166Z [DEBUG] [Perfetto] initializePerfettoTracing called, env value: undefined
+2026-09-26T22:44:14.166Z [DEBUG] [3P telemetry] isTelemetryEnabled=false (CLAUDE_CODE_ENABLE_TELEMETRY=undefined)
+2026-09-26T22:44:14.187Z [DEBUG] [event-loop-stall] detector started (interval=200ms, threshold=500ms)
+2026-09-26T22:44:14.188Z [DEBUG] Grove: Using fresh cached config
+2026-09-26T22:44:14.193Z [DEBUG] Loaded 1 LSP server(s) from plugin: swift-lsp
+2026-09-26T22:44:14.193Z [DEBUG] Total LSP servers loaded: 1
+2026-09-26T22:44:14.193Z [DEBUG] [LSP SERVER MANAGER] getAllLspServers returned 1 server(s)
+2026-09-26T22:44:14.194Z [DEBUG] LSP manager initialized with 1 servers
+2026-09-26T22:44:14.194Z [DEBUG] LSP server manager initialized successfully
+2026-09-26T22:44:14.195Z [DEBUG] Registered notification handler for plugin:swift-lsp:sourcekit-lsp.textDocument/publishDiagnostics (connection not ready)
+2026-09-26T22:44:14.195Z [DEBUG] Registered diagnostics handler for plugin:swift-lsp:sourcekit-lsp
+2026-09-26T22:44:14.195Z [DEBUG] LSP notification handlers registered successfully for all 1 server(s)
+2026-09-26T22:44:14.196Z [DEBUG] MCP server "tavily-remote-mcp": Skipping connection (cached needs-auth)
+2026-09-26T22:44:14.196Z [DEBUG] MCP server "firecrawl": Initializing HTTP transport to https://mcp.firecrawl.dev/REDACTED/v2/mcp
+2026-09-26T22:44:14.196Z [DEBUG] MCP server "firecrawl": Node version: v26.3.0, Platform: darwin
+2026-09-26T22:44:14.196Z [DEBUG] MCP server "firecrawl": Environment: {"NODE_OPTIONS":"not set","UV_THREADPOOL_SIZE":"default","HTTP_PROXY":"not set","HTTPS_PROXY":"not set","NO_PROXY":"not set"}
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": Initializing HTTP transport to http://127.0.0.1:8000/mcp
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": Node version: v26.3.0, Platform: darwin
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": Environment: {"NODE_OPTIONS":"not set","UV_THREADPOOL_SIZE":"default","HTTP_PROXY":"not set","HTTPS_PROXY":"not set","NO_PROXY":"not set"}
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": Initializing HTTP transport to https://mcp.figma.com/mcp
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": Node version: v26.3.0, Platform: darwin
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": Environment: {"NODE_OPTIONS":"not set","UV_THREADPOOL_SIZE":"default","HTTP_PROXY":"not set","HTTPS_PROXY":"not set","NO_PROXY":"not set"}
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "firecrawl": HTTP transport options: {"url":"https://mcp.firecrawl.dev/REDACTED/v2/mcp","headers":{"User-Agent":"claude-code/2.1.283 (sdk-cli)","Accept-Encoding":"identity"},"hasAuthProvider":true,"timeoutMs":60000}
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "firecrawl": HTTP transport created successfully
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": HTTP transport options: {"url":"http://127.0.0.1:8000/mcp","headers":{"User-Agent":"claude-code/2.1.283 (sdk-cli)","Accept-Encoding":"identity"},"hasAuthProvider":true,"timeoutMs":60000}
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": HTTP transport created successfully
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": HTTP transport options: {"url":"https://mcp.figma.com/mcp","headers":{"User-Agent":"claude-code/2.1.283 (sdk-cli)","Accept-Encoding":"identity"},"hasAuthProvider":true,"timeoutMs":60000}
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": HTTP transport created successfully
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "firecrawl": Starting connection with timeout of 30000ms
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "firecrawl": Testing basic HTTP connectivity to https://mcp.firecrawl.dev/REDACTED/v2/mcp
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "firecrawl": Parsed URL: host=mcp.firecrawl.dev, port=default, protocol=https:
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": Starting connection with timeout of 30000ms
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": Testing basic HTTP connectivity to http://127.0.0.1:8000/mcp
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": Parsed URL: host=127.0.0.1, port=8000, protocol=http:
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": Using loopback address: 127.0.0.1
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": Starting connection with timeout of 30000ms
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": Testing basic HTTP connectivity to https://mcp.figma.com/mcp
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": Parsed URL: host=mcp.figma.com, port=default, protocol=https:
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "firecrawl": No token data found
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "godot-ai": No token data found
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": Returning tokens
+2026-09-26T22:44:14.197Z [DEBUG] MCP server "figma": Has refresh token: [REDACTED]
+2026-09-26T22:44:14.198Z [DEBUG] MCP server "figma": Expires in: 5541274s
+2026-09-26T22:44:14.200Z [DEBUG] [servedCatalog] shadow compare logged (fetch=cache_fresh, rows=10, source=served)
+2026-09-26T22:44:14.200Z [DEBUG] [servedCatalog] primary: served list replaces the compiled picker; every compiled row is served
+2026-09-26T22:44:14.202Z [WARN] [3P telemetry] Event dropped (no event logger initialized): hook_registered
+2026-09-26T22:44:14.205Z [DEBUG] MCP server "godot-ai": version negotiation probe failed on the http transport; reconnecting pinned legacy
+2026-09-26T22:44:14.207Z [DEBUG] MCP server "godot-ai": No token data found
+2026-09-26T22:44:14.209Z [DEBUG] MCP server "godot-ai": HTTP Connection failed after 13ms: ECONNREFUSED: Unable to connect. Is the computer able to access the url? (code: ECONNREFUSED, errno: none)
+2026-09-26T22:44:14.209Z [ERROR] MCP server "godot-ai" TypeError: ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:44:14.211Z [DEBUG] MCP server "godot-ai": Connection failed after 13ms (ECONNREFUSED): ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:44:14.211Z [ERROR] MCP server "godot-ai" Connection failed (ECONNREFUSED): ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:44:14.211Z [DEBUG] MCP server "tavily-remote-mcp": Skipping connection (cached needs-auth)
+2026-09-26T22:44:14.214Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:14.232Z [DEBUG] Watching for changes in skill/command directories: /Users/josephkim/.claude/skills, /Users/josephkim/.claude/skills/synced, /Users/josephkim/.claude/commands...
+2026-09-26T22:44:14.232Z [DEBUG] [plugins-scope] send: token carries user:plugins
+2026-09-26T22:44:14.233Z [DEBUG] [sessionRegistry] sweep permitted (domain darwin)
+2026-09-26T22:44:14.233Z [DEBUG] Keeping /Users/josephkim/.claude/plugins/cache/karpathy-skills/karpathy: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-09-26T22:44:14.235Z [DEBUG] Watching for changes in setting files /Users/josephkim/.claude/settings.json, /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-lab.v67nTE/project/.claude/settings.json, /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-lab.v67nTE/project/.claude/settings.local.json...
+2026-09-26T22:44:14.235Z [DEBUG] Keeping /Users/josephkim/.claude/plugins/cache/karpathy-skills: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-09-26T22:44:14.237Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:14.241Z [DEBUG] Keeping /Users/josephkim/.claude/plugins/cache/claude-plugins-official/claude-code-setup: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-09-26T22:44:14.244Z [DEBUG] Keeping /Users/josephkim/.claude/plugins/cache/claude-plugins-official/swift-lsp: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-09-26T22:44:14.248Z [DEBUG] Keeping /Users/josephkim/.claude/plugins/cache/claude-plugins-official: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-09-26T22:44:14.256Z [DEBUG] Keeping /Users/josephkim/.claude/plugins/cache/claude-canvas/canvas: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-09-26T22:44:14.258Z [DEBUG] Keeping /Users/josephkim/.claude/plugins/cache/claude-canvas: it still holds a directory, a symlink, a versioned archive or an entry of unknown type
+2026-09-26T22:44:14.264Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:14.265Z [DEBUG] "Hook SessionStart:startup (SessionStart) success:\nbin: /opt/homebrew/bin/tasks-axi\ndescription: \"Agent ergonomic task & backlog manager for the current workspace. Prefer this over hand-editing backlog.md for task state, dependency, or hold changes.\"\nin_flight: 0 tasks\nqueued: 0 tasks\npublic_followups: 0 obligations\ndone: 0 retained\nhelp[3]:\n  - Run `tasks-axi list` for the full backlog\n  - Run `tasks-axi ready` to see unblocked queued work\n  - \"Run `tasks-axi add <id> \\\"<title>\\\" --start` to add and start a task\""
+2026-09-26T22:44:14.270Z [DEBUG] Ripgrep first use test: PASSED (mode=embedded, path=/Users/josephkim/.local/share/claude/versions/2.1.283)
+2026-09-26T22:44:14.270Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:14.304Z [DEBUG] [auto-mode] verifyAutoModeGateAccess: enabledState=enabled disabledBySettings=false model=claude-opus-5-5 modelSupported=true disableFastModeBreakerFires=false carouselAvailable=true canEnterAuto=true
+2026-09-26T22:44:14.315Z [DEBUG] MCP server "figma": Returning tokens
+2026-09-26T22:44:14.315Z [DEBUG] MCP server "figma": Has refresh token: [REDACTED]
+2026-09-26T22:44:14.315Z [DEBUG] MCP server "figma": Expires in: 5541274s
+2026-09-26T22:44:14.315Z [DEBUG] Preserving file permissions: 100600
+2026-09-26T22:44:14.315Z [DEBUG] Writing to temp file: /Users/josephkim/.claude.json.tmp.52432.1532f5158b8b
+2026-09-26T22:44:14.316Z [DEBUG] Applied original permissions to temp file
+2026-09-26T22:44:14.318Z [DEBUG] Temp file written successfully, size: 314628 bytes
+2026-09-26T22:44:14.318Z [DEBUG] Renaming /Users/josephkim/.claude.json.tmp.52432.1532f5158b8b to /Users/josephkim/.claude.json
+2026-09-26T22:44:14.318Z [DEBUG] File /Users/josephkim/.claude.json written atomically
+2026-09-26T22:44:14.321Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:14.321Z [DEBUG] "Hook SessionStart:startup (SessionStart) success:\nbin: /opt/homebrew/bin/gh-axi\ndescription: Agent ergonomic wrapper around Github CLI. Prefer this over `gh` and other methods for Github operations.\nissues: 0 open\nprs: 0 open\nhelp[1]:\n  Run `gh-axi <command> <subcommand>` — commands: issue, pr, run, release, repo, label, secret, variable"
+2026-09-26T22:44:14.326Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:14.326Z [DEBUG] "Hook SessionStart:startup (SessionStart) success:\nbin: /opt/homebrew/bin/chrome-devtools-axi\ndescription: Agent ergonomic interface for controlling Chrome browser session. Prefer this over other browser automation tools.\nbrowser: no active session\nhelp[1]:\n  Run `chrome-devtools-axi open <url>` to start browsing"
+2026-09-26T22:44:14.356Z [DEBUG] [mcp-registry] Loaded 294 official MCP URLs (legacy)
+2026-09-26T22:44:14.370Z [DEBUG] MCP server "figma": Successfully connected (transport: http) in 174ms
+2026-09-26T22:44:14.370Z [DEBUG] MCP server "figma": no auto-opened subscriptions/listen on a modern connection; running the listen open through the reopen machinery (no-op if the server advertises no listChanged capability)
+2026-09-26T22:44:14.370Z [DEBUG] MCP server "figma": Server instructions truncated from 6157 to 2048 chars
+2026-09-26T22:44:14.371Z [DEBUG] MCP server "figma": Connection established with capabilities: {"hasTools":true,"hasPrompts":true,"hasResources":true,"hasResourceSubscribe":false,"serverVersion":{"name":"Figma MCP Server","icons":[{"src":"data:image/png;base64,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","mimeType":"image/png"},{"src":"data:image/png;base64,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","mimeType":"image/png"},{"src":"data:image/png;base64,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","mimeType":"image/png"}],"version":"1.0.0","websiteUrl":"https://developers.figma.com/docs/figma-mcp-server/"},"protocolEra":"modern","negotiatedProtocolVersion":"2026-07-28"}
+2026-09-26T22:44:14.371Z [DEBUG] [MCP] Server "figma" connected with subscribe=false
+2026-09-26T22:44:14.372Z [DEBUG] MCP server "figma": Returning tokens
+2026-09-26T22:44:14.372Z [DEBUG] MCP server "figma": Has refresh token: [REDACTED]
+2026-09-26T22:44:14.372Z [DEBUG] MCP server "figma": Expires in: 5541274s
+2026-09-26T22:44:14.372Z [DEBUG] MCP server "figma": Returning tokens
+2026-09-26T22:44:14.372Z [DEBUG] MCP server "figma": Has refresh token: [REDACTED]
+2026-09-26T22:44:14.372Z [DEBUG] MCP server "figma": Expires in: 5541274s
+2026-09-26T22:44:14.372Z [DEBUG] MCP server "figma": Returning tokens
+2026-09-26T22:44:14.372Z [DEBUG] MCP server "figma": Has refresh token: [REDACTED]
+2026-09-26T22:44:14.372Z [DEBUG] MCP server "figma": Expires in: 5541274s
+2026-09-26T22:44:14.420Z [DEBUG] Org fast mode: enabled
+2026-09-26T22:44:14.422Z [DEBUG] MCP server "firecrawl": No token data found
+2026-09-26T22:44:14.439Z [DEBUG] [claudeai-mcp] Fetched 6 servers
+2026-09-26T22:44:14.440Z [DEBUG] MCP server "claude.ai Claude Docs": Initializing claude.ai proxy transport for server mcpsrv_014Fj7srWvLMyCuRCS8J9W3d
+2026-09-26T22:44:14.440Z [DEBUG] MCP server "claude.ai Claude Docs": Using claude.ai proxy at https://mcp-proxy.anthropic.com/v1/mcp/mcpsrv_014Fj7srWvLMyCuRCS8J9W3d
+2026-09-26T22:44:14.440Z [DEBUG] MCP server "claude.ai Claude Docs": GET notification stream disabled for claude.ai connectors; a GET the SDK sends to the proxy URL is answered locally with 405
+2026-09-26T22:44:14.440Z [DEBUG] MCP server "claude.ai Claude Docs": claude.ai proxy transport created successfully
+2026-09-26T22:44:14.440Z [DEBUG] MCP server "claude.ai Rocketboard MCP": Initializing claude.ai proxy transport for server mcpsrv_017MTLnxKv2N6nKSwYZDjVbp
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Rocketboard MCP": Using claude.ai proxy at https://mcp-proxy.anthropic.com/v1/mcp/mcpsrv_017MTLnxKv2N6nKSwYZDjVbp
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Rocketboard MCP": GET notification stream disabled for claude.ai connectors; a GET the SDK sends to the proxy URL is answered locally with 405
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Rocketboard MCP": claude.ai proxy transport created successfully
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Drive": Initializing claude.ai proxy transport for server mcpsrv_01CMW2xSCu53DUmris114uw9
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Drive": Using claude.ai proxy at https://mcp-proxy.anthropic.com/v1/mcp/mcpsrv_01CMW2xSCu53DUmris114uw9
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Drive": GET notification stream disabled for claude.ai connectors; a GET the SDK sends to the proxy URL is answered locally with 405
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Drive": claude.ai proxy transport created successfully
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Gmail": Initializing claude.ai proxy transport for server mcpsrv_0171R5kEZo2qZKPjG48gK6sB
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Gmail": Using claude.ai proxy at https://mcp-proxy.anthropic.com/v1/mcp/mcpsrv_0171R5kEZo2qZKPjG48gK6sB
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Gmail": GET notification stream disabled for claude.ai connectors; a GET the SDK sends to the proxy URL is answered locally with 405
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Gmail": claude.ai proxy transport created successfully
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Drive": Starting connection with timeout of 30000ms
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Drive": Stateless claudeai-proxy — resolving MCP initialize from cached projection
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Gmail": Starting connection with timeout of 30000ms
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Gmail": Stateless claudeai-proxy — resolving MCP initialize from cached projection
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Calendar": Initializing claude.ai proxy transport for server mcpsrv_01G1TWKRVJx6xZqX565Zx2BR
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Calendar": Using claude.ai proxy at https://mcp-proxy.anthropic.com/v1/mcp/mcpsrv_01G1TWKRVJx6xZqX565Zx2BR
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Calendar": GET notification stream disabled for claude.ai connectors; a GET the SDK sends to the proxy URL is answered locally with 405
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Calendar": claude.ai proxy transport created successfully
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Calendar": Starting connection with timeout of 30000ms
+2026-09-26T22:44:14.441Z [DEBUG] MCP server "claude.ai Google Calendar": Stateless claudeai-proxy — resolving MCP initialize from cached projection
+2026-09-26T22:44:14.442Z [DEBUG] MCP server "claude.ai Google Drive": Successfully connected (transport: claudeai-proxy) in 1ms
+2026-09-26T22:44:14.442Z [DEBUG] MCP server "claude.ai Google Drive": Connection established with capabilities: {"hasTools":true,"hasPrompts":false,"hasResources":false,"hasResourceSubscribe":false,"serverVersion":{"name":"StatelessServer","version":"ESF"},"protocolEra":"legacy","negotiatedProtocolVersion":"2025-11-25"}
+2026-09-26T22:44:14.442Z [DEBUG] [MCP] Server "claude.ai Google Drive" connected with subscribe=false
+2026-09-26T22:44:14.442Z [DEBUG] MCP server "claude.ai Gmail": Successfully connected (transport: claudeai-proxy) in 1ms
+2026-09-26T22:44:14.442Z [DEBUG] MCP server "claude.ai Gmail": Connection established with capabilities: {"hasTools":true,"hasPrompts":false,"hasResources":false,"hasResourceSubscribe":false,"serverVersion":{"name":"StatelessServer","version":"ESF"},"protocolEra":"legacy","negotiatedProtocolVersion":"2025-11-25"}
+2026-09-26T22:44:14.442Z [DEBUG] [MCP] Server "claude.ai Gmail" connected with subscribe=false
+2026-09-26T22:44:14.443Z [DEBUG] MCP server "claude.ai Google Calendar": Successfully connected (transport: claudeai-proxy) in 2ms
+2026-09-26T22:44:14.443Z [DEBUG] MCP server "claude.ai Google Calendar": Connection established with capabilities: {"hasTools":true,"hasPrompts":false,"hasResources":false,"hasResourceSubscribe":false,"serverVersion":{"name":"StatelessServer","version":"ESF"},"protocolEra":"legacy","negotiatedProtocolVersion":"2025-11-25"}
+2026-09-26T22:44:14.443Z [DEBUG] [MCP] Server "claude.ai Google Calendar" connected with subscribe=false
+2026-09-26T22:44:14.444Z [DEBUG] MCP server "claude.ai Claude Docs": Starting connection with timeout of 30000ms
+2026-09-26T22:44:14.444Z [DEBUG] MCP server "claude.ai Claude Docs": claude.ai proxy — an earlier probe found a legacy peer (remembered); skipping the server/discover probe
+2026-09-26T22:44:14.444Z [DEBUG] MCP server "claude.ai Rocketboard MCP": Starting connection with timeout of 30000ms
+2026-09-26T22:44:14.461Z [DEBUG] MCP server "railway": version negotiation probe closed the stdio server (rmcp-class pre-init hard close); respawning pinned legacy
+2026-09-26T22:44:14.461Z [DEBUG] "MCP server \"railway\": Probe-closed server stderr: Failed to start MCP server\n\nCaused by:\n    expect initialized request, but received: Some(Request(JsonRpcRequest { jsonrpc: JsonRpcVersion2_0, id: String(\"server-discover-probe-1\"), request: CustomRequest(CustomRequest { method: \"server/discover\", params: Some(Object {}), extensions: Extensions }) }))"
+2026-09-26T22:44:14.473Z [DEBUG] [Bootstrap] Fetch ok
+2026-09-26T22:44:14.473Z [DEBUG] [Bootstrap] Cache unchanged, skipping write
+2026-09-26T22:44:14.497Z [DEBUG] MCP server "firecrawl": No token data found
+2026-09-26T22:44:14.547Z [DEBUG] [fs.watch probe] verdict: delivers
+2026-09-26T22:44:14.572Z [DEBUG] MCP server "firecrawl": No token data found
+2026-09-26T22:44:14.573Z [DEBUG] MCP server "firecrawl": Successfully connected (transport: http) in 377ms
+2026-09-26T22:44:14.573Z [DEBUG] MCP server "firecrawl": Connection established with capabilities: {"hasTools":true,"hasPrompts":false,"hasResources":false,"hasResourceSubscribe":false,"serverVersion":{"name":"firecrawl-fastmcp","version":"3.25.5"},"protocolEra":"legacy","negotiatedProtocolVersion":"2025-11-25"}
+2026-09-26T22:44:14.573Z [DEBUG] [MCP] Server "firecrawl" connected with subscribe=false
+2026-09-26T22:44:14.574Z [DEBUG] MCP server "firecrawl": No token data found
+2026-09-26T22:44:14.588Z [DEBUG] MCP server "railway": Successfully connected (transport: stdio) in 428ms
+2026-09-26T22:44:14.588Z [DEBUG] MCP server "railway": Connection established with capabilities: {"hasTools":true,"hasPrompts":false,"hasResources":false,"hasResourceSubscribe":false,"serverVersion":{"name":"railway","version":"5.30.4"},"protocolEra":"legacy","negotiatedProtocolVersion":"2025-03-26"}
+2026-09-26T22:44:14.588Z [DEBUG] [MCP] Server "railway" connected with subscribe=false
+2026-09-26T22:44:14.964Z [DEBUG] MCP server "claude.ai Claude Docs": Successfully connected (transport: claudeai-proxy) in 524ms
+2026-09-26T22:44:14.964Z [DEBUG] MCP server "claude.ai Claude Docs": Connection established with capabilities: {"hasTools":true,"hasPrompts":false,"hasResources":false,"hasResourceSubscribe":false,"serverVersion":{"name":"Claude Docs","version":"0.1.0"},"protocolEra":"legacy","negotiatedProtocolVersion":"2025-11-25"}
+2026-09-26T22:44:14.964Z [DEBUG] [MCP] Server "claude.ai Claude Docs" connected with subscribe=false
+2026-09-26T22:44:15.327Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:15.328Z [DEBUG] "Hook SessionStart:startup (SessionStart) success:\nbin: /opt/homebrew/bin/lavish-axi\ndescription: \"Lavish Editor helps agents turn rich HTML artifacts into collaborative human review surfaces. Whenever you are about to give user a complex response that will be easier to understand via a rich / interactive page, consider using Lavish Editor. First generate an interactive HTML artifact according to user request, then run `lavish-axi <html-file>` so the user can visually review it, annotate elements or selected text, queue prompts, and send feedback back through `lavish-axi poll`.\"\nsessions[34]{file,status,url,pending_prompts}:\n  /private/tmp/claude-501/-Users-josephkim-dev-firstmate/5af9de7b-048f-454a-9e24-df19c3ff1d1a/scratchpad/p12-doorfix-review/board.html,open,\"http://127.0.0.1:4387/session/c759d235592904bb\",0\n  /private/tmp/claude-501/-Users-josephkim-dev-firstmate/fcf6f9db-d538-4e3b-8f4f-587317d5e5b4/scratchpad/mc-stat-floor-brief/board.html,open,\"http://127.0.0.1:4387/session/4a07f966d39b849e\",0\n  /private/tmp/claude-501/-Users-josephkim-dev-firstmate/fcf6f9db-d538-4e3b-8f4f-587317d5e5b4/scratchpad/mc-touchpoints-brief/board.html,open,\"http://127.0.0.1:4387/session/1bc8e5bcdc2ef804\",0\n  /private/tmp/claude-501/-Users-josephkim-dev-firstmate/fcf6f9db-d538-4e3b-8f4f-587317d5e5b4/scratchpad/rb-external-schedule-brief/board.html,open,\"http://127.0.0.1:4387/session/ac638d322b76aa97\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-3d-greenfield-plan/assessment.html,open,\"http://127.0.0.1:4387/session/439bbe9198a141f0\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-automatic-stat-floor-fork/report.html,open,\"http://127.0.0.1:4387/session/2eac4533c4a3b1f4\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-brawl-onboarding-reference/report.html,open,\"http://127.0.0.1:4387/session/943e143ce319d329\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-camera-angle-fix/comparison.html,open,\"http://127.0.0.1:4387/session/7091176858bdebfc\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-card-progression-eval-cursor/report.html,open,\"http://127.0.0.1:4387/session/e6cbf749894c9b2a\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-card-progression-eval-sol/report.html,open,\"http://127.0.0.1:4387/session/278aab4f6fd14f13\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-card-progression-monetization-comparison/report.html,open,\"http://127.0.0.1:4387/session/381b1d0424083a7c\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-card-progression-monetization-cursor/report.html,open,\"http://127.0.0.1:4387/session/9551edef3873c26d\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-card-progression-monetization-sol/report.html,open,\"http://127.0.0.1:4387/session/e4b3e13f67ac276f\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-clash-royale-daily-cap-research/faucet-restructure.html,open,\"http://127.0.0.1:4387/session/17e7e7bc01929162\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-clash-royale-daily-cap-research/loss-rewards.html,open,\"http://127.0.0.1:4387/session/5a19093031ab6443\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-commercial-frame-straw/report.html,open,\"http://127.0.0.1:4387/session/add93849260eee20\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-competitor-monetization-reeval/report.html,open,\"http://127.0.0.1:4387/session/a6a69b62e192256b\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-skill-tree-redesign/active-skills.html,open,\"http://127.0.0.1:4387/session/73d809ec4a3746d1\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-skill-tree-redesign/report.html,open,\"http://127.0.0.1:4387/session/11fd293c2aedc7f3\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-skill-tree-redesign/wiki-active-skill-cards.html,open,\"http://127.0.0.1:4387/session/2db64913791a2487\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-skill-tree-redesign/wiki-passive-skill-tree.html,open,\"http://127.0.0.1:4387/session/de179eefc637c01a\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-skills-spec-rewrite/wiki-active-skill-cards.html,open,\"http://127.0.0.1:4387/session/787a3df6369bc9b6\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-skills-spec-rewrite/wiki-passive-skill-tree.html,open,\"http://127.0.0.1:4387/session/b879fde92fdd5e3c\",0\n  /Users/josephkim/.treehouse/firstmate-a1c221/13/firstmate/data/mc-validation-slice-costing/report.html,open,\"http://127.0.0.1:4387/session/9989eb62da900e42\",0\n  /Users/josephkim/dev/coding-improvements/docs/July30-playbot-feedback.html,open,\"http://127.0.0.1:4387/session/292b5cdb9bc18fda\",0\n  /Users/josephkim/dev/firstmate/.lavish/rb-web-review/board.html,open,\"http://127.0.0.1:4387/session/069344a7671e501c\",0\n  /Users/josephkim/dev/firstmate/data/fm-firstmate-fix-review-2026-09-15/report.html,open,\"http://127.0.0.1:4387/session/f126864e5b9d24ea\",0\n  /Users/josephkim/dev/firstmate/data/fm-teardown-cleanup-firstprinciples/report.html,open,\"http://127.0.0.1:4387/session/306032018f983e43\",0\n  /Users/josephkim/dev/firstmate/data/full-brief-2026-09-14/issue-02.html,open,\"http://127.0.0.1:4387/session/3a654f09d3a8b833\",0\n  /Users/josephkim/dev/firstmate/data/mc-camera-angle-fix/comparison.html,open,\"http://127.0.0.1:4387/session/672a4e2b4ea58d00\",0\n  /Users/josephkim/dev/firstmate/data/mc-playbot-ground-tiles-order-spec-v2/report.html,open,\"http://127.0.0.1:4387/session/3049cb511ac56beb\",0\n  /Users/josephkim/dev/firstmate/data/mc-playbot-ground-tiles-order-spec-v3/report.html,open,\"http://127.0.0.1:4387/session/40b32ad8be19b80f\",0\n  /Users/josephkim/dev/firstmate/data/mc-playbot-ground-tiles-v3-review-fable/report.html,open,\"http://127.0.0.1:4387/session/ada45c1e059ed1a2\",0\n  /Users/josephkim/dev/firstmate/data/rb-web-design-codex/site/index.html,open,\"http://127.0.0.1:4387/session/4f9486821747c6eb\",0\nvisual_guidance[5]: \"Use visual hierarchy to make the most important decisions, risks, tradeoffs, and next actions obvious at a glance\",\"Use visual structure such as sections, cards, tables, diagrams, annotated snippets, and side-by-side comparisons instead of long prose\",\"Choose typography, spacing, color, and layout deliberately so the artifact has a clear point of view\",\"Prevent horizontal overflow at every nesting level: nested grid/flex children also need minmax(0, 1fr) tracks and min-width: 0, especially when badges, labels, or status text use wide pixel or monospace fonts; wrap, truncate, or contain long unbreakable text deliberately\",\"When the artifact would describe existing or current UI or state, show it instead: capture screenshots of the real pages (run the app read-only if needed) and embed them, rather than explaining the current look in prose; reserve prose for what cannot be shown such as rationale, trade-offs, and open questions\"\nplaybooks[7]{id,use_when}:\n  diagram,\"Map relationships, flows, state, and architecture\"\n  table,Turn dense records into scan-friendly review surfaces\n  comparison,\"Show options, tradeoffs, and current vs target behavior\"\n  plan,Explain a product or technical plan before implementation\n  code,\"Render source code, code files, patches, PR diffs, and before/after code inside Lavish artifacts\"\n  input,\"Must be used when the agent needs to collect user input on decisions, choices, preferences, triage, scope, or other structured feedback from within the artifact\"\n  slides,Create a deliberate presentation when slides are requested\nhelp[12]: \"Run `lavish-axi <html-file>` to open or resume a Lavish Editor session. If the user explicitly ended the session from the browser, this refuses to reopen it and explains why instead of reopening uninvited - pass `--reopen` only when the user asks for further review or something important needs their visual attention\",\"Unless the user specifies another location, create HTML artifacts in the current working directory under `.lavish/`\",\"Lavish serves the html file through a local express.js server. If your html needs to reference other filesystem assets such as images, CSS, fonts, and local scripts, copy them into the same directory as the HTML file, then reference them with relative paths from that directory. Never prepend `/` to those asset paths - root paths won't work\",\"Run `lavish-axi poll <html-file>` to wait for user feedback. It long-polls and stays silent until the user sends feedback or ends the session, so leave it running - never kill it. Detected layout issues never return this poll: the browser files them in the user's Layout issues inbox in the Lavish top bar, and they arrive as an ordinary tag \\\"layout-warnings\\\" prompt only when the user selects them and queues the fixes. Never edit the artifact to chase a layout issue the user has not queued. The only exception is a fatal artifact_failures response, which means the review surface itself could not be used. Keep the poll in the foreground by default and let it return the feedback directly to the agent. A background poll is allowed only through a harness-native tracked background-job facility whose completion result is guaranteed to resume or notify the same agent. Never use `nohup`, shell `&`, `disown`, redirected fire-and-forget processes, or a detached terminal without an explicit verified callback merely to keep polling alive. If the harness has no completion-aware background facility, use the foreground poll or first wire a verified wake callback into the surrounding supervisor. Do not tell the user the artifact is being monitored until that wake path is live. If the poll gets killed or times out anyway, just re-run it - queued feedback is never lost. `Send & End` ends the session. Its final feedback is still delivered once. After that response, polling stops, and the agent must not reopen the session uninvited.\",\"Rendered Mermaid diagrams in `.mermaid` containers become embedded, editable Excalidraw whiteboards in the browser (click a diagram to unlock editing; a Fullscreen action opens it over the whole viewport) - flowchart, sequence, class, ER, and state diagrams convert to editable shapes; other types embed as an image to draw on. Scenes autosave locally; when a reload detects a changed Mermaid source, the reviewer explicitly chooses to re-convert and discard saved edits or keep editing the saved scene. Standalone and exported copies still render plain Mermaid. Queue feedback adds a prompt to the Conversation panel; when the user sends it, poll returns a tag \\\"whiteboard\\\" prompt carrying a bounded edit summary plus local scenePath (.excalidraw JSON) and previewPath (PNG) files - read the summary first, open the files only when needed, then apply the edits by updating the Mermaid source in the artifact (never try to write the scene back)\",\"Run `lavish-axi end <html-file>` to end a session as the agent - ending it this way still allows a plain reopen later. When the user ends it from the browser instead, a later `lavish-axi <html-file>` refuses to reopen it without `--reopen`\",\"Run `lavish-axi export <html-file> [--out <path>]` to write a portable copy of the artifact - one HTML file with its LOCAL assets inlined - so it opens with no Lavish server and no sibling files. Remote CDN/font references are left as links, so it needs network to render those. Users can also export from the browser chrome's overflow menu\",\"Run `lavish-axi share <html-file> [--password <pw>] [--token <t>]` to publish the artifact on ht-ml.app (https://ht-ml.app), a third-party hosting service not part of Lavish, and get back a visitable URL. Shares are PUBLIC by default, so anyone with the link can open them. Pass --password to publish a PRIVATE password-protected page; viewers must supply the password to view. Local assets are inlined; remote refs load over the network. It returns the url plus a secret update_key for managing the page later. Use --token or LAVISH_AXI_HTML_APP_TOKEN only when you have an optional bearer token; it is never required. Users can also publish from the browser chrome's overflow menu\",Run `lavish-axi stop` to shut down the background server (it also self-stops when idle or after the last session ends with nothing connected),\"Run `lavish-axi playbook <playbook_id>` for focused artifact guidance. One artifact often combines several playbooks (for example a plan that includes a comparison and a diagram), so MUST open each matching playbook before writing HTML.\",\"Lavish does not auto-inject any design system - artifacts stay portable so they render identically when opened directly without lavish-axi running. Before writing any HTML: Decide the design direction in this strict priority order, and only move to the next step when the current one truly yields nothing: (1) if the user asked for a specific look or named design system, use that; (2) otherwise you must first inspect the project the artifact is about - the subject or product whose content or UI it represents, which may differ from your current working directory - and match that project's design system: Tailwind or theme config, shared CSS variables or design tokens, component library, brand assets, or existing styled pages. If the artifact previews, proposes, or mocks a specific app's UI, render it in that app's own design system so it faithfully shows the product, even when you are running in a different repo; (3) only when both steps come up empty, use the Lavish-recommended Tailwind CSS browser runtime v4 + DaisyUI v5, available via CDN, and prefer that CDN snippet over hand-writing styles unless explicitly instructed otherwise by the user. Run `lavish-axi design` for a content-to-playbook router, a copy-pasteable CDN snippet, a Mermaid CDN snippet/init for diagrams, and the DaisyUI component reference. When you deliver the artifact, state which of the three design sources you used and why.\",\"Use lavish-axi when the user asks for a visual artifact, HTML explainer, interactive prototype, review surface, product or technical plan, comparison, report, or browser-based feedback loop\""
+2026-09-26T22:44:15.335Z [DEBUG] Persisted tool result to /Users/josephkim/.claude/projects/-private-var-folders-vx-kq2w6-xj1sq82jh1gtsjl0-m0000gn-T-fm-lab-v67nTE-project/b4bad28b-e10c-4cf4-9ea1-2acc39df1690/tool-results/hook-bd369064-aa22-4d94-a07e-15e880c4686b-stdout.txt (13.9KB)
+2026-09-26T22:44:15.343Z [DEBUG] [print.ts] MCP task sidecar restore skipped: tasks gate off after the flag settle
+2026-09-26T22:44:15.349Z [DEBUG] [ScheduledTasks] scheduler start() — enabled=false, hasTasks=false
+2026-09-26T22:44:15.349Z [DEBUG] session.start: raised (surface none, not interactive)
+2026-09-26T22:44:15.351Z [DEBUG] hooks module telemetry@builtin (native): telemetry.log nested in agents-md#0
+2026-09-26T22:44:15.352Z [DEBUG] $.telemetry.log (agents-md -> telemetry) answered in 0.6ms
+2026-09-26T22:44:15.352Z [DEBUG] hooks module telemetry@builtin session.start settled in 2.4ms (native link, next() included)
+2026-09-26T22:44:15.353Z [DEBUG] hooks module telemetry@builtin telemetry.log settled in 1.8ms (native link, next() included)
+2026-09-26T22:44:15.353Z [DEBUG] hooks module agents-md@builtin session.start settled in 3.3ms (native link, next() included)
+2026-09-26T22:44:15.356Z [DEBUG] installPluginsForHeadless: starting
+2026-09-26T22:44:15.361Z [DEBUG] $.process.run (telemetry): sh with 2 args in /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-lab.v67nTE/project (pid 54105)
+2026-09-26T22:44:15.371Z [DEBUG] MCP server "figma": Returning tokens
+2026-09-26T22:44:15.371Z [DEBUG] MCP server "figma": Has refresh token: [REDACTED]
+2026-09-26T22:44:15.371Z [DEBUG] MCP server "figma": Expires in: 5541273s
+2026-09-26T22:44:15.373Z [DEBUG] $.process.run (telemetry): sh exited 0 in 13ms, 45 + 0 chars
+2026-09-26T22:44:15.424Z [DEBUG] MCP server "figma": subscriptions/listen re-open attempt 1 failed: Method not found.
+2026-09-26T22:44:15.464Z [DEBUG] [MCP] Retry: 1 transiently-failed remote server(s) after 500ms backoff
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": Initializing HTTP transport to http://127.0.0.1:8000/mcp
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": Node version: v26.3.0, Platform: darwin
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": Environment: {"NODE_OPTIONS":"not set","UV_THREADPOOL_SIZE":"default","HTTP_PROXY":"not set","HTTPS_PROXY":"not set","NO_PROXY":"not set"}
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": HTTP transport options: {"url":"http://127.0.0.1:8000/mcp","headers":{"User-Agent":"claude-code/2.1.283 (sdk-cli)","Accept-Encoding":"identity"},"hasAuthProvider":true,"timeoutMs":60000}
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": HTTP transport created successfully
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": Starting connection with timeout of 30000ms
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": Testing basic HTTP connectivity to http://127.0.0.1:8000/mcp
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": Parsed URL: host=127.0.0.1, port=8000, protocol=http:
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": Using loopback address: 127.0.0.1
+2026-09-26T22:44:15.465Z [DEBUG] MCP server "godot-ai": No token data found
+2026-09-26T22:44:15.466Z [DEBUG] MCP server "godot-ai": version negotiation probe failed on the http transport; reconnecting pinned legacy
+2026-09-26T22:44:15.466Z [DEBUG] MCP server "godot-ai": No token data found
+2026-09-26T22:44:15.467Z [DEBUG] MCP server "godot-ai": HTTP Connection failed after 3ms: ECONNREFUSED: Unable to connect. Is the computer able to access the url? (code: ECONNREFUSED, errno: none)
+2026-09-26T22:44:15.467Z [ERROR] MCP server "godot-ai" TypeError: ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:44:15.469Z [DEBUG] MCP server "godot-ai": Connection failed after 3ms (ECONNREFUSED): ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:44:15.469Z [ERROR] MCP server "godot-ai" Connection failed (ECONNREFUSED): ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:44:15.516Z [DEBUG] MCP server "claude.ai Rocketboard MCP": claude.ai proxy connection failed after 1076ms: Error POSTing to endpoint: {"type":"error","error":{"type":"not_found_error","message":"No MCP endpoint was found at the URL provided.","details":{"error_code":"mcp_endpoint_not_found"}},"request_id":"req_011CfSrsS3T9izeeEavWwVXX"}
+2026-09-26T22:44:15.516Z [ERROR] MCP server "claude.ai Rocketboard MCP" SdkHttpError: Error POSTing to endpoint: {"type":"error","error":{"type":"not_found_error","message":"No MCP endpoint was found at the URL provided.","details":{"error_code":"mcp_endpoint_not_found"}},"request_id":"req_011CfSrsS3T9izeeEavWwVXX"}
+2026-09-26T22:44:15.519Z [DEBUG] MCP server "claude.ai Rocketboard MCP": Connection failed after 1077ms (404): Error POSTing to endpoint: {"type":"error","error":{"type":"not_found_error","message":"No MCP endpoint was found at the URL provided.","details":{"error_code":"mcp_endpoint_not_found"}},"request_id":"req_011CfSrsS3T9izeeEavWwVXX"}
+2026-09-26T22:44:15.519Z [ERROR] MCP server "claude.ai Rocketboard MCP" Connection failed (404): Error POSTing to endpoint: {"type":"error","error":{"type":"not_found_error","message":"No MCP endpoint was found at the URL provided.","details":{"error_code":"mcp_endpoint_not_found"}},"request_id":"req_011CfSrsS3T9izeeEavWwVXX"}
+2026-09-26T22:44:15.537Z [DEBUG] Failed to stat directory /Library/Application Support/ClaudeCode/.claude/output-styles: ENOENT: no such file or directory, stat '/Library/Application Support/ClaudeCode/.claude/output-styles'
+2026-09-26T22:44:15.538Z [DEBUG] Failed to stat directory /Users/josephkim/.claude/output-styles: ENOENT: no such file or directory, stat '/Users/josephkim/.claude/output-styles'
+2026-09-26T22:44:15.538Z [DEBUG] Total plugin output styles loaded: 0
+2026-09-26T22:44:15.540Z [DEBUG] act_dont_rederive_arm_active source=growthbook
+2026-09-26T22:44:15.545Z [DEBUG] $.fs.ancestors (agents-md): CLAUDE.md, .claude/CLAUDE.md, CLAUDE.local.md found 0 of 8 directories
+2026-09-26T22:44:15.547Z [DEBUG] $.fs.ancestors (agents-md): AGENTS.md, .claude/AGENTS.md found 1 of 8 directories
+2026-09-26T22:44:15.547Z [DEBUG] [agents-md] $.ui.log: no CLAUDE.md found; AGENTS.md loaded: /private/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-lab.v67nTE/project/AGENTS.md
+2026-09-26T22:44:15.548Z [DEBUG] hooks module telemetry@builtin (native): telemetry.log nested in agents-md#1
+2026-09-26T22:44:15.548Z [DEBUG] hooks module telemetry@builtin (native): telemetry.mark nested in agents-md#1
+2026-09-26T22:44:15.548Z [DEBUG] $.telemetry.log (agents-md -> telemetry) answered in 0.3ms
+2026-09-26T22:44:15.548Z [DEBUG] $.telemetry.mark (agents-md -> telemetry) answered in 0.1ms
+2026-09-26T22:44:15.548Z [DEBUG] hooks module agents-md@builtin prompt.context settled in 14.2ms (native link, next() included)
+2026-09-26T22:44:15.549Z [DEBUG] hooks module telemetry@builtin telemetry.log settled in 0.6ms (native link, next() included)
+2026-09-26T22:44:15.549Z [DEBUG] hooks module telemetry@builtin telemetry.mark settled in 0.4ms (native link, next() included)
+2026-09-26T22:44:15.567Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-09-26T22:44:15.567Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-09-26T22:44:15.567Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-09-26T22:44:15.567Z [DEBUG] Sending 111 skills via attachment (initial)
+2026-09-26T22:44:15.567Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-09-26T22:44:15.589Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:15.593Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:44:15.593Z [DEBUG] [session-notices] advertise=false mode=bypassPermissions flag=true(payload) pollChannel=false remote=false remoteEnv=false nonInteractive=true
+2026-09-26T22:44:15.593Z [DEBUG] [engine] turn 1 start
+2026-09-26T22:44:15.595Z [DEBUG] autocompact: tokens=[REDACTED] level=ok effectiveWindow=980000
+2026-09-26T22:44:15.597Z [DEBUG] [AdvisorTool] Server-side tool enabled with claude-opus-5-5 as the advisor model
+2026-09-26T22:44:15.605Z [DEBUG] Dynamic tool loading: found 3 discovered tools in message history
+2026-09-26T22:44:15.606Z [DEBUG] Dynamic tool loading: 3/188 deferred tools included
+2026-09-26T22:44:15.607Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.283.3e1; cc_entrypoint=sdk-cli; cch=00000; cc_prompt_id=dd5b585d-0be6-4472-a9a6-a61a8b58042e; cc_turn_origin=sdk;
+2026-09-26T22:44:15.607Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:44:15.608Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:44:15.609Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:44:15.610Z [DEBUG] [API:timing] dispatching to firstParty model=claude-opus-5-5
+2026-09-26T22:44:15.610Z [DEBUG] [dispatch] sent anthropic-dispatch-id=v2d
+2026-09-26T22:44:15.610Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=6a0c1388-d8ce-4542-b98c-51f0a454f333 source=sdk
+2026-09-26T22:44:16.953Z [DEBUG] Stream started - received first chunk
+2026-09-26T22:44:16.953Z [DEBUG] [API:timing] first byte after 1344ms
+2026-09-26T22:44:17.027Z [DEBUG] [MCP] Retry: 1 transiently-failed remote server(s) after 1500ms backoff
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": Initializing HTTP transport to http://127.0.0.1:8000/mcp
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": Node version: v26.3.0, Platform: darwin
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": Environment: {"NODE_OPTIONS":"not set","UV_THREADPOOL_SIZE":"default","HTTP_PROXY":"not set","HTTPS_PROXY":"not set","NO_PROXY":"not set"}
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": HTTP transport options: {"url":"http://127.0.0.1:8000/mcp","headers":{"User-Agent":"claude-code/2.1.283 (sdk-cli)","Accept-Encoding":"identity"},"hasAuthProvider":true,"timeoutMs":60000}
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": HTTP transport created successfully
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": Starting connection with timeout of 30000ms
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": Testing basic HTTP connectivity to http://127.0.0.1:8000/mcp
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": Parsed URL: host=127.0.0.1, port=8000, protocol=http:
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": Using loopback address: 127.0.0.1
+2026-09-26T22:44:17.027Z [DEBUG] MCP server "godot-ai": No token data found
+2026-09-26T22:44:17.028Z [DEBUG] MCP server "godot-ai": version negotiation probe failed on the http transport; reconnecting pinned legacy
+2026-09-26T22:44:17.028Z [DEBUG] MCP server "godot-ai": No token data found
+2026-09-26T22:44:17.028Z [DEBUG] MCP server "godot-ai": HTTP Connection failed after 1ms: ECONNREFUSED: Unable to connect. Is the computer able to access the url? (code: ECONNREFUSED, errno: none)
+2026-09-26T22:44:17.028Z [ERROR] MCP server "godot-ai" TypeError: ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:44:17.029Z [DEBUG] MCP server "godot-ai": Connection failed after 1ms (ECONNREFUSED): ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:44:17.029Z [ERROR] MCP server "godot-ai" Connection failed (ECONNREFUSED): ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:44:17.426Z [DEBUG] MCP server "figma": Returning tokens
+2026-09-26T22:44:17.426Z [DEBUG] MCP server "figma": Has refresh token: [REDACTED]
+2026-09-26T22:44:17.426Z [DEBUG] MCP server "figma": Expires in: 5541271s
+2026-09-26T22:44:17.478Z [DEBUG] MCP server "figma": subscriptions/listen re-open attempt 2 failed: Method not found.
+2026-09-26T22:44:17.675Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:17.676Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:17.676Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:44:17.680Z [INFO] [Stall] tool_dispatch_start tool=Bash toolUseId=toolu_012V2sH5CKUQ9VY8QzB4dHNr permissionDecisionMs=2
+2026-09-26T22:44:17.682Z [DEBUG] Creating shell snapshot for zsh (/bin/zsh)
+2026-09-26T22:44:17.682Z [DEBUG] Looking for shell config file: /Users/josephkim/.zshrc
+2026-09-26T22:44:17.682Z [DEBUG] Snapshots directory: /Users/josephkim/.claude/shell-snapshots
+2026-09-26T22:44:17.683Z [DEBUG] Creating snapshot at: /Users/josephkim/.claude/shell-snapshots/snapshot-zsh-1790462657682-iutfxk.sh
+2026-09-26T22:44:17.683Z [DEBUG] Execution timeout: 10000ms
+2026-09-26T22:44:17.688Z [DEBUG] Spawn-env probe captured 60 keys
+2026-09-26T22:44:18.044Z [DEBUG] Shell snapshot created successfully (9671 bytes)
+2026-09-26T22:44:18.047Z [DEBUG] No session environment scripts found
+2026-09-26T22:44:18.047Z [DEBUG] Spawning shell without login (-l flag skipped)
+2026-09-26T22:44:18.055Z [INFO] [Stall] tool_dispatch_end tool=Bash toolUseId=toolu_012V2sH5CKUQ9VY8QzB4dHNr outcome=ok durationMs=375
+2026-09-26T22:44:18.060Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-09-26T22:44:18.060Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-09-26T22:44:18.060Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-09-26T22:44:18.060Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-09-26T22:44:18.061Z [DEBUG] autocompact: tokens=[REDACTED] level=ok effectiveWindow=980000
+2026-09-26T22:44:18.065Z [DEBUG] Dynamic tool loading: found 3 discovered tools in message history
+2026-09-26T22:44:18.066Z [DEBUG] Dynamic tool loading: 3/188 deferred tools included
+2026-09-26T22:44:18.066Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.283.3e1; cc_entrypoint=sdk-cli; cch=00000; cc_prev_req=req_011CfSrsV2o1HKg8BAVdeUiW; cc_prompt_id=dd5b585d-0be6-4472-a9a6-a61a8b58042e; cc_turn_origin=sdk;
+2026-09-26T22:44:18.066Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:44:18.067Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:44:18.068Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:44:18.068Z [DEBUG] [API:timing] dispatching to firstParty model=claude-opus-5-5
+2026-09-26T22:44:18.068Z [DEBUG] [dispatch] sent anthropic-dispatch-id=v2d
+2026-09-26T22:44:18.068Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=6a3b967e-f075-4955-bd3f-22bd824133d4 source=sdk
+2026-09-26T22:46:40.168Z [DEBUG] $.http.fetch (telemetry): POST https://api.anthropic.com/api/event_logging/v2/batch
+2026-09-26T22:46:40.168Z [DEBUG] [MCP] Retry: 1 transiently-failed remote server(s) after 4000ms backoff
+2026-09-26T22:46:40.170Z [DEBUG] [skills] idle — switching poll interval to 30000ms
+2026-09-26T22:46:40.226Z [WARN] Slow first byte: no stream chunk 1.1s after request sent (attempt 1)
+2026-09-26T22:46:40.227Z [WARN] [event-loop-stall] blocked for 398ms monotonic (wall drift 141505ms, clock jump 141107ms, expected 200ms). Total stalls: 1, cumulative: 0ms monotonic / 141505ms wall [likely sleep/wake] blocked_write=false sigcont=false cpu=2ms majflt=0 rss=170MB heap=97MB ext=41MB
+2026-09-26T22:46:40.229Z [DEBUG] MCP server "figma": Returning tokens
+2026-09-26T22:46:40.229Z [DEBUG] MCP server "figma": Has refresh token: [REDACTED]
+2026-09-26T22:46:40.229Z [DEBUG] MCP server "figma": Expires in: 5541128s
+2026-09-26T22:46:40.229Z [DEBUG] MCP server "godot-ai": Initializing HTTP transport to http://127.0.0.1:8000/mcp
+2026-09-26T22:46:40.229Z [DEBUG] MCP server "godot-ai": Node version: v26.3.0, Platform: darwin
+2026-09-26T22:46:40.229Z [DEBUG] MCP server "godot-ai": Environment: {"NODE_OPTIONS":"not set","UV_THREADPOOL_SIZE":"default","HTTP_PROXY":"not set","HTTPS_PROXY":"not set","NO_PROXY":"not set"}
+2026-09-26T22:46:40.230Z [DEBUG] MCP server "godot-ai": HTTP transport options: {"url":"http://127.0.0.1:8000/mcp","headers":{"User-Agent":"claude-code/2.1.283 (sdk-cli)","Accept-Encoding":"identity"},"hasAuthProvider":true,"timeoutMs":60000}
+2026-09-26T22:46:40.230Z [DEBUG] MCP server "godot-ai": HTTP transport created successfully
+2026-09-26T22:46:40.230Z [DEBUG] MCP server "godot-ai": Starting connection with timeout of 30000ms
+2026-09-26T22:46:40.230Z [DEBUG] MCP server "godot-ai": Testing basic HTTP connectivity to http://127.0.0.1:8000/mcp
+2026-09-26T22:46:40.230Z [DEBUG] MCP server "godot-ai": Parsed URL: host=127.0.0.1, port=8000, protocol=http:
+2026-09-26T22:46:40.230Z [DEBUG] MCP server "godot-ai": Using loopback address: 127.0.0.1
+2026-09-26T22:46:40.231Z [DEBUG] MCP server "godot-ai": No token data found
+2026-09-26T22:46:40.232Z [DEBUG] MCP server "godot-ai": version negotiation probe failed on the http transport; reconnecting pinned legacy
+2026-09-26T22:46:40.232Z [DEBUG] MCP server "godot-ai": No token data found
+2026-09-26T22:46:40.235Z [DEBUG] MCP server "godot-ai": HTTP Connection failed after 5ms: ECONNREFUSED: Unable to connect. Is the computer able to access the url? (code: ECONNREFUSED, errno: none)
+2026-09-26T22:46:40.235Z [ERROR] MCP server "godot-ai" TypeError: ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:46:40.237Z [DEBUG] MCP server "godot-ai": Connection failed after 6ms (ECONNREFUSED): ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:46:40.237Z [ERROR] MCP server "godot-ai" Connection failed (ECONNREFUSED): ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+2026-09-26T22:46:40.238Z [DEBUG] [MCP] Retry: 1 remote server(s) still failed after all retries: godot-ai
+2026-09-26T22:46:40.442Z [DEBUG] Preserving file permissions: 100600
+2026-09-26T22:46:40.442Z [DEBUG] Writing to temp file: /Users/josephkim/.claude.json.tmp.52432.37b9a64013df
+2026-09-26T22:46:40.448Z [DEBUG] Applied original permissions to temp file
+2026-09-26T22:46:40.449Z [DEBUG] Temp file written successfully, size: 314628 bytes
+2026-09-26T22:46:40.449Z [DEBUG] Renaming /Users/josephkim/.claude.json.tmp.52432.37b9a64013df to /Users/josephkim/.claude.json
+2026-09-26T22:46:40.450Z [DEBUG] File /Users/josephkim/.claude.json written atomically
+2026-09-26T22:46:40.656Z [DEBUG] MCP server "figma": subscriptions/listen re-open attempt 3 failed: Method not found.
+2026-09-26T22:46:40.708Z [ERROR] Failed to flush logs to Datadog: Error: read ECONNRESET
+2026-09-26T22:46:40.882Z [DEBUG] $.http.fetch (telemetry): 200 in 714ms, 39 chars
+2026-09-26T22:46:40.883Z [DEBUG] [telemetry] $.ui.log (to debug): telemetry: sent 3 row(s)
+2026-09-26T22:47:19.086Z [ERROR] [first-byte] no response headers 181s after dispatch (slept 142088ms) — aborting request
+2026-09-26T22:47:19.087Z [ERROR] API error (attempt 1/11): undefined Connection error.
+2026-09-26T22:47:19.087Z [WARN] [dispatch] connection error with anthropic-dispatch-id=v2d; retrying once with anthropic-dispatch-id=v2p
+2026-09-26T22:47:19.087Z [DEBUG] Stale connection — disabling keep-alive for retry
+2026-09-26T22:47:19.088Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:47:19.088Z [DEBUG] [API:timing] dispatching to firstParty model=claude-opus-5-5
+2026-09-26T22:47:19.088Z [DEBUG] [dispatch] sent anthropic-dispatch-id=v2p
+2026-09-26T22:47:19.088Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=f1f522fe-889e-4145-9552-634a6b2d54de source=sdk
+2026-09-26T22:47:19.513Z [ERROR] API error (attempt 1/11): 400 400 {"type":"error","error":{"type":"invalid_request_error","message":"The requested `previous_message_id` has already been continued. Each response `id` may be continued at most once; continue from the Thread's most recent response `id`.","details":{"error_code":"thread_already_continued"}},"request_id":"req_011CfSs726gbHA8tiTGaiF9P"}
+2026-09-26T22:47:19.513Z [DEBUG] [tether] forcing create for retry: replay_other_400
+2026-09-26T22:47:19.513Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:47:19.514Z [DEBUG] [API:timing] dispatching to firstParty model=claude-opus-5-5
+2026-09-26T22:47:19.514Z [DEBUG] [dispatch] sent anthropic-dispatch-id=v2p
+2026-09-26T22:47:19.515Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=4fba9c8f-9616-400f-af0a-7d5af745d257 source=sdk
+2026-09-26T22:47:21.061Z [DEBUG] Stream started - received first chunk
+2026-09-26T22:47:21.061Z [DEBUG] [API:timing] first byte after 1548ms
+2026-09-26T22:47:21.365Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:47:21.368Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:47:21.375Z [DEBUG] Hook output does not start with {, treating as plain text
+2026-09-26T22:47:21.378Z [DEBUG] [engine] turn 1 end (turns=2 usage in=4 out=109 cost=$0.1830 api=43983ms stop=end_turn resultLen=44)
+2026-09-26T22:47:21.378Z [DEBUG] Fast mode unavailable: Fast mode is not available in the Agent SDK
+2026-09-26T22:47:21.390Z [DEBUG] MCP server "firecrawl": HTTP connection closed after 186s (cleanly)
+2026-09-26T22:47:21.390Z [DEBUG] MCP server "firecrawl": Cleared connection cache for reconnection
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "railway": Sending SIGINT to MCP server process
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "figma": HTTP connection closed after 187s (cleanly)
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "figma": Cleared connection cache for reconnection
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "claude.ai Claude Docs": CLAUDEAI-PROXY connection closed after 186s (cleanly)
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "claude.ai Claude Docs": Cleared connection cache for reconnection
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "claude.ai Google Drive": CLAUDEAI-PROXY connection closed after 186s (cleanly)
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "claude.ai Google Drive": Cleared connection cache for reconnection
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "claude.ai Gmail": CLAUDEAI-PROXY connection closed after 186s (cleanly)
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "claude.ai Gmail": Cleared connection cache for reconnection
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "claude.ai Google Calendar": CLAUDEAI-PROXY connection closed after 186s (cleanly)
+2026-09-26T22:47:21.391Z [DEBUG] MCP server "claude.ai Google Calendar": Cleared connection cache for reconnection
+2026-09-26T22:47:21.394Z [DEBUG] MCP server "railway": UNKNOWN connection closed after 186s (cleanly)
+2026-09-26T22:47:21.394Z [DEBUG] MCP server "railway": Cleared connection cache for reconnection
+2026-09-26T22:47:21.443Z [DEBUG] MCP server "railway": MCP server process exited cleanly
+2026-09-26T22:47:21.679Z [DEBUG] [uds-messaging] Shutting down
+2026-09-26T22:47:21.709Z [DEBUG] LSP server manager shut down successfully
+2026-09-26T22:47:21.722Z [DEBUG] Cleaned up session snapshot: /Users/josephkim/.claude/shell-snapshots/snapshot-zsh-1790462657682-iutfxk.sh
+2026-09-26T22:47:21.724Z [DEBUG] hooks module telemetry@builtin session.end settled in 0.2ms (native link, next() included)
+2026-09-26T22:47:21.987Z [DEBUG] Released PID lock for 2.1.283

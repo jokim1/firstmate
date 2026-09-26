@@ -1,0 +1,48 @@
+--- hook 1 ---
+command: [ -n "${CLAUDE_PROJECT_DIR:-}" ] || exit 0; [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; exec "$CLAUDE_PROJECT_DIR"/bin/fm-sessionstart-run.sh
+status: 0
+stdout: 
+stderr: 
+hook 1 status=0
+--- hook 2 ---
+command: [ -n "${CLAUDE_PROJECT_DIR:-}" ] || exit 0; [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; exec "$CLAUDE_PROJECT_DIR"/bin/fm-arm-pretool-check.sh --claude
+status: 0
+stdout: 
+stderr: 
+hook 2 status=0
+--- hook 3 ---
+command: [ -n "${CLAUDE_PROJECT_DIR:-}" ] || exit 0; [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; exec "$CLAUDE_PROJECT_DIR"/bin/fm-cd-pretool-check.sh --claude
+status: 0
+stdout: 
+stderr: 
+hook 3 status=0
+--- hook 4 ---
+command: [ -n "${CLAUDE_PROJECT_DIR:-}" ] || exit 0; "$CLAUDE_PROJECT_DIR"/bin/fm-subagent-pretool-check.sh --claude
+status: 0
+stdout: 
+stderr: 
+hook 4 status=0
+--- hook 5 ---
+command: [ -n "${CLAUDE_PROJECT_DIR:-}" ] || exit 0; [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; exec "$CLAUDE_PROJECT_DIR"/bin/fm-host-mirror.sh hook claude
+status: 0
+stdout: 
+stderr: 
+hook 5 status=0
+--- hook 6 ---
+command: [ -n "${CLAUDE_PROJECT_DIR:-}" ] || exit 0; [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; exec "$CLAUDE_PROJECT_DIR"/bin/fm-turnend-guard.sh --claude
+status: 0
+stdout: 
+stderr: 
+hook 6 status=0
+--- hook 7 ---
+command: [ -n "${CLAUDE_PROJECT_DIR:-}" ] || exit 0; [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; exec "$CLAUDE_PROJECT_DIR"/bin/fm-claude-stop-autoarm.sh
+status: 0
+stdout: 
+stderr: 
+hook 7 status=0
+--- hook 8 ---
+command: [ -n "${CLAUDE_PROJECT_DIR:-}" ] || exit 0; [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; exec "$CLAUDE_PROJECT_DIR"/bin/fm-host-mirror.sh hook claude
+status: 0
+stdout: 
+stderr: 
+hook 8 status=0

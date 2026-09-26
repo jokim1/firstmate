@@ -1,0 +1,11 @@
+===== unset =====
+count=8 fail=0 recorder_lines=0
+===== empty =====
+count=8 fail=0 recorder_lines=0
+===== set =====
+count=8 fail=0 recorder_lines=8
+===== grok-skip =====
+count=8 fail=0 recorder_lines=1
+===== contrast-unguarded =====
+unguarded_status=127
+unguarded_stderr=bash: line 1: /bin/fm-sessionstart-run.sh: No such file or directory

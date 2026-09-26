@@ -1,0 +1,22 @@
+RESULT is_error= False
+RESULT text= The command ran and printed `PRETOOLLIVEOK`.
+num_turns= 2
+HOOKS:
+  event=SessionStart name=SessionStart:startup exit=0 outcome=success stderr=''
+  event=SessionStart name=SessionStart:startup exit=0 outcome=success stderr=''
+  event=SessionStart name=SessionStart:startup exit=0 outcome=success stderr=''
+  event=SessionStart name=SessionStart:startup exit=0 outcome=success stderr=''
+  event=SessionStart name=SessionStart:startup exit=0 outcome=success stderr=''
+  event=SessionStart name=SessionStart:startup exit=0 outcome=success stderr=''
+  event=SessionStart name=SessionStart:startup exit=0 outcome=success stderr=''
+  event=UserPromptSubmit name=UserPromptSubmit exit=0 outcome=success stderr=''
+  event=PreToolUse name=PreToolUse:Bash exit=0 outcome=success stderr=''
+  event=PreToolUse name=PreToolUse:Bash exit=0 outcome=success stderr=''
+  event=PreToolUse name=PreToolUse:Bash exit=0 outcome=success stderr=''
+  event=Stop name=Stop exit=0 outcome=success stderr=''
+  event=Stop name=Stop exit=0 outcome=success stderr=''
+  event=Stop name=Stop exit=0 outcome=success stderr=''
+PRETOOL_COUNT 3
+FAILURES 0
+TOOLS [('Bash', {'command': 'echo PRETOOLLIVEOK', 'description': 'Print test marker'})]
+TYPES {"('system', 'hook_started')": 14, "('system', 'hook_response')": 14, "('system', 'hook_progress')": 1, "('system', 'init')": 1, "('assistant', None)": 2, "('rate_limit_event', None)": 1, "('user', None)": 1, "('result', 'success')": 1}
