@@ -28,8 +28,8 @@
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
 #   When both portable parallel artifacts are present, the aggregate summary
-#   reports their wall-clock imbalance without failing because independent
-#   runner variance does not yet support an evidence-backed failure bound.
+#   reports their wall-clock imbalance without failing.
+#   docs/fm-test-portable-shards.md owns why that observation stays non-failing.
 #
 # Options:
 #   --json <path>   write a deterministic timing artifact after the run. Each
