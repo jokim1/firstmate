@@ -1,0 +1,124 @@
+exit=0
+stdout=FM_TEST_AGGREGATE lanes=3 total=3 failed=0 skipped_gate=0 critical_path_duration_ms=9000 portable_parallel_1_ms=1000 portable_parallel_2_ms=2000 imbalance_ms=1000
+----- aggregate json -----
+{
+  "kind": "aggregate",
+  "lanes": [
+    {
+      "finished_at": "2026-09-26T23:42:27Z",
+      "path": "/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-wall-guard-live.ZYdieO/p1.json",
+      "run_id": "fm-test-run-1790466145985-85848",
+      "selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "started_at": "2026-09-26T23:42:25Z",
+      "summary": {
+        "duration_ms": 1000,
+        "failed": 0,
+        "skipped_gate": 0,
+        "total": 1
+      }
+    },
+    {
+      "finished_at": "2026-09-26T23:42:21Z",
+      "path": "/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-wall-guard-live.ZYdieO/p2.json",
+      "run_id": "fm-test-run-1790466138687-84169",
+      "selection": "lane=portable-parallel-2",
+      "started_at": "2026-09-26T23:42:18Z",
+      "summary": {
+        "duration_ms": 2000,
+        "failed": 0,
+        "skipped_gate": 0,
+        "total": 1
+      }
+    },
+    {
+      "finished_at": "2026-09-26T23:42:27Z",
+      "path": "/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T/fm-wall-guard-live.ZYdieO/serial.json",
+      "run_id": "fm-test-run-1790466145985-85848",
+      "selection": "lane=portable-serial-1of9",
+      "started_at": "2026-09-26T23:42:25Z",
+      "summary": {
+        "duration_ms": 9000,
+        "failed": 0,
+        "skipped_gate": 0,
+        "total": 1
+      }
+    }
+  ],
+  "scripts": [
+    {
+      "duration_ms": 1446,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "unclassified",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1790466138687-84169",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/slow.test.sh"
+    },
+    {
+      "duration_ms": 224,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "unclassified",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1790466145985-85848",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh"
+    },
+    {
+      "duration_ms": 224,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "unclassified",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1790466145985-85848",
+      "lane_selection": "lane=portable-serial-1of9",
+      "path": "/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh"
+    }
+  ],
+  "slowest": [
+    {
+      "duration_ms": 1446,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "unclassified",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1790466138687-84169",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/slow.test.sh"
+    },
+    {
+      "duration_ms": 224,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "unclassified",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1790466145985-85848",
+      "lane_selection": "lane=portable-parallel-1;fail-on-gate-skip=Pi extension typecheck prerequisite not found",
+      "path": "/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh"
+    },
+    {
+      "duration_ms": 224,
+      "exit": 0,
+      "expected_gate_skip": "none",
+      "family": "unclassified",
+      "gate_skip": false,
+      "gate_skip_reason": "",
+      "lane_run_id": "fm-test-run-1790466145985-85848",
+      "lane_selection": "lane=portable-serial-1of9",
+      "path": "/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh"
+    }
+  ],
+  "summary": {
+    "critical_path_duration_ms": 9000,
+    "failed": 0,
+    "lanes": 3,
+    "skipped_gate": 0,
+    "total": 3
+  }
+}

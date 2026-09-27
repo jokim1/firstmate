@@ -1,0 +1,6 @@
+tests/fm-ci-workflow.test.sh — all 10 cases passed, including:
+ok - both portable parallel lanes pass one --max-wall-ms wired to the workflow env value
+
+tests/fm-test-run.test.sh — all cases passed, including:
+ok - --max-wall-ms fails an over-budget run and refuses a malformed budget
+ok - aggregate-json merges lane timing artifacts

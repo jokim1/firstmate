@@ -1,0 +1,33 @@
+list_exit=0 shaped_exit=0 env=1080000
+----- --lane --list stdout (first 20) -----
+tests/fm-lint.test.sh
+tests/fm-pr-merge.test.sh
+tests/fm-test-run.test.sh
+tests/fm-cd-pretool-check.test.sh
+tests/fm-pi-primary-types.test.sh
+tests/fm-grok-harness.test.sh
+tests/fm-composer-lib.test.sh
+tests/fm-review-diff.test.sh
+tests/fm-tmux-submit-busy.test.sh
+tests/fm-composer-ghost.test.sh
+tests/fm-brief.test.sh
+... count=11
+----- --lane --list stderr -----
+----- CI-shaped tiny run -----
+FM_TEST_BEGIN 2026-09-26T23:42:26Z /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh family=unclassified expected_gate_skip=none
+ok - wall-guard fast fixture
+FM_TEST_END 2026-09-26T23:42:26Z /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh exit=0 duration_ms=224 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=1603
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=224 failed=0
+FM_TEST_SLOWEST rank=1 script=/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh duration_ms=224
+FM_TEST_BUDGET max_wall_ms=1080000 duration_ms=1603
+----- CI-shaped stderr -----
+fm-test-run: wrote timing artifact: /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/ci-shaped.json
+----- extract -----
+extract_exit=0
+tests-portable-parallel-1	bin/fm-test-run.sh --lane portable-parallel-1 --fail-on-gate-skip Pi\ extension\ typecheck\ prerequisite\ not\ found --max-wall-ms \$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS --json \$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json
+tests-portable-parallel-2	bin/fm-test-run.sh --lane portable-parallel-2 --max-wall-ms \$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS --json \$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json
+----- parallel-1 argv -----
+bin/fm-test-run.sh --lane portable-parallel-1 --fail-on-gate-skip Pi\ extension\ typecheck\ prerequisite\ not\ found --max-wall-ms \$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS --json \$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json
+----- parallel-2 argv -----
+bin/fm-test-run.sh --lane portable-parallel-2 --max-wall-ms \$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS --json \$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json

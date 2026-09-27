@@ -1,0 +1,7 @@
+extract_exit=0
+tests-portable-parallel-1	bin/fm-test-run.sh --lane portable-parallel-1 --fail-on-gate-skip Pi\ extension\ typecheck\ prerequisite\ not\ found --max-wall-ms \$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS --json \$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json
+tests-portable-parallel-2	bin/fm-test-run.sh --lane portable-parallel-2 --max-wall-ms \$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS --json \$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json
+----- parallel-1 argv -----
+bin/fm-test-run.sh --lane portable-parallel-1 --fail-on-gate-skip Pi\ extension\ typecheck\ prerequisite\ not\ found --max-wall-ms \$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS --json \$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json
+----- parallel-2 argv -----
+bin/fm-test-run.sh --lane portable-parallel-2 --max-wall-ms \$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS --json \$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json
