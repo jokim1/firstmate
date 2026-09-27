@@ -1,0 +1,40 @@
+=== first empty recovery arm ===
+check: rearm-resurface
+
+=== marker after first arm ===
+announced:downtime:live-empty.1.fixture
+
+=== quiet re-arms ===
+quiet-arm-1 pid=16124 live=yes marker=announced:downtime:live-empty.1.fixture
+watcher: started pid=16227 (beacon fresh)
+---
+quiet-arm-2 pid=26580 live=yes marker=announced:downtime:live-empty.1.fixture
+watcher: started pid=26631 (beacon fresh)
+---
+
+=== live arm after append ===
+watcher: started pid=26631 (beacon fresh)
+check: rearm-resurface
+
+=== marker after append (pending, before announcement) ===
+pending:downtime:34958.1790502543.hJ34mz
+
+=== durable queue after append ===
+1790502543	1	check	inbox:live-fixture	check: captain inbox note live-fixture
+
+=== failed-append restore ===
+before: announced:downtime:restore.1.fixture
+after:  announced:downtime:restore.1.fixture
+append_exit=1
+
+=== idle lavish first arm ===
+watcher: started pid=54516 (beacon fresh)
+check: rearm-resurface
+
+=== idle lavish live arm until result ===
+watcher: started pid=58542 (beacon fresh)
+check: process-event result captured: procevent:idle-lavish:1
+
+=== lavish durable queue ===
+1790502608	1	check	procevent:idle-lavish:1	check: procevent lavish idle-lavish 1
+1790502609	2	check	procevent:idle-lavish:1	check: procevent lavish idle-lavish 1

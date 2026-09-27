@@ -1,0 +1,6 @@
+quiet-arm-1 pid=16124 live=yes marker=announced:downtime:live-empty.1.fixture
+watcher: started pid=16227 (beacon fresh)
+---
+quiet-arm-2 pid=26580 live=yes marker=announced:downtime:live-empty.1.fixture
+watcher: started pid=26631 (beacon fresh)
+---

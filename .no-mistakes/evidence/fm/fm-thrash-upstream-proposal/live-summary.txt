@@ -1,0 +1,14 @@
+SCENARIO rollback-helper-absent: pass
+fm_wake_append_rollback_locked is not exported; restore helper remains
+SCENARIO empty-first-announcement: pass
+first pending generation announced once; queue stayed empty
+SCENARIO empty-queue-quiet: pass
+arm 1 live marker=announced:downtime:live-empty.1.fixture; arm 2 live marker=announced:downtime:live-empty.1.fixture; 
+SCENARIO adversarial-repeated-empty-arms: pass
+two empty-queue re-arms stayed live without a new recovery generation
+SCENARIO append-reopens-recovery: pass
+durable append reopened recovery; marker=announced:downtime:34958.1790502543.hJ34mz
+SCENARIO failed-append-restore: pass
+failed append restored announced:downtime:restore.1.fixture; append_exit=1
+SCENARIO idle-lavish-until-result: pass
+idle lavish source stayed quiet, then the real result woke promptly and was durable

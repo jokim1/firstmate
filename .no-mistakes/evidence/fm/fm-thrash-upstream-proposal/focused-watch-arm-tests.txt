@@ -1,0 +1,2 @@
+ok - watch-arm: an idle Lavish source stays quiet and its real result wakes promptly
+ok - watch-arm: appending work reopens an announced empty recovery
