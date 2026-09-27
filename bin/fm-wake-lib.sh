@@ -2014,44 +2014,11 @@ fm_wake_append_locked() {
   fi
   if [ "$status" -ne 0 ]; then
     _fm_wake_append_recovery_restore_locked || true
+  else
+    FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN=
+    FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN=
   fi
   return "$status"
-}
-
-fm_wake_append_rollback_locked() {
-  local queue_tmp=$1 marker="$STATE/.watcher-down" lock backup
-  if [ -z "$FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN" ]; then
-    mv -f -- "$queue_tmp" "$FM_WAKE_QUEUE"
-    return $?
-  fi
-  lock="${marker}.lock"
-  fm_lock_acquire_wait "$lock" || return 1
-  if ! fm_recovery_marker_read "$marker" \
-    || [ "$FM_RECOVERY_MARKER_TOKEN" != "$FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN" ]; then
-    fm_lock_release "$lock"
-    return 1
-  fi
-  backup=$(mktemp "${FM_WAKE_QUEUE}.rollback-original.XXXXXX") || {
-    fm_lock_release "$lock"
-    return 1
-  }
-  if ! cp -p -- "$FM_WAKE_QUEUE" "$backup" \
-    || ! mv -f -- "$queue_tmp" "$FM_WAKE_QUEUE"; then
-    rm -f -- "$backup"
-    fm_lock_release "$lock"
-    return 1
-  fi
-  if ! _fm_recovery_marker_restore_token_locked "$marker" \
-    "$FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN"; then
-    mv -f -- "$backup" "$FM_WAKE_QUEUE" 2>/dev/null || true
-    rm -f -- "$backup"
-    fm_lock_release "$lock"
-    return 1
-  fi
-  rm -f -- "$backup"
-  FM_WAKE_APPEND_RECOVERY_PREVIOUS_TOKEN=
-  FM_WAKE_APPEND_RECOVERY_PUBLISHED_TOKEN=
-  fm_lock_release "$lock"
 }
 
 # fm_wake_queued_keys <kind>
