@@ -1,9 +1,17 @@
 real_exit=0 (want 0)
 commented_exit=1 (want non-zero)
--:41:in `block in <main>': tests-portable-parallel-1 must pass --max-wall-ms exactly once wired to the env value, got [] (RuntimeError)
-	from -:36:in `each'
-	from -:36:in `<main>'
+-:47:in `block in <main>': tests-portable-parallel-1 must pass --max-wall-ms exactly once wired to the env value, got [] (RuntimeError)
+	from -:42:in `each'
+	from -:42:in `<main>'
 dup_exit=1 (want non-zero)
--:41:in `block in <main>': tests-portable-parallel-1 must pass --max-wall-ms exactly once wired to the env value, got ["$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS", "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS"] (RuntimeError)
-	from -:36:in `each'
-	from -:36:in `<main>'
+-:47:in `block in <main>': tests-portable-parallel-1 must pass --max-wall-ms exactly once wired to the env value, got ["$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS", "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS"] (RuntimeError)
+	from -:42:in `each'
+	from -:42:in `<main>'
+hardcoded_exit=1 (want non-zero)
+-:47:in `block in <main>': tests-portable-parallel-1 must pass --max-wall-ms exactly once wired to the env value, got ["1080000"] (RuntimeError)
+	from -:42:in `each'
+	from -:42:in `<main>'
+equals_exit=0 (want 0; --max-wall-ms= still one operand)
+wrong_bound_exit=1 (want non-zero)
+-:4:in `<main>': FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS must be the evidence-derived bound 1080000 documented in docs/fm-test-portable-shards.md, got 9999999 (RuntimeError)
+dead_comment_exit=0 (want 0; commented tokens must not satisfy the pin, live argv still must)

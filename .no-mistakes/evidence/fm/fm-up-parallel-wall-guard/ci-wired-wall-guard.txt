@@ -1,28 +1,37 @@
 list_exit=0 shaped_exit=0 env=1080000
 ----- --lane --list stdout (first 20) -----
-tests/fm-lint.test.sh
 tests/fm-pr-merge.test.sh
-tests/fm-test-run.test.sh
+tests/fm-lint.test.sh
+tests/fm-backend-herdr.test.sh
+tests/fm-x-mode.test.sh
 tests/fm-cd-pretool-check.test.sh
-tests/fm-pi-primary-types.test.sh
-tests/fm-grok-harness.test.sh
 tests/fm-composer-lib.test.sh
+tests/fm-send-popup-settle.test.sh
+tests/fm-pi-primary-types.test.sh
 tests/fm-review-diff.test.sh
-tests/fm-tmux-submit-busy.test.sh
-tests/fm-composer-ghost.test.sh
-tests/fm-brief.test.sh
-... count=11
+tests/fm-send-settle.test.sh
+tests/fm-ensure-agents-md.test.sh
+tests/fm-supervision-instructions.test.sh
+tests/fm-transition-lib.test.sh
+... count=13
 ----- --lane --list stderr -----
 ----- CI-shaped tiny run -----
-FM_TEST_BEGIN 2026-09-26T23:42:26Z /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh family=unclassified expected_gate_skip=none
+FM_TEST_BEGIN 2026-09-30T07:53:07Z /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.hqWfBE/fast.test.sh family=unclassified expected_gate_skip=none
 ok - wall-guard fast fixture
-FM_TEST_END 2026-09-26T23:42:26Z /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh exit=0 duration_ms=224 gate_skip=false
-FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=1603
-FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=224 failed=0
-FM_TEST_SLOWEST rank=1 script=/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/fast.test.sh duration_ms=224
-FM_TEST_BUDGET max_wall_ms=1080000 duration_ms=1603
+FM_TEST_END 2026-09-30T07:53:07Z /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.hqWfBE/fast.test.sh exit=0 duration_ms=20 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=82
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=20 failed=0
+FM_TEST_SLOWEST rank=1 script=/var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.hqWfBE/fast.test.sh duration_ms=20
+FM_TEST_BUDGET max_wall_ms=1080000 duration_ms=82
 ----- CI-shaped stderr -----
-fm-test-run: wrote timing artifact: /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.ZYdieO/ci-shaped.json
+fm-test-run: wrote timing artifact: /var/folders/vx/kq2w6_xj1sq82jh1gtsjl0_m0000gn/T//fm-wall-guard-live.hqWfBE/ci-shaped.json
+----- expanded extracted argv --list -----
+tests-portable-parallel-1_expanded_list_exit=0 count=13
+expanded_argv=--lane portable-parallel-1 --fail-on-gate-skip Pi extension typecheck prerequisite not found --max-wall-ms 1080000
+----- tests-portable-parallel-1 list stderr -----
+tests-portable-parallel-2_expanded_list_exit=0 count=11
+expanded_argv=--lane portable-parallel-2 --max-wall-ms 1080000
+----- tests-portable-parallel-2 list stderr -----
 ----- extract -----
 extract_exit=0
 tests-portable-parallel-1	bin/fm-test-run.sh --lane portable-parallel-1 --fail-on-gate-skip Pi\ extension\ typecheck\ prerequisite\ not\ found --max-wall-ms \$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS --json \$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json

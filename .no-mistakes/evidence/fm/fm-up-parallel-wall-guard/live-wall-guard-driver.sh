@@ -36,6 +36,8 @@ SH
 chmod +x "$TMP/fast.test.sh" "$TMP/slow.test.sh"
 
 unset FM_TASK_ID || true
+unset NO_MISTAKES_GATE FM_GATE_REFUSE_BYPASS FM_ROOT_OVERRIDE FM_STATE_OVERRIDE \
+  FM_DATA_OVERRIDE FM_CONFIG_OVERRIDE FM_PROJECTS_OVERRIDE || true
 
 # --- 1. Under the CI 18-minute bound, a green script passes and reports budget
 set +e
@@ -84,7 +86,7 @@ set -e
 if [ "$rc" -eq 1 ] \
   && grep -Eq '^FM_TEST_SUMMARY total=1 failed=0' "$TMP/over.out" \
   && grep -Eq '^FM_TEST_BUDGET max_wall_ms=50 duration_ms=[0-9]+$' "$TMP/over.out" \
-  && grep -F 'wall-clock budget exceeded' "$TMP/over.out" \
+  && grep -F 'wall-clock budget exceeded' "$TMP/over.err" \
   && [ -s "$TMP/over.json" ]; then
   record "over-budget-fails-closed" "pass" "$(cat "$EVIDENCE/over-budget.txt")"
 else
@@ -92,6 +94,8 @@ else
 fi
 
 # --- 3. CI-shaped flags: extract argv from the real workflow and invoke it
+# Uses the same join-continuations / drop-comments / argv-vector pin as
+# tests/fm-ci-workflow.test.sh::test_portable_parallel_lanes_carry_the_wall_guard
 ruby -ryaml -rshellwords - "$CI_YML" "$TMP" <<'RUBY' >"$TMP/ci-extract.txt"
 doc = YAML.load_file(ARGV[0])
 max_wall = doc.fetch("env").fetch("FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS")
@@ -136,6 +140,20 @@ end
   ops = max_wall_operands.call(argv)
   raise "#{job_name} operands=#{ops.inspect}" unless ops == ["$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS"]
   File.write(File.join(ARGV[1], "#{job_name}.argv"), argv.shelljoin + "\n")
+  expanded = []
+  i = 1
+  while i < argv.length
+    arg = argv.fetch(i)
+    if arg == "--json"
+      i += 2
+    elsif arg.start_with?("--json=")
+      i += 1
+    else
+      expanded << arg.gsub("$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS", max_wall.to_s)
+      i += 1
+    end
+  end
+  File.binwrite(File.join(ARGV[1], "#{job_name}.expanded"), expanded.join("\0") + "\0")
   puts "#{job_name}\t#{argv.shelljoin}"
 end
 RUBY
@@ -154,6 +172,7 @@ extract_rc=$?
 # Also prove --lane + --max-wall-ms 1080000 is accepted via --list.
 set +e
 FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS=$(cat "$TMP/workflow-max-wall")
+export FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS
 "$RUNNER" --lane portable-parallel-1 \
   --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
   --max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS" \
@@ -164,6 +183,29 @@ list_rc=$?
   --json "$TMP/ci-shaped.json" \
   "$TMP/fast.test.sh" >"$TMP/ci-shaped.out" 2>"$TMP/ci-shaped.err"
 shaped_rc=$?
+# Expand the extracted argv the way GitHub Actions would, then --list instead of
+# executing the hosted shard.
+expanded_list_ok=1
+: >"$TMP/expanded-list.txt"
+for job in tests-portable-parallel-1 tests-portable-parallel-2; do
+  set +e
+  new_args=()
+  while IFS= read -r -d '' arg; do
+    new_args+=("$arg")
+  done <"$TMP/${job}.expanded"
+  "$RUNNER" "${new_args[@]}" --list >"$TMP/${job}.list.out" 2>"$TMP/${job}.list.err"
+  job_list_rc=$?
+  set -e
+  {
+    echo "${job}_expanded_list_exit=$job_list_rc count=$(wc -l <"$TMP/${job}.list.out" | tr -d ' ')"
+    echo "expanded_argv=${new_args[*]}"
+    echo "----- ${job} list stderr -----"
+    cat "$TMP/${job}.list.err"
+  } >>"$TMP/expanded-list.txt"
+  if [ "$job_list_rc" -ne 0 ] || [ "$(wc -l <"$TMP/${job}.list.out" | tr -d ' ')" -le 5 ]; then
+    expanded_list_ok=0
+  fi
+done
 set -e
 {
   echo "list_exit=$list_rc shaped_exit=$shaped_rc env=$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS"
@@ -176,10 +218,13 @@ set -e
   cat "$TMP/ci-shaped.out"
   echo "----- CI-shaped stderr -----"
   cat "$TMP/ci-shaped.err"
+  echo "----- expanded extracted argv --list -----"
+  cat "$TMP/expanded-list.txt"
   echo "----- extract -----"
   cat "$EVIDENCE/ci-argv-extract.txt"
 } >"$EVIDENCE/ci-wired-flags.txt"
 if [ "$extract_rc" -eq 0 ] && [ "$list_rc" -eq 0 ] && [ "$shaped_rc" -eq 0 ] \
+  && [ "$expanded_list_ok" -eq 1 ] \
   && grep -Eq '^FM_TEST_BUDGET max_wall_ms=1080000 duration_ms=[0-9]+$' "$TMP/ci-shaped.out" \
   && [ "$(wc -l <"$TMP/ci-list.out" | tr -d ' ')" -gt 5 ]; then
   record "ci-wired-wall-guard" "pass" "$(cat "$EVIDENCE/ci-wired-flags.txt")"
@@ -189,7 +234,7 @@ fi
 
 # --- 4. Aggregate reports parallel imbalance and does not fail
 python3 - "$TMP" <<'PY'
-import json, pathlib, shutil, sys
+import json, pathlib, sys
 tmp = pathlib.Path(sys.argv[1])
 under = json.loads((tmp / "ci-shaped.json").read_text())
 over = json.loads((tmp / "over.json").read_text())
@@ -274,36 +319,62 @@ else
   record "aggregate-huge-imbalance-does-not-fail" "fail" "$(cat "$EVIDENCE/aggregate-huge-imbalance.txt")"
 fi
 
-# --- 7. Adversarial: commented-out / duplicated wall guard fails the argv pin
+# --- 7. Adversarial argv pin: comment, duplicate, hardcoded bound, equals form
 python3 - "$CI_YML" "$TMP" <<'PY'
 from pathlib import Path
 import sys
 src = Path(sys.argv[1]).read_text()
 tmp = Path(sys.argv[2])
-commented = src.replace(
-    '            --max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS" \\\n',
-    '            # --max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS" \\\n',
-    1,
-)
+flag = '            --max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS" \\\n'
+commented = src.replace(flag, '            # --max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS" \\\n', 1)
 (tmp / "ci-commented.yml").write_text(commented)
 dup = src.replace(
-    '            --max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS" \\\n            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json"\n',
-    '            --max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS" \\\n            --max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS" \\\n            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json"\n',
+    flag + '            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json"\n',
+    flag + flag + '            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json"\n',
     1,
 )
 (tmp / "ci-dup.yml").write_text(dup)
+hardcoded = src.replace(
+    '--max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS"',
+    '--max-wall-ms 1080000',
+    1,
+)
+(tmp / "ci-hardcoded.yml").write_text(hardcoded)
+equals_form = src.replace(
+    '--max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS"',
+    '--max-wall-ms="$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS"',
+)
+(tmp / "ci-equals.yml").write_text(equals_form)
+wrong_env = src.replace(
+    'FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS: 1080000',
+    'FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS: 9999999',
+    1,
+)
+(tmp / "ci-wrong-bound.yml").write_text(wrong_env)
+dead_comment = src.replace(
+    '          bin/fm-test-run.sh --lane portable-parallel-1 \\\n',
+    '          # --max-wall-ms "$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS"\n'
+    '          bin/fm-test-run.sh --lane portable-parallel-1 \\\n',
+    1,
+)
+(tmp / "ci-dead-comment.yml").write_text(dead_comment)
 PY
 
+# Exact pin from tests/fm-ci-workflow.test.sh
 check_pin() {
   local yml=$1
   ruby -ryaml -rshellwords - "$yml" <<'RUBY'
 doc = YAML.load_file(ARGV[0])
 max_wall = doc.fetch("env").fetch("FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS")
 expected_max_wall = 1080000
-raise "bound" unless max_wall == expected_max_wall
+raise "FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS must be the evidence-derived bound " \
+      "#{expected_max_wall} documented in docs/fm-test-portable-shards.md, got #{max_wall.inspect}" \
+  unless max_wall == expected_max_wall
+
 drop_comment = lambda do |line|
   line.gsub(/('[^']*'|"[^"]*")|#.*/) { |m| m.start_with?("#") ? "" : m }
 end
+
 fm_test_run_argv = lambda do |run|
   commands = []
   run.to_s.gsub(/\\\n/, " ").each_line do |line|
@@ -315,6 +386,7 @@ fm_test_run_argv = lambda do |run|
   raise "run step must invoke bin/fm-test-run.sh once, found #{commands.length}" unless commands.length == 1
   commands.fetch(0)
 end
+
 max_wall_operands = lambda do |argv|
   operands = []
   i = 1
@@ -332,6 +404,7 @@ max_wall_operands = lambda do |argv|
   end
   operands
 end
+
 %w[tests-portable-parallel-1 tests-portable-parallel-2].each do |job_name|
   step = doc.fetch("jobs").fetch(job_name).fetch("steps")
               .find { |s| s["name"].to_s.start_with?("Run portable parallel shard") }
@@ -350,6 +423,14 @@ check_pin "$TMP/ci-commented.yml" >"$TMP/pin-comment.out" 2>"$TMP/pin-comment.er
 pin_comment=$?
 check_pin "$TMP/ci-dup.yml" >"$TMP/pin-dup.out" 2>"$TMP/pin-dup.err"
 pin_dup=$?
+check_pin "$TMP/ci-hardcoded.yml" >"$TMP/pin-hard.out" 2>"$TMP/pin-hard.err"
+pin_hard=$?
+check_pin "$TMP/ci-equals.yml" >"$TMP/pin-eq.out" 2>"$TMP/pin-eq.err"
+pin_eq=$?
+check_pin "$TMP/ci-wrong-bound.yml" >"$TMP/pin-wrong.out" 2>"$TMP/pin-wrong.err"
+pin_wrong=$?
+check_pin "$TMP/ci-dead-comment.yml" >"$TMP/pin-dead.out" 2>"$TMP/pin-dead.err"
+pin_dead=$?
 set -e
 {
   echo "real_exit=$pin_real (want 0)"
@@ -358,8 +439,18 @@ set -e
   cat "$TMP/pin-comment.err"
   echo "dup_exit=$pin_dup (want non-zero)"
   cat "$TMP/pin-dup.err"
+  echo "hardcoded_exit=$pin_hard (want non-zero)"
+  cat "$TMP/pin-hard.err"
+  echo "equals_exit=$pin_eq (want 0; --max-wall-ms= still one operand)"
+  cat "$TMP/pin-eq.err"
+  echo "wrong_bound_exit=$pin_wrong (want non-zero)"
+  cat "$TMP/pin-wrong.err"
+  echo "dead_comment_exit=$pin_dead (want 0; commented tokens must not satisfy the pin, live argv still must)"
+  cat "$TMP/pin-dead.err"
 } >"$EVIDENCE/argv-pin-adversarial.txt"
-if [ "$pin_real" -eq 0 ] && [ "$pin_comment" -ne 0 ] && [ "$pin_dup" -ne 0 ]; then
+if [ "$pin_real" -eq 0 ] && [ "$pin_comment" -ne 0 ] && [ "$pin_dup" -ne 0 ] \
+  && [ "$pin_hard" -ne 0 ] && [ "$pin_eq" -eq 0 ] && [ "$pin_wrong" -ne 0 ] \
+  && [ "$pin_dead" -eq 0 ]; then
   record "argv-pin-rejects-comment-and-dup" "pass" "$(cat "$EVIDENCE/argv-pin-adversarial.txt")"
 else
   record "argv-pin-rejects-comment-and-dup" "fail" "$(cat "$EVIDENCE/argv-pin-adversarial.txt")"
