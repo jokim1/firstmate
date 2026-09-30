@@ -27,8 +27,11 @@
 #
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
-#   When both portable parallel artifacts are present, the aggregate summary
-#   reports their wall-clock imbalance without failing.
+#   stdout: FM_TEST_AGGREGATE lanes=<n> total=<n> failed=<n> skipped_gate=<n>
+#           critical_path_duration_ms=<n>
+#   When both portable parallel artifacts are present, that line also includes
+#   portable_parallel_1_ms=<n> portable_parallel_2_ms=<n> imbalance_ms=<n>
+#   without failing.
 #   docs/fm-test-portable-shards.md owns why that observation stays non-failing.
 #
 # Options:

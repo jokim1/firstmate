@@ -100,7 +100,8 @@ Its hint-coverage and modeled-budget checks are described in [Portable serial CI
 ## Timing artifacts
 
 Portable shards, each portable serial shard, and the Herdr lane upload runner-generated timing JSON.
-`bin/fm-test-run.sh --aggregate-json` creates the combined summary artifact; its header owns the summary line, including measured portable-parallel wall imbalance when both artifacts are present.
+`bin/fm-test-run.sh --aggregate-json` creates the combined JSON summary artifact.
+Its header owns the stdout `FM_TEST_AGGREGATE` line, including measured portable-parallel wall imbalance when both artifacts are present.
 That measured-wall observation does not fail the aggregate job because the available green-run evidence does not support a stable imbalance threshold across independent runners.
 `.github/workflows/ci.yml` owns the exact artifact names and aggregation wiring.
 
@@ -163,5 +164,5 @@ Re-derive the bound from fresh lane timing artifacts when the shard composition 
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) holds the executable values and names each job's tier beside its `timeout-minutes`.
 [`tests/fm-ci-workflow.test.sh`](../tests/fm-ci-workflow.test.sh) holds the policy against the parsed workflow: every job belongs to exactly one tier, the workflow carries exactly three distinct job-level values, the fast tier stays within 5-10 minutes, the normal jobs share one 30-minute budget, and the Herdr family-run step is the 20-minute tripwire below its job backstop with an `always()` teardown after it.
-The same test pins both portable parallel run steps to exactly one `--max-wall-ms` wired to `FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS` at the evidence-derived bound above.
+The same file pins both portable parallel run steps to exactly one `--max-wall-ms` wired to `FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS` at the evidence-derived bound above.
 A passing coverage guard does not establish a healthy job duration; refresh the healthy figures above from the lanes' uploaded timing artifacts.
