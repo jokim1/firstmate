@@ -1,0 +1,7 @@
+=== one parallel artifact missing ===
+FM_TEST_AGGREGATE lanes=2 total=2 failed=0 skipped_gate=0 critical_path_duration_ms=9000
+{"critical_path_duration_ms":9000,"failed":0,"lanes":2,"skipped_gate":0,"total":2}
+=== both green parallel artifacts, extreme imbalance ===
+FM_TEST_AGGREGATE lanes=2 total=2 failed=0 skipped_gate=0 critical_path_duration_ms=1000000 portable_parallel_1_ms=1000 portable_parallel_2_ms=1000000 imbalance_ms=999000
+exit=0
+{"critical_path_duration_ms":1000000,"failed":0,"lanes":2,"skipped_gate":0,"total":2}

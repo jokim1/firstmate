@@ -1,0 +1,37 @@
+=== within the configured portable-parallel wall bound ===
+FM_TEST_BEGIN 2026-09-30T16:33:18Z tests/fm-ci-workflow.test.sh family=unclassified expected_gate_skip=none
+ok - CI matrices cover every executable serial lane and canonical lint root exactly once
+ok - a newer push to one PR supersedes that PR's in-flight CI
+ok - distinct PRs get distinct concurrency groups
+ok - every main push keeps its own group and is never cancelled
+ok - every ci.yml job carries a finite timeout
+ok - every ci.yml job belongs to one of the three timeout tiers
+ok - fast tier jobs share one 5 minute tripwire
+ok - normal tier jobs share one 30 minute budget
+ok - Herdr keeps a 20 minute step tripwire under a 75 minute job backstop
+ok - both portable parallel lanes pass one --max-wall-ms wired to the workflow env value
+FM_TEST_END 2026-09-30T16:33:25Z tests/fm-ci-workflow.test.sh exit=0 duration_ms=7306 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=7397
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=7306 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-ci-workflow.test.sh duration_ms=7306
+FM_TEST_BUDGET max_wall_ms=1080000 duration_ms=7397
+exit=0
+=== adversarial one-millisecond wall bound ===
+FM_TEST_BEGIN 2026-09-30T16:33:25Z tests/fm-ci-workflow.test.sh family=unclassified expected_gate_skip=none
+ok - CI matrices cover every executable serial lane and canonical lint root exactly once
+ok - a newer push to one PR supersedes that PR's in-flight CI
+ok - distinct PRs get distinct concurrency groups
+ok - every main push keeps its own group and is never cancelled
+ok - every ci.yml job carries a finite timeout
+ok - every ci.yml job belongs to one of the three timeout tiers
+ok - fast tier jobs share one 5 minute tripwire
+ok - normal tier jobs share one 30 minute budget
+ok - Herdr keeps a 20 minute step tripwire under a 75 minute job backstop
+ok - both portable parallel lanes pass one --max-wall-ms wired to the workflow env value
+FM_TEST_END 2026-09-30T16:33:32Z tests/fm-ci-workflow.test.sh exit=0 duration_ms=7041 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=7110
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=7041 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-ci-workflow.test.sh duration_ms=7041
+FM_TEST_BUDGET max_wall_ms=1 duration_ms=7110
+fm-test-run: wall-clock budget exceeded: 7110ms > 1ms for scripts;jobs=1
+exit=1

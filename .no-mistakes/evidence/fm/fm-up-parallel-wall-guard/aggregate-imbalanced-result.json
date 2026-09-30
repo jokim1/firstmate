@@ -1,0 +1,78 @@
+{
+  "kind": "aggregate",
+  "lanes": [
+    {
+      "finished_at": "2026-09-30T00:00:01Z",
+      "path": "/Users/josephkim/.no-mistakes/evidence/01M3SJ20KFQVDKQXB04227VKJM/aggregate-p1-fixture.json",
+      "run_id": "lane=portable-parallel-1",
+      "selection": "lane=portable-parallel-1",
+      "started_at": "2026-09-30T00:00:00Z",
+      "summary": {
+        "duration_ms": 1000,
+        "failed": 0,
+        "skipped_gate": 0,
+        "total": 1
+      }
+    },
+    {
+      "finished_at": "2026-09-30T00:00:01Z",
+      "path": "/Users/josephkim/.no-mistakes/evidence/01M3SJ20KFQVDKQXB04227VKJM/aggregate-p2-fixture.json",
+      "run_id": "lane=portable-parallel-2",
+      "selection": "lane=portable-parallel-2",
+      "started_at": "2026-09-30T00:00:00Z",
+      "summary": {
+        "duration_ms": 1000000,
+        "failed": 0,
+        "skipped_gate": 0,
+        "total": 1
+      }
+    }
+  ],
+  "scripts": [
+    {
+      "duration_ms": 1000000,
+      "exit": 0,
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "lane_run_id": "lane=portable-parallel-2",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/example.test.sh"
+    },
+    {
+      "duration_ms": 1000,
+      "exit": 0,
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "lane_run_id": "lane=portable-parallel-1",
+      "lane_selection": "lane=portable-parallel-1",
+      "path": "tests/example.test.sh"
+    }
+  ],
+  "slowest": [
+    {
+      "duration_ms": 1000000,
+      "exit": 0,
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "lane_run_id": "lane=portable-parallel-2",
+      "lane_selection": "lane=portable-parallel-2",
+      "path": "tests/example.test.sh"
+    },
+    {
+      "duration_ms": 1000,
+      "exit": 0,
+      "family": "pure-contract-unit",
+      "gate_skip": false,
+      "lane_run_id": "lane=portable-parallel-1",
+      "lane_selection": "lane=portable-parallel-1",
+      "path": "tests/example.test.sh"
+    }
+  ],
+  "summary": {
+    "critical_path_duration_ms": 1000000,
+    "failed": 0,
+    "lanes": 2,
+    "skipped_gate": 0,
+    "total": 2
+  }
+}
