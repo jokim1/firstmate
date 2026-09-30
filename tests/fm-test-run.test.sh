@@ -1838,6 +1838,75 @@ assert len(doc["scripts"])==4
   pass "aggregate-json merges lane timing artifacts"
 }
 
+# The measured wall imbalance is reported only when both portable-parallel
+# artifacts are present, so a run missing one lane must omit the fields rather
+# than emit a partial or misleading imbalance.
+test_aggregate_json_omits_imbalance_when_a_parallel_artifact_is_missing() {
+  local tmp out
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-aggmiss.XXXXXX")
+  cat >"$tmp/a.json" <<'JSON'
+{
+  "run_id": "a",
+  "selection": "lane=portable-parallel-1",
+  "started_at": "2026-07-22T00:00:00Z",
+  "finished_at": "2026-07-22T00:01:00Z",
+  "summary": {"total": 1, "failed": 0, "skipped_gate": 0, "duration_ms": 1000},
+  "scripts": [{"path": "tests/a.test.sh", "family": "pure-contract-unit", "duration_ms": 1000, "exit": 0, "gate_skip": false}]
+}
+JSON
+  cat >"$tmp/c.json" <<'JSON'
+{
+  "run_id": "c",
+  "selection": "lane=portable-serial-1of9",
+  "started_at": "2026-07-22T00:00:00Z",
+  "finished_at": "2026-07-22T00:02:30Z",
+  "summary": {"total": 1, "failed": 0, "skipped_gate": 0, "duration_ms": 9000},
+  "scripts": [{"path": "tests/d.test.sh", "family": "pure-contract-unit", "duration_ms": 9000, "exit": 0, "gate_skip": false}]
+}
+JSON
+  out=$("$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/a.json" "$tmp/c.json")
+  assert_contains "$out" "FM_TEST_AGGREGATE lanes=2 total=2 failed=0" "aggregate summary line"
+  assert_not_contains "$out" "imbalance_ms=" "imbalance must be omitted when one parallel artifact is missing"
+  assert_not_contains "$out" "portable_parallel_1_ms=" "parallel lane fields must be omitted when one parallel artifact is missing"
+  rm -rf "$tmp"
+  pass "aggregate-json omits imbalance when one parallel artifact is missing"
+}
+
+# A large wall imbalance is an observation, not a failure, because the available
+# green-run evidence does not support a stable threshold across runners, so an
+# otherwise-green aggregate must stay successful while still reporting it.
+test_aggregate_json_tolerates_large_wall_imbalance_on_green_lanes() {
+  local tmp out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-aggimbal.XXXXXX")
+  cat >"$tmp/a.json" <<'JSON'
+{
+  "run_id": "a",
+  "selection": "lane=portable-parallel-1",
+  "started_at": "2026-07-22T00:00:00Z",
+  "finished_at": "2026-07-22T00:00:01Z",
+  "summary": {"total": 1, "failed": 0, "skipped_gate": 0, "duration_ms": 1000},
+  "scripts": [{"path": "tests/a.test.sh", "family": "pure-contract-unit", "duration_ms": 1000, "exit": 0, "gate_skip": false}]
+}
+JSON
+  cat >"$tmp/b.json" <<'JSON'
+{
+  "run_id": "b",
+  "selection": "lane=portable-parallel-2",
+  "started_at": "2026-07-22T00:00:00Z",
+  "finished_at": "2026-07-22T00:16:40Z",
+  "summary": {"total": 1, "failed": 0, "skipped_gate": 0, "duration_ms": 1000000},
+  "scripts": [{"path": "tests/b.test.sh", "family": "afk", "duration_ms": 1000000, "exit": 0, "gate_skip": false}]
+}
+JSON
+  out=$("$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/a.json" "$tmp/b.json")
+  rc=$?
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "aggregate must stay successful despite a large wall imbalance, got rc=$rc"; }
+  assert_contains "$out" "FM_TEST_AGGREGATE lanes=2 total=2 failed=0" "aggregate summary stays green"
+  assert_contains "$out" "imbalance_ms=999000" "large wall imbalance is still reported"
+  rm -rf "$tmp"
+  pass "aggregate-json tolerates a large wall imbalance on green lanes"
+}
+
 test_list_all_exact_suite_coverage
 test_family_selection
 test_single_script_selection
@@ -1879,3 +1948,5 @@ test_max_wall_ms_is_a_result_not_advice
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
 test_aggregate_json
+test_aggregate_json_omits_imbalance_when_a_parallel_artifact_is_missing
+test_aggregate_json_tolerates_large_wall_imbalance_on_green_lanes
