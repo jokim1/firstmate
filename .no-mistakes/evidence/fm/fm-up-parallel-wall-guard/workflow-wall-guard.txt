@@ -1,0 +1,4 @@
+FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS=1080000
+tests-portable-parallel-1 max_wall_occurrences=1 operand=$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS
+tests-portable-parallel-2 max_wall_occurrences=1 operand=$FM_TEST_PORTABLE_PARALLEL_MAX_WALL_MS
+documented_formula observed_max_ms=711864 factor=1.5 rounded_up_to_minute_ms=1080000
