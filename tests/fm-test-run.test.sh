@@ -1898,8 +1898,8 @@ JSON
   "scripts": [{"path": "tests/b.test.sh", "family": "afk", "duration_ms": 1000000, "exit": 0, "gate_skip": false}]
 }
 JSON
-  out=$("$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/a.json" "$tmp/b.json")
-  rc=$?
+  rc=0
+  out=$("$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/a.json" "$tmp/b.json") || rc=$?
   [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "aggregate must stay successful despite a large wall imbalance, got rc=$rc"; }
   assert_contains "$out" "FM_TEST_AGGREGATE lanes=2 total=2 failed=0" "aggregate summary stays green"
   assert_contains "$out" "imbalance_ms=999000" "large wall imbalance is still reported"
