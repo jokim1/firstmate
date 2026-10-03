@@ -18,7 +18,8 @@
 # poll       The blocking child the generic runner executes; never run this
 #            directly in a conversational turn. It polls `quota-axi --json`
 #            until quota drops below the threshold, invalid quota data stops
-#            the watch, or three consecutive command failures stop it. A
+#            the watch, or three consecutive transient command failures stop
+#            it. Missing or incompatible tools stop it immediately, and a
 #            successful read resets the command-failure streak.
 # classify   Print the captured outcome class: low, exhausted, error, or unknown.
 # terminal   Every quota poll is terminal because the source fires at most once.
@@ -244,7 +245,8 @@ cmd_poll() {
     json=$(quota_json "${timeout:-}") && read_rc=0 || read_rc=$?
     if [ "$read_rc" -ne 0 ]; then
       consecutive_failures=$((consecutive_failures + 1))
-      if [ "$consecutive_failures" -lt "$MAX_CONSECUTIVE_READ_FAILURES" ]; then
+      if [ "$read_rc" -ne 2 ] && [ "$read_rc" -ne 3 ] && \
+         [ "$consecutive_failures" -lt "$MAX_CONSECUTIVE_READ_FAILURES" ]; then
         sleep "$interval"
         continue
       fi

@@ -7,12 +7,16 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 BIN="$FM_ROOT/bin"
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-procevent-quota.XXXXXX")
 FAKEBIN="$LAB/fakebin"
+NO_QUOTA_BIN="$LAB/no-quota-bin"
 COUNT="$LAB/count"
 VERSION_COUNT="$LAB/version-count"
 
 cleanup() { rm -rf "$LAB"; }
 trap cleanup EXIT
-mkdir -p "$FAKEBIN"
+mkdir -p "$FAKEBIN" "$NO_QUOTA_BIN"
+for command_name in dirname jq mkdir sleep; do
+  ln -s "$(command -v "$command_name")" "$NO_QUOTA_BIN/$command_name"
+done
 
 cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
@@ -370,14 +374,16 @@ ok "N consecutive slow reads go terminal with slow-read detail"
 
 # A missing quota-axi still reports missing (distinct from a slow read).
 rm -f "$COUNT"
-out=$(PATH="/usr/bin:/bin" QUOTA_AXI_COUNT="$COUNT" "$BIN/fm-procevent-quota.sh" poll --interval 0.01 --threshold 10 --provider codex --timeout 1)
+out=$(PATH="$NO_QUOTA_BIN" QUOTA_AXI_COUNT="$COUNT" "$BASH" "$BIN/fm-procevent-quota.sh" poll --interval 0.01 --threshold 10 --provider codex --timeout 1)
 printf '%s\n' "$out" | grep -qx 'status: error' \
   || fail "missing quota-axi did not go terminal: $out"
 printf '%s\n' "$out" | grep -qx 'detail: quota-axi is missing' \
   || fail "missing quota-axi did not report missing: $out"
+printf '%s\n' "$out" | grep -qx 'condition_polls: 1' \
+  || fail "missing quota-axi was not reported immediately: $out"
 printf '%s\n' "$out" | grep -Fq 'timed out' \
   && fail "missing quota-axi was mislabeled as a slow read: $out"
-ok "missing quota-axi reports missing"
+ok "missing quota-axi reports missing immediately"
 
 # An incompatible quota-axi reports incompatible (distinct from missing and slow).
 rm -f "$COUNT"
@@ -386,11 +392,13 @@ printf '%s\n' "$out" | grep -qx 'status: error' \
   || fail "incompatible quota-axi did not go terminal: $out"
 printf '%s\n' "$out" | grep -qx 'detail: quota-axi is incompatible' \
   || fail "incompatible quota-axi did not report incompatible: $out"
+printf '%s\n' "$out" | grep -qx 'condition_polls: 1' \
+  || fail "incompatible quota-axi was not reported immediately: $out"
 printf '%s\n' "$out" | grep -Fq 'missing' \
   && fail "incompatible quota-axi was mislabeled as missing: $out"
 printf '%s\n' "$out" | grep -Fq 'timed out' \
   && fail "incompatible quota-axi was mislabeled as a slow read: $out"
-ok "incompatible quota-axi reports incompatible"
+ok "incompatible quota-axi reports incompatible immediately"
 
 # A healthy read must reset the consecutive-failure streak: two timeouts, one
 # healthy, two more timeouts, then exhausted reaches the sixth poll.
