@@ -27,6 +27,7 @@ NO_APPLICABLE="$LAB/no-applicable.json"
 APPLICABLE_VETO="$LAB/applicable-veto.json"
 MUSE_EXHAUSTED="$LAB/muse-exhausted.json"
 MUSE_POSITIVE="$LAB/muse-positive.json"
+MUSE_LEGACY="$LAB/muse-legacy.json"
 AGY_POSITIVE="$LAB/agy-positive.json"
 TOON="$LAB/quota.toon"
 RENDERER_TOON="$LAB/renderer-quota.toon"
@@ -556,6 +557,14 @@ if out=$(call_choose --snapshot "$MUSE_EXHAUSTED" --candidate muse:default 2>/de
 fi
 [ "$out" = "none" ] || fail "exhausted muse quota returned: $out"
 ok "Muse uses muse quota"
+
+jq '.providers += [{"provider":"meta","windows":[],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":25,"runway":{"status":"through_reset"}}]}}]' \
+  "$LAB/captured.json" > "$MUSE_LEGACY"
+if out=$(call_choose --snapshot "$MUSE_LEGACY" --candidate muse:default 2>/dev/null); then
+  fail "Muse candidate dispatched with positive legacy meta quota"
+fi
+[ "$out" = "none" ] || fail "positive legacy meta quota returned: $out"
+ok "Muse ignores legacy meta quota"
 
 jq '.providers += [{"provider":"agy","windows":[],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":25,"runway":{"status":"through_reset"}}]}}]' \
   "$LAB/captured.json" > "$AGY_POSITIVE"
