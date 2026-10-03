@@ -1,0 +1,40 @@
+SCENARIO: transient timeout recovers
+quota: quota-codex
+status: exhausted
+detail: {"provider":"codex","best":{"scope":"all_models","status":"known","effectivePercentRemaining":0,"runway":{"status":"exhausted_now"}}}
+condition_polls: 3
+version_invocations: 3
+json_invocations: 3
+SCENARIO: healthy read resets failure streak
+quota: quota-codex
+status: exhausted
+detail: {"provider":"codex","best":{"scope":"all_models","status":"known","effectivePercentRemaining":0,"runway":{"status":"exhausted_now"}}}
+condition_polls: 6
+version_invocations: 6
+json_invocations: 6
+SCENARIO: three consecutive timeouts stop with last cause
+quota: quota-codex
+status: error
+detail: 3 consecutive read failures; last quota-axi read timed out
+condition_polls: 3
+version_invocations: 3
+json_invocations: 3
+SCENARIO: later version execution failures remain failures
+quota: quota-codex
+status: error
+detail: 3 consecutive read failures; last quota-axi read failed
+condition_polls: 4
+version_invocations: 4
+json_invocations: 1
+SCENARIO: incompatible version remains distinct
+quota: quota-codex
+status: error
+detail: quota-axi is incompatible
+condition_polls: 3
+version_invocations: 3
+json_invocations: 0
+SCENARIO: missing executable remains distinct
+quota: quota-codex
+status: error
+detail: quota-axi is missing
+condition_polls: 3
