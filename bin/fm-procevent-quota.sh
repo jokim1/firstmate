@@ -17,7 +17,9 @@
 #            registered through `bin/fm-procevent.sh register`.
 # poll       The blocking child the generic runner executes; never run this
 #            directly in a conversational turn. It polls `quota-axi --json`
-#            until quota drops below the threshold or an error stops the watch.
+#            until quota drops below the threshold, invalid quota data stops
+#            the watch, or three consecutive command failures stop it. A
+#            successful read resets the command-failure streak.
 # classify   Print the captured outcome class: low, exhausted, error, or unknown.
 # terminal   Every quota poll is terminal because the source fires at most once.
 # source-id  Print the canonical source id.
