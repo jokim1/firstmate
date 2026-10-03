@@ -7,8 +7,8 @@
 # constants in bin/fm-bootstrap.sh.
 #
 # This file is the single owner of that version number. bin/fm-bootstrap.sh
-# turns a failing check into the operator-facing MISSING diagnostic, which is
-# what keeps an older build from reaching a dispatch intake at all.
+# turns a failing check into the operator-facing MISSING diagnostic, and the
+# dispatch resolver enforces the same floor before reading a snapshot.
 #
 # Snapshot schemas: fm_quota_json_valid accepts quota-axi schema 5 (one row per
 # provider, no accountKey) and schema 6 (every row carries accountKey, unique on
