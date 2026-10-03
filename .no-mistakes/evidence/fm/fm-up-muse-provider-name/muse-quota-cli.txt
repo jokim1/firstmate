@@ -1,0 +1,9 @@
+scenario=muse-positive
+muse default
+exit=0
+scenario=legacy-meta-does-not-bind
+none
+exit=1
+scenario=muse-exhausted
+none
+exit=1

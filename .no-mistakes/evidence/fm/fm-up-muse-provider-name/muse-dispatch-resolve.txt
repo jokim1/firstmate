@@ -1,0 +1,8 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 186   tokens: 100/60
+  rule: rule_1 (Muse work.)   confidence: 0.99
+  probabilities: rule_1=0.99 default=0.01
+  note: rule matched
+  candidate: muse:-  provider=muse  scope=all_models  remaining=40%  spendPriority=0.5  runway=through_reset  -> eligible
+  profile: --harness 'muse'
