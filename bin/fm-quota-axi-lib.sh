@@ -151,7 +151,7 @@ fm_quota_single_provider_table() {
     'kimi kimi' \
     'cursor cursor' \
     'agy agy' \
-    'muse meta'
+    'muse muse'
 }
 
 # Reads the whole table before answering: leaving the loop early closes the
@@ -182,7 +182,7 @@ fm_quota_provider_for_harness() {
     grok)         printf 'grok\n' ;;
     kimi)         printf 'kimi\n' ;;
     cursor)       printf 'cursor\n' ;;
-    muse)         printf 'meta\n' ;;
+    muse)         printf 'muse\n' ;;
     *)            return 1 ;;
   esac
 }
