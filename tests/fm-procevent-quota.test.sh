@@ -434,6 +434,18 @@ printf '%s\n' "$out" | grep -Fq 'timed out' \
   && fail "failing version probe was mislabeled as a timeout: $out"
 ok "failing version probe reports failure not incompatible"
 
+rm -f "$COUNT"
+out=$(QUOTA_AXI_VERSION_FAIL=1 QUOTA_AXI_COUNT="$COUNT" PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" poll --interval 0.01 --threshold 10 --provider codex)
+printf '%s\n' "$out" | grep -qx 'status: error' \
+  || fail "untimed failing version probe did not go terminal: $out"
+printf '%s\n' "$out" | grep -qx 'condition_polls: 3' \
+  || fail "untimed failing version probe used unexpected poll count: $out"
+printf '%s\n' "$out" | grep -Fq '3 consecutive read failures; last quota-axi read failed' \
+  || fail "untimed failing version probe omitted failure detail: $out"
+printf '%s\n' "$out" | grep -Fq 'incompatible' \
+  && fail "untimed failing version probe was mislabeled as incompatible: $out"
+ok "untimed failing version probe reports failure not incompatible"
+
 # Mixed streak: two immediate JSON failures then one timeout - wording names the
 # streak and the last cause, without calling every failure a slow read.
 rm -f "$COUNT"

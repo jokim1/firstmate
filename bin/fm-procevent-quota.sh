@@ -108,8 +108,8 @@ valid_percent() {
 # Exit status: 0 prints JSON; 1 timed out; 2 missing; 3 incompatible; 4 other failure.
 # A missing or incompatible quota-axi is an error condition, not a signal to fire.
 # Callers tolerate a bounded streak of 1/4 before going terminal; 2/3 stay distinct.
-# The timed path probes --version once, validates that captured text through
-# fm_quota_axi_version_compatible (no second launch), then probes --json once.
+# Each path probes --version once, validates that captured text through
+# fm_quota_axi_version_compatible, then probes --json once.
 # A slow or failing probe stays 1/4; "incompatible" is reserved for an actual
 # unsupported or unparseable version string.
 quota_json() {
@@ -136,7 +136,10 @@ quota_json() {
       return 4
     fi
   else
-    fm_quota_axi_compatible >/dev/null 2>&1 || return 3
+    rc=0
+    output=$(quota-axi --version 2>/dev/null </dev/null) || rc=$?
+    [ "$rc" -eq 0 ] || return 4
+    fm_quota_axi_version_compatible "$output" || return 3
     output=$(quota-axi --json 2>/dev/null </dev/null) || return 4
   fi
   printf '%s\n' "$output"
