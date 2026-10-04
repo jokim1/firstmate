@@ -1,0 +1,34 @@
+ok - help renders only the complete header
+ok - poll accepts its documented defaults
+ok - provider watch blocks until a model scope is exhausted
+ok - exhausted poll records the triggering scope
+ok - poll detects exhausted runway under unknown headroom
+ok - aggregate watch blocks until any scope is exhausted
+ok - aggregate watch preserves empty quota uncertainty
+ok - arm rejects a missing provider value
+ok - arm rejects noncanonical provider identities
+ok - provider retire resolves the armed source id
+ok - poll rejects a decimal threshold above 100
+ok - poll accepts a leading-zero threshold
+ok - poll fires only after quota drops below the threshold
+ok - poll rejects a missing option value
+ok - quota polling uses the shared bash timeout fallback
+ok - poll rejects malformed schema-five snapshots
+ok - poll rejects schema-six snapshots missing or repeating an account key
+ok - aggregate watch reads every schema 6 account row without combining them
+ok - provider watch classifies every matching account and preserves accountKey in details
+ok - the same path still binds a schema 5 row by provider alone
+ok - poll preserves provider-level unknown quota
+ok - poll preserves unknown headroom under known semantics
+ok - one slow read then a good read stays live
+ok - N consecutive slow reads go terminal with slow-read detail
+ok - missing quota-axi reports missing immediately
+ok - incompatible quota-axi reports incompatible immediately
+ok - a healthy read resets the consecutive-failure streak
+ok - slow version probe reports timeout not incompatible
+ok - failing version probe reports failure not incompatible
+ok - untimed failing version probe reports failure not incompatible
+ok - mixed failure streak names the last cause without calling all reads slow
+ok - later version probe failure reports failed not incompatible
+ok - later slow version probe reports timeout not incompatible
+# all fm-procevent-quota tests passed

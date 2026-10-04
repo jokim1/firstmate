@@ -1,0 +1,5 @@
+SCENARIO: one timed-out read, then recovery and exhaustion
+quota: quota-codex
+status: exhausted
+detail: {"provider":"codex","best":{"scope":"all_models","status":"known","effectivePercentRemaining":0,"runway":{"status":"exhausted_now"}}}
+condition_polls: 3

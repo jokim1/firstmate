@@ -1,0 +1,17 @@
+SCENARIO: three consecutive timed-out reads
+quota: quota-codex
+status: error
+detail: 3 consecutive read failures; last quota-axi read timed out
+condition_polls: 3
+
+SCENARIO: incompatible version stops immediately
+quota: quota-codex
+status: error
+detail: quota-axi is incompatible
+condition_polls: 1
+
+SCENARIO: untimed version execution failure receives three-attempt tolerance
+quota: quota-codex
+status: error
+detail: 3 consecutive read failures; last quota-axi read failed
+condition_polls: 3
