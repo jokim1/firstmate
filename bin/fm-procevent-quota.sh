@@ -55,8 +55,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 DEFAULT_INTERVAL=60
 DEFAULT_THRESHOLD=10
-# Consecutive quota-axi read failures (timeout or other) before poll goes terminal.
-# One slow read is common; permanent failure is not. No config knob on purpose.
+# Consecutive transient quota-axi read failures before poll goes terminal.
+# Missing and incompatible tools bypass this budget. No config knob on purpose.
 MAX_CONSECUTIVE_READ_FAILURES=3
 
 SOURCE_ID_BASE=quota
