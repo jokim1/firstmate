@@ -1,0 +1,7 @@
+$ bin/fm-quota-choose.sh --snapshot <muse-provider-snapshot> --candidate muse:default
+muse default
+exit=0
+
+$ bin/fm-quota-choose.sh --snapshot <legacy-meta-snapshot> --candidate muse:default
+none
+exit=1
